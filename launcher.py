@@ -576,11 +576,7 @@ def stop_server(proc: subprocess.Popen | None) -> None:
 
 
 def open_app_window(url: str) -> bool:
-    """Open a native app window (WebView2). Fall back to Chrome/Edge --app= if needed.
-
-    Each fallback browser profile uses a unique --user-data-dir so a second
-    Open viewer does not reuse/navigate an existing --app= window.
-    """
+    """Focus or open the native app window (WebView2). Fall back to Chrome/Edge --app=."""
     if sys.platform != "win32":
         return False
     try:
@@ -591,41 +587,21 @@ def open_app_window(url: str) -> bool:
     except Exception as exc:
         log(f"Native app window unavailable ({exc}); trying browser app mode.")
 
-    import uuid
+    from backend.app.services.app_window import BROWSER_APP_PROFILE_DIR
 
-    profile = ROOT / "data" / "browser_app_sessions" / uuid.uuid4().hex
-    try:
-        profile.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        profile = Path(os.environ.get("TEMP", ".")) / f"scrap_app_{uuid.uuid4().hex}"
-        profile.mkdir(parents=True, exist_ok=True)
-
+    BROWSER_APP_PROFILE_DIR.mkdir(parents=True, exist_ok=True)
+    app_args = [f"--user-data-dir={BROWSER_APP_PROFILE_DIR}", f"--app={url}"]
     local = os.environ.get("LOCALAPPDATA", "")
-    candidates: list[list[str]] = [
-        [
-            os.path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
-            f"--user-data-dir={profile}",
-            f"--app={url}",
-        ],
-        ["msedge", f"--user-data-dir={profile}", f"--app={url}"],
-        [
-            os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
-            f"--user-data-dir={profile}",
-            f"--app={url}",
-        ],
-        [
-            os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
-            f"--user-data-dir={profile}",
-            f"--app={url}",
-        ],
+    candidates = [
+        os.path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+        "msedge",
+        os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+        os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
     ]
-    for cmd in candidates:
-        exe = cmd[0]
-        if not exe:
-            continue
+    for exe in candidates:
         if Path(exe).is_file() or which(exe):
             try:
-                subprocess.Popen(cmd, creationflags=0x08000000)
+                subprocess.Popen([exe, *app_args], creationflags=0x08000000)
                 return True
             except OSError:
                 continue
