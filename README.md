@@ -167,7 +167,7 @@ SQLite file: `data/app.db`. Schema is created/updated on server startup via `ini
 
 ### `tag_groups`
 
-Tag categories (Artist, Character, AI, etc.) used for colors and sorting in the UI.
+Tag categories (Copyright, Meta, AI, etc.) used for colors and sorting in the UI. Artist/Character are created when needed by a scrape, not on first install.
 
 | Column | Type | Description |
 |--------|------|-------------|

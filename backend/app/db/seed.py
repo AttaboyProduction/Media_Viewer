@@ -3,15 +3,14 @@ from sqlalchemy.orm import Session
 from backend.app.db.models import TagGroup, User
 
 # key, label, color, sort_order, is_default
-# Order matches site API types + AI; unknown stays at end (999).
+# Fresh installs omit Artist/Character — those appear when a scrape/API creates them.
+# Unknown stays at end (999).
 DEFAULT_TAG_GROUPS = [
-    ("artist", "Artist", "#e74c3c", 0, False),
-    ("character", "Character", "#3498db", 1, False),
-    ("copyright", "Copyright", "#f39c12", 2, False),
-    ("meta", "Meta", "#9b59b6", 3, False),
-    ("system", "System", "#7f8c8d", 4, False),
-    ("ai", "AI", "#8e44ad", 5, False),
-    ("general", "General", "#95a5a6", 6, False),
+    ("copyright", "Copyright", "#f39c12", 0, False),
+    ("meta", "Meta", "#9b59b6", 1, False),
+    ("system", "System", "#7f8c8d", 2, False),
+    ("ai", "AI", "#8e44ad", 3, False),
+    ("general", "General", "#95a5a6", 4, False),
     ("unknown", "Unknown", "#bdc3c7", 999, True),
 ]
 
