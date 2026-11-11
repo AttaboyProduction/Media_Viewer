@@ -23,7 +23,7 @@ Local Windows web app: scrape configured gallery sources or link local media, SQ
 
 ## Run / verify
 
-- Normal: `Run.bat`. After changes: `Run.bat restart` or in-app Reload. Remote update: `Update.bat` (git pull, or ZIP merge if not a clone) updates files only — it does not launch; run `Run.bat` afterward to start/rebuild.
+- Normal: `Run.bat`. After changes: `Run.bat restart` or in-app Reload. Remote update: `Update.bat` (GitHub ZIP merge; no git) updates files only — it does not launch; run `Run.bat` afterward to start/rebuild.
 - Version gate: bump tracked `VERSION` when recipients should rebuild after update. Launch compares it to `data/installed_version` (stamped after a successful forced update; first value `0.1`). Mismatch stops a running app, forces pip + frontend rebuild, then starts; match does light ensures and opens the viewer if already healthy.
 - Health: `http://127.0.0.1:8000/api/health` — on failure read `data/server.log`.
 - UI change: `cd frontend && npm run build`.

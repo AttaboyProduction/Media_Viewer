@@ -2,9 +2,8 @@
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
-rem Fetch the latest project files only — does not start or restart the app.
-rem Prefer git pull when this folder is a clone; otherwise download the GitHub ZIP.
-rem Preserves local data\, media\, .venv\, and other machine-only folders.
+rem Download the latest main ZIP from GitHub and merge into this folder.
+rem Does not start or restart the app. Preserves local data\, media\, .venv\, etc.
 rem Run Run.bat afterward so a new VERSION can force pip / frontend rebuild if needed.
 
 set "REPO_OWNER=AttaboyProduction"
@@ -15,28 +14,10 @@ set "ZIP_URL=https://github.com/%REPO_OWNER%/%REPO_NAME%/archive/refs/heads/%REP
 echo.
 echo === Scrap Download update ===
 echo.
-
-if exist "%~dp0.git\" (
-  echo Detected git clone. Pulling %REPO_BRANCH%...
-  where git >nul 2>&1
-  if errorlevel 1 (
-    echo git was not found on PATH. Install Git for Windows, or delete the .git folder
-    echo and run Update.bat again to use the ZIP download path.
-    goto :fail
-  )
-  git -C "%~dp0" pull --ff-only origin %REPO_BRANCH%
-  if errorlevel 1 (
-    echo.
-    echo git pull failed. Fix conflicts or network access, then try again.
-    goto :fail
-  )
-  goto :done
-)
-
-echo No .git folder. Downloading ZIP from GitHub...
+echo Downloading ZIP from GitHub...
 echo %ZIP_URL%
 echo.
-echo Note: private repositories require a git clone ^(with your login^) instead of ZIP.
+echo Note: private repositories need a signed-in GitHub session or a public repo.
 echo.
 
 set "TMP=%TEMP%\scrap_download_update_%RANDOM%"
@@ -74,12 +55,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
 
 if errorlevel 1 (
   echo.
-  echo ZIP update failed. If the repo is private, clone it with Git and use Update.bat
-  echo from that clone ^(git pull^), or download ZIP while signed in via the GitHub UI.
+  echo ZIP update failed. If the repo is private, download the ZIP while signed in
+  echo via the GitHub UI, or make the repo public.
   goto :fail
 )
 
-:done
 echo.
 echo Update finished. This script does not start the app.
 echo Run Run.bat when you want to launch ^(it rebuilds if VERSION changed^).

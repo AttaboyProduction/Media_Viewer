@@ -44,14 +44,9 @@ Later runs reuse `.venv` and skip installs. A broken `.venv` (for example copied
 
 ### Updating
 
-Double-click **`Update.bat`**:
+Double-click **`Update.bat`**: it downloads a fresh ZIP of `main` from GitHub and merges files into this folder (keeps `data/`, `media/`, `.venv/`, etc.). It does **not** use git and does **not** start or restart the app. Run `Run.bat` when you want to launch; the version gate below decides whether to rebuild.
 
-- If this folder is a **git clone**, it runs `git pull` on `main`.
-- If you installed from a **ZIP**, it downloads a fresh ZIP from GitHub and merges files into this folder (keeps `data/`, `media/`, `.venv/`, etc.).
-
-It only updates files — it does **not** start or restart the app. Run `Run.bat` when you want to launch; the version gate below decides whether to rebuild. There is no separate “download update from the app” channel.
-
-Private repo: ZIP download from the script needs a public repo or use a git clone with your login. Collaborators with clone access should use Update.bat’s git path.
+Private repo: ZIP download needs a public repo, or download the ZIP while signed in via the GitHub UI.
 
 ### App version gate
 
@@ -146,7 +141,7 @@ Created/updated when you change app settings in the UI. Notable fields: `display
 
 ```
 Run.bat                 Launch (`Run.bat`) or restart (`Run.bat restart`)
-Update.bat              Pull or download ZIP of latest main (does not launch the app)
+Update.bat              Download ZIP of latest main and merge (does not launch the app)
 Scrap Download.exe      Windows launcher written by the first Run.bat install (gitignored)
 VERSION                 Tracked app version (bump to force rebuild after update)
 versioning.py           VERSION vs data/installed_version helpers
