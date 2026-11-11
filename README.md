@@ -15,7 +15,20 @@ Local Windows app: scrape configured gallery sources (or link local folders), st
 
 ## Setup and run
 
-Double-click `Run.bat` (works on a fresh Windows PC if you have network access).
+### Download (no git)
+
+[Download ZIP](https://github.com/AttaboyProduction/Media_Viewer/archive/refs/heads/main.zip) of the latest `main` branch, unpack it, then double-click `Run.bat`.
+
+Or on GitHub: **Code** → **Download ZIP**. Private repos only work for signed-in users with access.
+
+### Clone
+
+```bash
+git clone https://github.com/AttaboyProduction/Media_Viewer.git
+cd Media_Viewer
+```
+
+Then double-click `Run.bat` (needs network on a fresh Windows PC).
 
 On first run it will, as needed:
 
@@ -29,14 +42,25 @@ Scrape browsers are not downloaded at setup. After you turn off **Hide Scrape pa
 
 Later runs reuse `.venv` and skip installs. A broken `.venv` (for example copied from another PC whose Python path no longer exists) is detected and recreated automatically.
 
+### Updating
+
+Double-click **`Update.bat`**:
+
+- If this folder is a **git clone**, it runs `git pull` on `main`.
+- If you installed from a **ZIP**, it downloads a fresh ZIP from GitHub and merges files into this folder (keeps `data/`, `media/`, `.venv/`, etc.).
+
+Then it runs `Run.bat restart`. There is no separate “download update from the app” channel — new source arrives via Update / pull / ZIP; the version gate below decides whether to rebuild.
+
+Private repo: ZIP download from the script needs a public repo or use a git clone with your login. Collaborators with clone access should use Update.bat’s git path.
+
 ### App version gate
 
-Tracked `VERSION` is compared to local `data/installed_version` on every `Run.bat` / `Scrap Download.exe` launch:
+Tracked `VERSION` is compared to local `data/installed_version` on every `Run.bat` / `Scrap Download.exe` launch (including after `Update.bat`):
 
 - **Mismatch or missing stamp** — stop a running app if needed, force `pip` + frontend rebuild, recreate the exe stub if missing, then stamp `data/installed_version` and start the server.
 - **Match** — light checks only (rebuild when requirements/UI mtimes require it). If the server is already healthy, only open the viewer; otherwise start the server.
 
-Bump `VERSION` by hand when recipients should rebuild after `git pull` (do not commit `frontend/dist/`). First successful update path stamps `0.1`.
+Bump `VERSION` by hand when recipients should rebuild after an update (do not commit `frontend/dist/`). First successful update path stamps `0.1`.
 
 After local code changes without a version bump, use `Run.bat restart` or the in-app **Reload** button (same kill + start path). Reload keeps the current tab and only refreshes it after `/api/health` returns a new `boot_id` (so it does not reload against the dying process). Both use `data/.skip_open_viewer` + `--no-open-viewer` so relaunch does not open a second viewer; use the tray **Open viewer** item or a normal `Run.bat` when the app is already up if you want another tab. If an install/build step fails on relaunch, the dialog includes the command and recent output; full detail is appended to `data/launcher.log`.
 
@@ -122,8 +146,9 @@ Created/updated when you change app settings in the UI. Notable fields: `display
 
 ```
 Run.bat                 Launch (`Run.bat`) or restart (`Run.bat restart`)
+Update.bat              Pull or download ZIP of latest main, then Run.bat restart
 Scrap Download.exe      Windows launcher written by the first Run.bat install (gitignored)
-VERSION                 Tracked app version (bump to force rebuild after pull)
+VERSION                 Tracked app version (bump to force rebuild after update)
 versioning.py           VERSION vs data/installed_version helpers
 launcher.py             Install deps, uvicorn, tray, open viewer
 adapters/               Dev site adapter packages (install into data/adapters/)

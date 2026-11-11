@@ -19,12 +19,12 @@ Local Windows web app: scrape configured gallery sources or link local media, SQ
 
 ## Layout
 
-`Run.bat`, `VERSION`, `versioning.py`, `launcher.py`, `adapters/example/` (sample package; other `adapters/*` gitignored), local `TODO.md` (gitignored; selection UI is the Project TODO canvas), `requirements.txt`, `backend/`, `frontend/`, `tests/`, `scripts/`, gitignored `data/` (incl. `data/adapters/`) + `media/`.
+`Run.bat`, `Update.bat`, `VERSION`, `versioning.py`, `launcher.py`, `adapters/example/` (sample package; other `adapters/*` gitignored), local `TODO.md` (gitignored; selection UI is the Project TODO canvas), `requirements.txt`, `backend/`, `frontend/`, `tests/`, `scripts/`, gitignored `data/` (incl. `data/adapters/`) + `media/`.
 
 ## Run / verify
 
-- Normal: `Run.bat`. After changes: `Run.bat restart` or in-app Reload.
-- Version gate: bump tracked `VERSION` when recipients should rebuild after `git pull`. Launch compares it to `data/installed_version` (stamped after a successful forced update; first value `0.1`). Mismatch stops a running app, forces pip + frontend rebuild, then starts; match does light ensures and opens the viewer if already healthy.
+- Normal: `Run.bat`. After changes: `Run.bat restart` or in-app Reload. Remote update: `Update.bat` (git pull, or ZIP merge if not a clone), then restart.
+- Version gate: bump tracked `VERSION` when recipients should rebuild after update. Launch compares it to `data/installed_version` (stamped after a successful forced update; first value `0.1`). Mismatch stops a running app, forces pip + frontend rebuild, then starts; match does light ensures and opens the viewer if already healthy.
 - Health: `http://127.0.0.1:8000/api/health` — on failure read `data/server.log`.
 - UI change: `cd frontend && npm run build`.
 - Order/tags changes: `scripts\run_order_tests.bat` (also via `.cursor/hooks.json` after edits to order/tag paths). See `testing.mdc`.
