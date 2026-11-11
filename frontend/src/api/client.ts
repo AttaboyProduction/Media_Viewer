@@ -68,10 +68,19 @@ export function fetchMediaById(id: number) {
   return request<MediaItem>(`/media/${id}`)
 }
 
-export function updateMediaTags(id: number, add: string[], remove: string[]) {
+export function updateMediaTags(
+  id: number,
+  add: string[],
+  remove: string[],
+  group_ids: number[] = [],
+) {
   return request<MediaItem>(`/media/${id}/tags`, {
     method: 'PATCH',
-    body: JSON.stringify({ add, remove }),
+    body: JSON.stringify({
+      add,
+      remove,
+      ...(group_ids.length > 0 ? { group_ids } : {}),
+    }),
   })
 }
 

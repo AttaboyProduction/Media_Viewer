@@ -20,7 +20,7 @@ interface Props {
 
 export default function TagEditor({ media }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false)
-  const { search, setSearch, matches, filterProps } = useTagSearch()
+  const { search, setSearch, matches, filterProps, groupFilterIds } = useTagSearch()
   /** null = follow setting; once user toggles, keep that choice across media. */
   const [tagsExpanded, setTagsExpanded] = useState<boolean | null>(null)
 
@@ -34,8 +34,15 @@ export default function TagEditor({ media }: Props) {
   const expanded = tagsExpanded ?? !collapseByDefault
 
   const mutation = useMutation({
-    mutationFn: ({ add, remove }: { add: string[]; remove: string[] }) =>
-      updateMediaTags(media.id, add, remove),
+    mutationFn: ({
+      add,
+      remove,
+      groupIds,
+    }: {
+      add: string[]
+      remove: string[]
+      groupIds?: number[]
+    }) => updateMediaTags(media.id, add, remove, groupIds ?? []),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['media'] })
       queryClient.invalidateQueries({ queryKey: ['media', media.id] })
@@ -65,10 +72,14 @@ export default function TagEditor({ media }: Props) {
     !mediaTagNames.has(normalizedSearch) &&
     !allTags.some((t) => t.name === normalizedSearch)
 
-  const addTags = (names: string[]) => {
+  const addTags = (names: string[], groupIds?: number[]) => {
     const unique = names.filter((n) => n && !mediaTagNames.has(n))
     if (unique.length === 0) return
-    mutation.mutate({ add: unique, remove: [] })
+    mutation.mutate({
+      add: unique,
+      remove: [],
+      ...(groupIds && groupIds.length > 0 ? { groupIds } : {}),
+    })
   }
 
   const addFromSearch = () => {
@@ -79,7 +90,8 @@ export default function TagEditor({ media }: Props) {
       return
     }
     if (canCreateNew) {
-      addTags([normalizedSearch])
+      // Selected group filter chips become the new tag's parent group(s).
+      addTags([normalizedSearch], [...groupFilterIds])
       setSearch('')
     }
   }

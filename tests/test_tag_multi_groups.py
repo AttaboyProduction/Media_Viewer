@@ -8,11 +8,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.api.tags import build_tag_out, patch_tag
-from backend.app.db.models import Base, Tag, TagGroup, TagGroupLink
+from backend.app.db.models import Base, MediaItem, Tag, TagGroup, TagGroupLink
 from backend.app.schemas import TagGroupReplaceRequest, TagPatchRequest
+from backend.app.services.media_service import update_media_tags
 from backend.app.services.tag_service import (
     add_tag_groups,
     create_tag,
+    get_or_create_tag_by_name,
     list_groups_for_tag,
     remove_tag_groups,
     replace_tag_group,
@@ -117,6 +119,33 @@ class MultiGroupTestCase(unittest.TestCase):
             self.db.query(TagGroupLink).filter(TagGroupLink.tag_id == tag.id).count()
         )
         self.assertEqual(link_count, 3)
+
+    def test_get_or_create_applies_group_ids_only_on_create(self):
+        created = get_or_create_tag_by_name(
+            self.db, "from_search", [self.ai.id, self.meta.id]
+        )
+        self.db.commit()
+        self.assertEqual(created.group_id, self.ai.id)
+        self.assertEqual(self._keys(created), ["ai", "meta"])
+
+        again = get_or_create_tag_by_name(self.db, "from_search", [self.general.id])
+        self.assertEqual(again.id, created.id)
+        self.assertEqual(self._keys(again), ["ai", "meta"])
+
+    def test_update_media_tags_passes_group_ids_for_new_tag(self):
+        media = MediaItem(
+            source_post_id="mg1",
+            source_url="https://example.test/mg1",
+            local_path="media/mg1.jpg",
+            media_type="image",
+        )
+        self.db.add(media)
+        self.db.flush()
+        update_media_tags(self.db, media.id, ["picked"], [], [self.meta.id])
+        self.db.commit()
+        tag = self.db.query(Tag).filter(Tag.name == "picked").one()
+        self.assertEqual(tag.group_id, self.meta.id)
+        self.assertEqual(self._keys(tag), ["meta"])
 
 
 if __name__ == "__main__":

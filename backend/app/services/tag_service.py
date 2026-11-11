@@ -558,21 +558,44 @@ def set_tag_group_ids(db: Session, tag: Tag, group_ids: list[int]) -> Tag:
     return tag
 
 
-def get_or_create_tag_by_name(db: Session, name: str) -> Tag:
+def get_or_create_tag_by_name(
+    db: Session,
+    name: str,
+    group_ids: list[int] | None = None,
+) -> Tag:
+    """Find or create a tag by name. group_ids apply only when creating/reviving."""
     normalized = normalize_tag_name(name)
     tag = db.query(Tag).filter(Tag.name == normalized, Tag.is_deleted.is_(False)).first()
     if tag:
         return resolve_canonical_tag(db, tag)
 
+    wanted = list(group_ids or [])
     deleted = db.query(Tag).filter(Tag.name == normalized, Tag.is_deleted.is_(True)).first()
     default_group = get_default_tag_group(db)
     if deleted:
         deleted.is_deleted = False
-        if deleted.group_id is None and default_group:
+        if wanted:
+            set_tag_group_ids(db, deleted, wanted)
+        elif deleted.group_id is None and default_group:
             deleted.group_id = default_group.id
-        sync_tag_group_links_from_primary(db, deleted)
+            sync_tag_group_links_from_primary(db, deleted)
+        else:
+            sync_tag_group_links_from_primary(db, deleted)
         db.flush()
         return resolve_canonical_tag(db, deleted)
+
+    if wanted:
+        primary_id = wanted[0]
+        # Validate groups before insert (set_tag_group_ids raises on unknown ids).
+        tag = Tag(
+            name=normalized,
+            group_id=primary_id,
+            sort_order=next_tag_sort_order(db, primary_id),
+        )
+        db.add(tag)
+        db.flush()
+        set_tag_group_ids(db, tag, wanted)
+        return tag
 
     tag = Tag(
         name=normalized,

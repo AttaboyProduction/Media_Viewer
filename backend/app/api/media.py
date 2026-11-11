@@ -291,11 +291,15 @@ def patch_media_tags(
     db: Session = Depends(get_db),
 ) -> MediaSummary:
     try:
-        media = update_media_tags(db, media_id, payload.add, payload.remove)
+        media = update_media_tags(
+            db, media_id, payload.add, payload.remove, payload.group_ids
+        )
         db.commit()
         return build_media_summary(db, media)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        detail = str(exc)
+        status = 404 if detail == "Media not found" else 400
+        raise HTTPException(status_code=status, detail=detail) from exc
 
 
 @router.post(

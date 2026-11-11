@@ -80,6 +80,8 @@ class MediaListOut(BaseModel):
 class MediaTagsUpdate(BaseModel):
     add: list[str] = Field(default_factory=list)
     remove: list[str] = Field(default_factory=list)
+    # Applied only when an added name creates (or revives) a tag.
+    group_ids: list[int] = Field(default_factory=list)
 
 
 class MediaUrlsUpdate(BaseModel):

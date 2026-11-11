@@ -289,12 +289,19 @@ def build_media_summary(db: Session, media: MediaItem) -> MediaSummary:
     return build_media_summaries(db, [media])[0]
 
 
-def update_media_tags(db: Session, media_id: int, add: list[str], remove: list[str]) -> MediaItem:
+def update_media_tags(
+    db: Session,
+    media_id: int,
+    add: list[str],
+    remove: list[str],
+    group_ids: list[int] | None = None,
+) -> MediaItem:
     media = db.query(MediaItem).filter(MediaItem.id == media_id).first()
     if not media:
         raise ValueError("Media not found")
 
     existing = {link.tag_id: link for link in media.tag_links}
+    create_group_ids = list(group_ids or [])
 
     for name in remove:
         normalized = normalize_tag_name(name)
@@ -304,7 +311,9 @@ def update_media_tags(db: Session, media_id: int, add: list[str], remove: list[s
             db.delete(existing[tag.id])
 
     for name in add:
-        tag = get_or_create_tag_by_name(db, name)
+        tag = get_or_create_tag_by_name(
+            db, name, create_group_ids if create_group_ids else None
+        )
         if tag.id not in existing:
             db.add(MediaTag(media_id=media.id, tag_id=tag.id, is_manual=True))
             adjust_usage_count(db, tag.id, 1)
