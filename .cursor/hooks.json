@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "afterFileEdit": [
+      {
+        "command": "powershell -NoProfile -ExecutionPolicy Bypass -File .cursor/hooks/run-order-tests-after-edit.ps1",
+        "timeout": 120
+      }
+    ]
+  }
+}

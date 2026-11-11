@@ -1,0 +1,37 @@
+---
+description: Only implement selected Project TODO items (canvas Work flags)
+alwaysApply: true
+---
+
+# Selected TODOs
+
+Primary UI: the **Project TODO** canvas
+[`todo.canvas.tsx`](C:/Users/kirpa/.cursor/projects/d-Projects-scrap-download/canvases/todo.canvas.tsx).
+
+Selections persist in the sidecar next to that file:
+
+`C:\Users\kirpa\.cursor\projects\d-Projects-scrap-download\canvases\todo.canvas.data.json`
+
+## How to read selection
+
+When the user asks to work on todos, selected items, or this list:
+
+1. Read `todo.canvas.data.json` if it exists.
+2. Find the `itemFlags` object (top-level or nested under a `state`/`keys` bag — use whichever shape the sidecar actually has).
+3. **Selected** = any id whose flags have `work: true` and not `done: true`.
+4. Match those ids to item text in the canvas seed `ITEMS` array, plus any `addedItems` in the sidecar (skip `removedIds`). Fall back to `TODO.md` for wording.
+5. Implement **only** the selected items.
+
+If the sidecar is missing or has no `work: true` entries, fall back to `TODO.md`:
+
+- Selected = first box `[x]`/`[X]`, second still `[ ]`
+- Done = second box `[x]`/`[X]`
+
+Ignore unselected and already-done items.
+
+## After finishing an item
+
+1. In `todo.canvas.data.json`, set that id’s flags to `{ "work": false, "done": true }` (create the file / `itemFlags` object if needed, preserving other keys).
+2. Update the matching line in `TODO.md`: Work `[ ]`, Done `[x]`, wrap text (and continuation lines) in `~~…~~`.
+
+Do not start other backlog items unless the user selects them.

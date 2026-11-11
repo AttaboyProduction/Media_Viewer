@@ -1,0 +1,28 @@
+{
+  "id": "example",
+  "template": true,
+  "sites": [
+    {
+      "id": "example",
+      "name": "Example gallery",
+      "base_url": "https://example.com",
+      "default_gallery_url": "https://example.com",
+      "media_cdn_host": "https://cdn.example.com",
+      "tag_fetch_order": [
+        "curl_cffi",
+        "httpx",
+        "curl",
+        "playwright_api",
+        "html"
+      ]
+    }
+  ],
+  "scrapers": [
+    {
+      "id": "example_default",
+      "name": "Default",
+      "description": "Sample scraper entry — change id/name/site_ids to match your package",
+      "site_ids": ["example"]
+    }
+  ]
+}

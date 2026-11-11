@@ -1,0 +1,68 @@
+---
+description: Git safety, when to commit, and how to commit in scrap_download
+alwaysApply: true
+---
+
+# Git safety and workflow
+
+## Before substantial work
+
+Before substantial, broad, or risky work, ask the user whether to:
+
+1. Commit the current changes as an approved baseline, create an appropriately named feature branch, and do the new work there.
+2. Apply the new work on top of the current changes.
+
+Do not force this choice for trivial, narrow changes.
+
+If this workspace is not a Git repository, ask whether to initialize Git and create a baseline commit, or use another backup method, before substantial work.
+
+- Name branches for the actual feature or change; avoid generic names.
+- Preserve the user's workflow choice.
+- Do not include unrelated changes in a commit without explicit approval.
+
+## When to commit
+
+- **Only commit when the user explicitly asks** to commit (or to create a commit as part of a clear request).
+- Do not commit, push, or amend on your own after finishing a task.
+- Do not update git config.
+- Do not use destructive/irreversible git (`push --force`, `reset --hard`, etc.) unless the user explicitly requests it.
+- Do not skip hooks (`--no-verify`, etc.) unless the user explicitly requests it.
+- Never force-push to `main`/`master`; warn if asked.
+- Avoid `git commit --amend` unless all of: user asked to amend (or a hook auto-modified files in a commit you just made), HEAD commit was created by you in this conversation, and the commit has not been pushed.
+- If a commit failed or was rejected by a hook: fix and create a **new** commit — never amend a failed commit.
+- Never use interactive git flags (`-i`).
+
+## Never commit these
+
+Gitignored / local-only (do not force-add):
+
+- `downloaded_content/`, `downloads/`, `media/`, `data/` (DB, logs, local state)
+- `.env`, `.env.*` (except `.env.example` if present)
+- `.venv/`, `node_modules/`, `frontend/dist/`
+- `*.db`, `*.log`, `TODO.md`, `Scrap Download.exe`, secrets/credentials
+
+Warn the user if they explicitly ask to commit any of the above.
+
+## How to commit (when asked)
+
+1. In parallel: `git status`, `git diff` (staged + unstaged), `git log` (recent messages for style).
+2. Stage only the relevant files for the requested commit.
+3. Draft a message that matches repo style (recent log uses conventional prefixes: `fix:`, `docs:`, …). Subject ~50–72 chars; add a body with bullets for what/why when needed.
+4. Commit with a HEREDOC (or PowerShell here-string) so formatting stays intact. Example (bash-style):
+
+```bash
+git commit -m "$(cat <<'EOF'
+fix: short subject here.
+
+EOF
+)"
+```
+
+5. Run `git status` after to verify success.
+6. Do **not** push unless the user explicitly asks.
+
+## Messages
+
+- Describe the changes actually included; no unrelated files.
+- Prefer why over a file laundry list.
+- Keep the subject short; put detail in the body.

@@ -1,0 +1,52 @@
+---
+description: Backend / scraper / API conventions for Scrap Download Viewer
+globs: backend/**/*
+alwaysApply: false
+---
+
+# Backend
+
+## Architecture
+
+- `/api` — media, tags, tag-groups, scrape, app; plus `/api/health`.
+- Thin `app/api/`; logic in `services/` and `scraper/`.
+- Settings: `data/app_settings.json` via `app_settings.py` (not `config.py`).
+- Config: paths, scrape knobs, `phash_threshold` — no site URLs, no `blacklist_tags`.
+- Sites: `scraper/sites.py` catalog (`KNOWN_SITES` + `KNOWN_SCRAPERS` agents) + `data/session_settings.json` (`selected_site_id`, `selected_scraper_id`). A scraper can list multiple `site_ids`; the Scrape UI picks site then agent.
+- Media: `media/{image|gif|video}/…` at `/media/...`.
+- SPA: serve `frontend/dist`; never SPA-catch `/api/*`.
+- `GET /media` filters/sorts/pages in SQL (no load-all + Python slice); hidden groups arrive as `exclude_tag_groups` keys and are expanded server-side together with aliases of hidden tags.
+- `POST /media/bulk` (`{ids, action: discard|delete}`, 1–500 ids) runs in one transaction via `bulk_media_action`; files are unlinked only after commit. Returns `processed` / `missing` ids.
+- Page responses use `build_media_summaries` (batched links / canonical aliases / ratings / source URLs). Never build a list by calling `build_media_summary` per item — that was ~1500 queries per page.
+- `resolve_canonical_tags` is the batched form of `resolve_canonical_tag`; list endpoints (`GET /tags`) use it plus grouped usage-count / alias-name queries.
+- `init_db()` must keep `_backfill_strip_unknown_when_grouped` and other backfills it calls.
+
+## Tags / groups
+
+- Soft-delete tags (`is_deleted`); revive by name on create — no duplicate rows.
+- Default group for new tags; unknown dropped when another group is added.
+- Multi-group: `tag_group_links` is the membership table; `Tag.group_id` is the primary (color / order scope). `+` uses `add_group_ids` (append); chip click uses `replace_group`; × uses `remove_group_ids`. Never treat `add_group_ids` as a primary-only overwrite.
+- Group merge: bulk-update `group_id` + retarget links, densify islands, **core** DELETE sources (Unknown not a source).
+- Order islands: contiguous `sort_order` derived on demand; insert/delete per island; same-island move = swap-shift (incl. after-last → last slot when not filling a gap to the next island); cross-island = lift+insert; drop-before island with room → `start-1` (joins); first-slot lift leaves hole; reset-by-name within islands.
+- Island growth (densify of duplicates, insert, group merge) pushes the *following* island via `shift_to_clear` (round up to `ISLAND_GAP_BUMP`), keeping ≥1 empty slot. Never let a densified island overwrite its neighbour — that produced duplicate `sort_order`.
+- Islands from `order_islands` are maximal, so neighbours always differ by ≥2: do not add "islands touch" checks, they cannot fire.
+- Auto-tests: `scripts\run_order_tests.bat` / `tests/test_order_islands.py` after order or tag-service changes.
+- Group order user-owned; palette one-way consume on create.
+
+## Scrape / CDN
+
+- Local import: `storage_kind` `managed`|`linked`; linked rows keep absolute `local_path`, synthetic `loc_<hex>` `source_post_id`, `file:///` `source_url`, no tags. `POST /scrape/import/pick-folder` / `pick-files` (tkinter dialogs), `POST /scrape/import/run` shares `scrape_status` + `recent_media_ids`. Library delete skips unlinking linked files; `DELETE /media/{id}/local-file` deletes disk + row. Serve linked (and by-id) via `GET /media/{id}/file`.
+- Tag fetch: curl_cffi → httpx → curl → browser JSON → HTML. Direct `/post/{id}` seeds prefer `scrape_post_from_api` (JSON + CDN, no browser); browser HTML is fallback. `expand_tags` / Show more is best-effort (`no_wait_after`, never fails the post). `goto_post` retries transient SSL/network errors. The browser step uses `PlaywrightClient`, which opens Obscura (`serve --stealth` + CDP) or Playwright Chromium. `scrape_browser` is `auto` (Obscura if installed), `obscura`, or `playwright`. Engines live in `backend/scraper/browsers/`: shared page/context logic in `base.BrowserEngine`, one subclass per engine that only starts/stops the browser. A new engine = subclass + a branch in `session.open_engine`.
+- Engines open one context per page and free it once the page is closed (pruned on the next `new_page`); the JSON-request context is created on first `request_json`. Never keep a context per page alive for the whole job — long scrapes leaked hundreds.
+- Auto falls back to Playwright when Obscura fails to start: logged, and exposed as `fallback_error` on `GET /app/browsers`. Explicit `obscura` raises instead.
+- A new outside app or library needs launcher install/update logic. Scrape-only tools follow the browser gate below: no probe, install, or update while `hide_scrape_page` is on. Library tools that run with the Scrape page hidden still install on launch, and are not behind that gate.
+- Browsers exist only for scraping. While `hide_scrape_page` is on, `api/guards.require_scrape_page` returns 409 for `POST /scrape/run`, `/media/{id}/rescrape`, `/media/{id}/refresh-tags` and `/app/browsers/install`, and the launcher does not touch browsers.
+- `catalog.py` / `install.py` stay stdlib-only at import time — the launcher imports them before app packages load. Missing browsers are never auto-installed: the Scrape page notice and Settings **Download** call `POST /app/browsers/install`. Obscura installs the latest GitHub release into `data/browsers/obscura/` (checksum from the release asset `digest`, version in `version.txt`); the pinned version + SHA-256 is the offline fallback (bump both together). Playwright **Download** first repairs a broken package (missing `driver/package/cli.js` or damaged dist-info via `--ignore-installed --no-deps`) then runs `playwright install chromium`. The Chromium path is probed once per process.
+- `install.update_browsers` runs in the launcher before the server starts (replacing `obscura.exe` or the playwright package under a running scrape fails on Windows), at most once per 24 h (`data/browsers/update-check.json`, shown in Settings), and only when `check_browser_updates_on_start` is on. That checkbox is off by default when Windows reports a metered connection (`browsers/metered.py`, `INetworkCostManager`); once saved it stays as the user set it. It updates only installed browsers: the app-downloaded Obscura (an `OBSCURA_PATH`/PATH copy is left alone) and Playwright via `pip install --upgrade playwright` + `playwright install chromium` (Chromium builds are tied to the package). A damaged dist-info is overwritten with `--ignore-installed --no-deps`.
+- Never overwrite a known tag group with another known/Unknown when site is untyped.
+- Gallery site JSON post `type` 0=image, 1=video; CDN via curl_cffi when httpx 403s. `storage.fetch_media_bytes` retries curl_cffi up to `MEDIA_FETCH_ATTEMPTS` (6) on TLS/connection errors (VPNs drop ~half of handshakes), then tries httpx; HTTP 4xx is not retried. Files are written via `.part` + rename.
+- Launcher (and `install.py` when it runs `playwright install`) strips the Cursor sandbox `PLAYWRIGHT_BROWSERS_PATH`.
+- `ScrapeStatus.recent_media_ids` accumulates real downloads for the process lifetime (not cleared by `_reset_status`); exposed on status + `GET /scrape/recent-media?scope=session|all` / `POST /scrape/clear-recent`. `scope=all` pages the library by `scraped_at` desc.
+- Gallery listing sort: expand Filters And Settings, then click Oldest/Latest before yielding URLs so asc+limit downloads oldest matches (not newest).
+- Scrape `limit` = max **successful downloads** (skips/duplicates do not count). Status includes `current_url`, and `skipped_items: [{url, reason}, ...]` cleared on each new job.
+- `duplicate_of_id` points later files at the earliest match. `duplicate_kind` is `identical` (image/gif pHash Hamming 0–2, or a video whose four ffmpeg frame hashes all fall in that band) or `similar` (pictures only, 3–sensitivity). SHA-256 hits skip the second file and copy tags + URL onto the kept row. `scrape_skip_identical` does the same for a new post in the identical band. Matcher lives in `hash_service` (`find_earlier_phash_match`, `classify_stored_hash`); groups/merge/hand-mark/keep in `duplicate_service`. Settings **Similar image sensitivity** is what the matcher uses (not `config.phash_threshold`). `GET /media/duplicates` returns `{identical, similar}` groups; `POST /media/duplicates/merge` unions tags/URLs/optional rating then discards the rest; `POST /media/duplicates/keep` unlinks the chosen ids and discards the other ids in `scope_ids`; `POST /media/{id}/related` hand-links local database ids to that file (earliest id in each pair stays primary); `POST /media/duplicates/mark` links a selection (earliest id stays primary); `GET /media/{id}/duplicate-group` feeds media detail.

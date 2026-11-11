@@ -1,0 +1,58 @@
+---
+description: Auto-tests — when to run, extend, and propose new coverage
+alwaysApply: true
+---
+
+# Testing
+
+## Order / tags / viewer-list suite (required after related edits)
+
+After changing island ordering, tag/group order UX, or the viewer media list, run:
+
+```bat
+scripts\run_order_tests.bat
+```
+
+Covers:
+
+- Backend: `tests/test_media_list.py` — in-memory SQLite through `backend/app/api/media.py` entry points (`list_media`, `list_duplicates`, `post_bulk_action`, `post_bulk_tags`). `list_duplicates` returns `{identical, similar}` groups. Bulk tests lock discard/delete in one transaction, missing-id reporting, duplicate-ref cleanup and the 1–500 id bound; bulk-tags locks shared add across ids without duplicating existing links. Locks discarded / media-type / min-rating filters, tag filter (`tag_mode` AND default, OR matches any name, unknown mode stays AND, repeated names, soft-deleted tags), hidden tags + `exclude_tag_groups` expansion incl. aliases of hidden tags, all five sorts, paging boundaries, summary fields (canonical alias names, dedup source URLs, per-user rating) and a **query-count guard** so page building stays batched (no N+1 return). `tests/test_duplicates.py` covers Hamming bands, video identical-only frame hashes, group split, merge (tags/URLs/rating), rejecting similar members, hand-mark, and keep-selected scoped to one card.
+
+- Backend: `tests/test_order_islands.py` — in-memory SQLite + real models through **`tag_service`** entry points the API uses (`set_tag_*_sort_order`, `insert_tag_*_sort_order`, `soft_delete_tag`, `repair_duplicate_sort_orders`, `reindex_*_by_name`), not a parallel reorder implementation. Includes tag-group scoping, untyped (`group_id=None`) scope, soft-deleted rows not holding slots, unknown-last / 999 reindex rules.
+- Frontend mirror: `frontend/src/utils/rowReorder.selftest.ts` — **`applySparseMoveSortOrder` / `applyDenseMoveSortOrder` / `reorderIdsWithPlacement` / `sortOrderForDrop`** (same helpers Tags / TagGroups pages call), including the `sameTagGroup` scoping predicate.
+- Shared pagination: `frontend/src/utils/pagination.selftest.ts` — page totals/clamping, shared item-count copy, and Viewer/Scrape option invariants. `frontend/src/utils/pageSizeOptions.selftest.ts` — normalize/clamp/suggest for configurable Viewer/Tags page-size lists.
+
+`rowReorder.selftest.ts` lives under `frontend/src`, so `tsc` type-checks it during `npm run build`: keep it free of Node-only globals (`process`, `require`) — fail by `throw`, not `process.exit`.
+
+Trigger paths (also watched by `.cursor/hooks.json` `afterFileEdit`):
+
+- `backend/app/services/order_islands.py`
+- `backend/app/services/tag_service.py`
+- `backend/app/api/media.py`, `backend/app/services/media_service.py`
+- `tests/test_media_list.py`
+- `frontend/src/utils/rowReorder.ts` (+ `.selftest.ts`)
+- `frontend/src/pages/TagsPage.tsx`, `TagGroupsPage.tsx`
+- `frontend/src/components/list/PaginationBar.tsx`, `MediaCollectionView.tsx`
+- `frontend/src/components/RecentScrapedMediaPanel.tsx`, `DuplicatesPanel.tsx`
+- `frontend/src/pages/ViewerPage.tsx`
+- `frontend/src/utils/pagination.ts` (+ `.selftest.ts`)
+- `tests/test_order_islands.py`
+
+If the hook reports a failure, fix before finishing the task. Prefer fixing production code over deleting assertions.
+
+When adding a new ordering edge case or bugfix, add a matching test in `tests/test_order_islands.py` and, if the frontend path differs, in `rowReorder.selftest.ts`.
+
+## Propose / ask for new auto-tests
+
+After implementing a behavior change (any area, not only ordering):
+
+1. Consider whether an automated test could lock the behavior or catch a regression cheaply.
+2. If yes and no suitable test exists yet, **ask the user** whether to add one (brief: what it would cover, where it would live). Do not add large new harnesses without agreement unless they already asked for tests.
+3. If a suite already exists for that system, prefer extending it over inventing a parallel runner.
+
+## Extend existing suites for new data / risk
+
+When changing a system that already has auto-tests:
+
+- Add cases for **new inputs**, states, settings, or API shapes you introduced.
+- Add cases for **potential problems** you noticed (boundary values, empty lists, duplicates, migrations, collision with neighboring features).
+- Keep tests focused and deterministic; no live network / real `data/app.db` unless the suite already does that by design.

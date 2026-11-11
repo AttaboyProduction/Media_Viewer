@@ -1,0 +1,37 @@
+---
+description: Frontend conventions and routes for Scrap Download Viewer
+globs: frontend/**/*
+alwaysApply: false
+---
+
+# Frontend
+
+## Conventions
+
+- React Query keys: `['media']`, `['tags']`, `['tag-groups']`, `['app-settings']`, `['scrape-session']`; invalidate / `setQueryData` after mutations.
+- Feedback: `SaveFeedbackProvider` / `notifySaved` / `withSavedFeedback`.
+- Confirms: `useConfirm()` — never `window.confirm`.
+- Add forms: real `<form onSubmit>` so Enter works.
+- Styles: shared classes in `index.css`. Keep `types/appSettings.ts` aligned with backend defaults.
+- Settings → Other → Scrape: **Hide Scrape page** stays visible. Everything under it (skip identical, defaults, Scrape browser) renders only while the Scrape page is on. Media detail **Add related files** is a button in the action row; the panel opens under those buttons on the database-id form. **Select a file** opens the shared media grid and hides that form. **Done selecting** hides the grid and shows the id form again. The grid uses `MediaCollectionView` (open file’s tags start selected, **Clear selected**, **Search groups**, **Show hidden tags** from the viewer hide list, six other files per page in one row via `exclude_id`). **Select** marks one or more files to the open one. Typing an id accepts only the local database id.
+- `['app-settings']` is seeded in `main.tsx` from `utils/appSettingsCache` (localStorage, written by `AppSettingsSync`) and immediately revalidated — first paint uses real prefs instead of `DEFAULT_APP_SETTINGS`.
+- Viewer state derived from settings (`hideExcluded`, `includeDiscarded`, `sort`, `pageSize`) stays `null` until `useApplyAppDefaults` runs: the media query is disabled and controls show no guessed label, so nothing flips after load.
+- Viewer `placeholderData` keeps the visible page across tag clicks / paging / sort (grid dims via `media-grid-refreshing` instead of blanking to "Loading...") and returns `undefined` only when hide / discarded filters change, so excluded media can never be shown.
+- Viewer sidebar: `ViewerTagSidebar` when `viewer_tag_layout` is `sidebar`. Chip mode still uses `TagFilterPanel`. Both build the current-page tag list from non–content-hidden media only (`mediaForPageTagList`). With a tag filter active, list queries also pass locked hide-content tag names as `exclude_tags` (`excludeTagsForMediaQuery`) so blurred files drop out of results until revealed. Tag and group search show a typeahead (`TagSearchSuggest`) with a highlighted match and tag `(count)`.
+- Tag-list search: `hooks/useTagSearch` owns search text / match mode / group-filter state and the `matches(tag)` predicate (Tags page, `TagEditor`, `TagListSearch`). `TagListSearch` adds the collapsible **Search tags** toolbar with optional adjacent custom actions, optional **Clear selected**, optional **AND** / **OR** (`onTagModeChange`), and optional separate **Search groups** (`separateGroupSearch`). `TagFilterPanel` turns those extras on for every media grid. Typing in Search tags matches `searchCatalog` (the full library tag list). A group filter with an empty tag search stays on the current page’s tags until **Include all tags** on the group panel, which then lists every library tag in the selected groups. When both panels are open, Search groups sits above Search tags. `SearchableTagMultiSelect` / `SingleSelect` keep groups inside Search tags and do not show AND/OR. Esc closes the open panel. Hidden-tag groups use `SearchableGroupMultiSelect`.
+- Collapsed chip lists (`CollapsibleTagChipList`, `CollapsibleTagChipSelectList`) render at most `COLLAPSED_CHIP_RENDER_LIMIT` chips until expanded.
+- Reusable lists: `components/list/PaginationBar` owns paging/count/page-size copy; `MediaCollectionView` composes tag toolbar + grid + paging with page-specific card/action slots (it keys cards by `item.id`). Select actions share `MediaBulkBar` and `useMediaBulkActions`. Persist inline page sizes through `usePersistedPageSize`; pull out-of-range pages back with `usePageClamp`. Settings edits the option lists (`viewer_page_sizes` / `tags_page_sizes` via `SettingsPageSizeListEditor` → Edit panel with Save/Cancel); the live selected size stays on each page.
+- Tag/group DnD: `rowReorder.applyIslandAwareMoveSortOrder` mirrors backend (within-island swap; drop-before island → `start-1` joins; growth pushes the next island via `shiftToClear`).
+- After `rowReorder` / Tags / TagGroups order changes: `scripts\run_order_tests.bat` (includes row-reorder and pagination selftests).
+
+## Routes
+
+| Route | Role |
+|--------|------|
+| `/` | Viewer (filters, grid, detail). **Select** beside Search tags: Shift/drag multi-select, then Discard, Permanent delete, or **Mark as** Identical/Similar (`POST /media/duplicates/mark`, earliest id stays primary; needs two files). Tag toolbar also has **Clear selected** and **Search groups** |
+| `/tags`, `/tags/add`, `/tags/groups`, `/tags/settings`, `/tags/groups/settings` | Tags / groups / merge-reset |
+| `/scrape` | Scrape (**Source**: Local by default; gallery sites after installing adapters) + **Downloaded previously** (`RecentScrapedMediaPanel`: session by default, optional persisted **Show all downloads** by `scraped_at`; page-size like viewer; × delete; Select + Shift/drag multi-select → Discard, Permanent delete, or **Mark as** Identical/Similar — same bar as the viewer, via `POST /media/bulk` and `POST /media/duplicates/mark`; selection clears on page / page size / scope / tag-filter change; detail ‹ › walk the whole session only when no tag filter is active, otherwise the visible page; viewer-style `TagFilterPanel` via `/scrape/recent-media?scope=&tags=` AND filter, including **Clear selected** and **Search groups**) + **Skip identical** (patches `scrape_skip_identical`) + collapsible Similar files (`DuplicatesPanel`: Identical groups can merge — pick keep, union tags/URLs/rating, discard the rest; both kinds have **Keep all** and **Keep selected**, with checkboxes only after Keep selected; 3+ files in one group; collapsed by default) |
+| `/duplicates` | → `/scrape` or `/` |
+| `/settings` | Theme, hidden tags, defaults |
+
+Nav brand **Media Viewer** → `/`. Esc uses a LIFO stack (`utils/escapeStack`) so the topmost overlay/panel wins (confirm → media modal → expanded tag lists). Detail ←/→ and on-screen `<`/`>` use current page `mediaIds` (disabled at ends, including in full view). ↑/↓ scroll the media scroller when it overflows (full-view Fill/zoom), otherwise the detail modal panel when that has a vertical scrollbar. Media controls (`<`, full-view / `F`, `>`, plus Fit/Fill/± in full view) live in a small panel outside and above the detail modal; the viewer modal is vertically centered in the remaining space (`scrollbar-gutter: stable` so the control panel does not shift). Full view Fit stays contained; Fill (and beyond) pans via an inner scroller while size is measured on an outer padded frame (avoids scrollbar flicker). Ctrl+scroll zooms.

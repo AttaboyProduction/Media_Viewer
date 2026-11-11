@@ -1,0 +1,32 @@
+---
+description: Scrap Download Viewer — project overview, run, verify
+alwaysApply: true
+---
+
+# Project overview
+
+Local Windows web app: scrape configured gallery sources or link local media, SQLite + files, React viewer (tags, ratings, duplicates, settings hide). Prefer **current code** over `README.md` when they disagree.
+
+## Stack
+
+| Layer | Stack |
+|--------|--------|
+| Frontend | React 18, TS, Vite 6, RR7, React Query 5; `frontend/src/index.css` |
+| Backend | FastAPI, Uvicorn, SQLAlchemy 2, pydantic-settings |
+| DB | SQLite `data/app.db` via `backend/init_db.py` (not Alembic-first) |
+| Scraper | Obscura (preferred) or Playwright Chromium, BS4, httpx, **curl_cffi** |
+| Launcher | `Run.bat` → `launcher.py` (venv, VERSION gate, install/update outside tools; scrape-only tools only when the Scrape page is on, build, tray) |
+
+## Layout
+
+`Run.bat`, `VERSION`, `versioning.py`, `launcher.py`, `adapters/example/` (sample package; other `adapters/*` gitignored), local `TODO.md` (gitignored; selection UI is the Project TODO canvas), `requirements.txt`, `backend/`, `frontend/`, `tests/`, `scripts/`, gitignored `data/` (incl. `data/adapters/`) + `media/`.
+
+## Run / verify
+
+- Normal: `Run.bat`. After changes: `Run.bat restart` or in-app Reload.
+- Version gate: bump tracked `VERSION` when recipients should rebuild after `git pull`. Launch compares it to `data/installed_version` (stamped after a successful forced update; first value `0.1`). Mismatch stops a running app, forces pip + frontend rebuild, then starts; match does light ensures and opens the viewer if already healthy.
+- Health: `http://127.0.0.1:8000/api/health` — on failure read `data/server.log`.
+- UI change: `cd frontend && npm run build`.
+- Order/tags changes: `scripts\run_order_tests.bat` (also via `.cursor/hooks.json` after edits to order/tag paths). See `testing.mdc`.
+- Prefer minimal diffs; do not commit secrets, `.env`, `data/`, `media/`, `frontend/dist`, `.venv`.
+- After behavior changes: update matching `.cursor/rules/*.mdc` and `README.md` (add/remove stale).

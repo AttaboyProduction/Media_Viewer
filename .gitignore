@@ -1,0 +1,28 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+backup/
+data/
+media/
+downloads/
+downloaded_content/
+node_modules/
+frontend/dist/
+*.db
+.DS_Store
+*.log
+*.tsbuildinfo
+TODO.md
+scripts/_*.py
+Scrap Download.exe
+
+# Real site adapters stay local / private; only example/ is tracked.
+adapters/*
+!adapters/README.md
+!adapters/example/
+!adapters/example/**
