@@ -38,8 +38,17 @@ export function isDedicatedAppWindow(): boolean {
 export function openDedicatedAppWindow(): Window | null {
   const features =
     'width=1280,height=900,menubar=no,toolbar=no,location=no,status=no,resizable=yes'
-  const popup = window.open(window.location.origin, APP_WINDOW_NAME, features)
-  if (popup) popup.focus()
+  // Unique name so a second open does not navigate/reuse an existing popup.
+  const name = `${APP_WINDOW_NAME}_${Date.now()}`
+  const popup = window.open(window.location.origin, name, features)
+  if (popup) {
+    try {
+      popup.name = APP_WINDOW_NAME
+    } catch {
+      /* cross-origin / closed */
+    }
+    popup.focus()
+  }
   return popup
 }
 

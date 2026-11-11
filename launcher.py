@@ -369,7 +369,7 @@ def update_scrape_browsers() -> None:
     Missing browsers are not installed here; the Scrape page and Settings offer the download.
     """
     settings = read_app_settings()
-    if settings.get("hide_scrape_page", True):
+    if settings.get("hide_scrape_page", False):
         return
     # Stdlib-only module, so this runs in the launcher process before the server imports playwright.
     from backend.scraper.browsers.metered import updates_on_start_enabled
@@ -576,7 +576,11 @@ def stop_server(proc: subprocess.Popen | None) -> None:
 
 
 def open_app_window(url: str) -> bool:
-    """Open a native app window (WebView2). Fall back to Chrome/Edge --app= if needed."""
+    """Open a native app window (WebView2). Fall back to Chrome/Edge --app= if needed.
+
+    Each fallback browser profile uses a unique --user-data-dir so a second
+    Open viewer does not reuse/navigate an existing --app= window.
+    """
     if sys.platform != "win32":
         return False
     try:
@@ -587,16 +591,31 @@ def open_app_window(url: str) -> bool:
     except Exception as exc:
         log(f"Native app window unavailable ({exc}); trying browser app mode.")
 
+    import uuid
+
+    profile = ROOT / "data" / "browser_app_sessions" / uuid.uuid4().hex
+    try:
+        profile.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        profile = Path(os.environ.get("TEMP", ".")) / f"scrap_app_{uuid.uuid4().hex}"
+        profile.mkdir(parents=True, exist_ok=True)
+
     local = os.environ.get("LOCALAPPDATA", "")
     candidates: list[list[str]] = [
-        [os.path.join(local, "Google", "Chrome", "Application", "chrome.exe"), f"--app={url}"],
-        ["msedge", f"--app={url}"],
+        [
+            os.path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+            f"--user-data-dir={profile}",
+            f"--app={url}",
+        ],
+        ["msedge", f"--user-data-dir={profile}", f"--app={url}"],
         [
             os.path.join(os.environ.get("PROGRAMFILES", ""), "Google", "Chrome", "Application", "chrome.exe"),
+            f"--user-data-dir={profile}",
             f"--app={url}",
         ],
         [
             os.path.join(os.environ.get("PROGRAMFILES(X86)", ""), "Google", "Chrome", "Application", "chrome.exe"),
+            f"--user-data-dir={profile}",
             f"--app={url}",
         ],
     ]
@@ -677,6 +696,13 @@ def run_tray(owned_process: subprocess.Popen | None) -> None:
         open_viewer_ui()
 
     def on_quit(icon, item) -> None:
+        # Windowed mode viewers are separate processes; close them with the tray.
+        try:
+            from backend.app.services.app_window import close_app_windows
+
+            close_app_windows()
+        except Exception as exc:
+            log(f"Could not close app windows on quit: {exc}")
         stop_server(owned_process)
         icon.stop()
 

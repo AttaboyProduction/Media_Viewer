@@ -13,7 +13,7 @@ class ContentHideRule(BaseModel):
 class AppSettingsOut(BaseModel):
     display_mode: Literal["browser", "window"] = "browser"
     display_tag_aliases: bool = True
-    hide_scrape_page: bool = True
+    hide_scrape_page: bool = False
     theme: Literal["dark", "light", "system"] = "system"
     viewer_exclude_tags: str = ""
     viewer_exclude_tag_groups: str = ""

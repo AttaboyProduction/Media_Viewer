@@ -33,6 +33,7 @@ router = APIRouter(prefix="/app", tags=["app"])
 
 
 def _powershell_kill_script() -> str:
+    """Stop server/tray and any detached windowed-mode viewers for this project."""
     root = str(ROOT).replace("'", "''")
     return (
         f"$root = '{root}';"
@@ -42,9 +43,23 @@ def _powershell_kill_script() -> str:
         "Get-CimInstance Win32_Process | "
         "Where-Object { $_.Name -match '^python(w)?\\.exe$' -and $_.CommandLine -and "
         "($_.CommandLine -like \"*$root*launcher.py*\" -or "
-        "$_.CommandLine -like \"*$root*uvicorn*backend.app.main*\") } | "
+        "$_.CommandLine -like \"*$root*uvicorn*backend.app.main*\" -or "
+        "$_.CommandLine -like \"*$root*backend.app.services.app_window*\") } | "
         "ForEach-Object { if ($_.ProcessId -gt 0) { "
-        "Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }"
+        "Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } };"
+        "$sessions = Join-Path $root 'data\\browser_app_sessions';"
+        "if (Test-Path -LiteralPath $sessions) {"
+        "  Get-CimInstance Win32_Process | Where-Object {"
+        "    $_.CommandLine -and ("
+        "      $_.CommandLine -like ('*--user-data-dir=' + $sessions + '*') -or"
+        "      $_.CommandLine -like ('*--user-data-dir=\"' + $sessions + '*')"
+        "    )"
+        "  } | ForEach-Object {"
+        "    if ($_.ProcessId -gt 0) {"
+        "      Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue"
+        "    }"
+        "  }"
+        "}"
     )
 
 

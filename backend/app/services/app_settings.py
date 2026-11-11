@@ -16,7 +16,7 @@ ThemePreference = Literal["dark", "light", "system"]
 _DEFAULTS: dict = {
     "display_mode": "browser",
     "display_tag_aliases": True,
-    "hide_scrape_page": True,
+    "hide_scrape_page": False,
     "theme": "system",
     "viewer_exclude_tags": "",
     "viewer_exclude_tag_groups": "",
@@ -198,7 +198,7 @@ def _normalize_settings(data: dict) -> dict:
     if merged["theme"] not in ("dark", "light", "system"):
         merged["theme"] = "system"
     merged["display_tag_aliases"] = bool(merged.get("display_tag_aliases", True))
-    merged["hide_scrape_page"] = bool(merged.get("hide_scrape_page", True))
+    merged["hide_scrape_page"] = bool(merged.get("hide_scrape_page", False))
     merged["viewer_hide_excluded_tags"] = bool(merged.get("viewer_hide_excluded_tags", False))
     merged["viewer_include_discarded"] = bool(merged.get("viewer_include_discarded", False))
     merged["grid_video_autoplay"] = bool(merged.get("grid_video_autoplay", False))
@@ -381,7 +381,7 @@ def get_display_tag_aliases() -> bool:
 
 def scrape_page_enabled() -> bool:
     """Scraping, rescrape, tag refresh and scrape browsers are all off while the Scrape page is hidden."""
-    return not load_app_settings().get("hide_scrape_page", True)
+    return not load_app_settings().get("hide_scrape_page", False)
 
 
 def get_phash_threshold() -> int:

@@ -99,7 +99,7 @@ export const SCRAPE_DOWNLOAD_PAGE_SIZES = [18, 36, 54, 72, 90] as const
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   display_mode: 'browser',
   display_tag_aliases: true,
-  hide_scrape_page: true,
+  hide_scrape_page: false,
   theme: 'system',
   viewer_exclude_tags: '',
   viewer_exclude_tag_groups: '',
