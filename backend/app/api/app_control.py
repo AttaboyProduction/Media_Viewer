@@ -44,9 +44,12 @@ def _powershell_kill_script() -> str:
         "Where-Object { $_.Name -match '^python(w)?\\.exe$' -and $_.CommandLine -and "
         "($_.CommandLine -like \"*$root*launcher.py*\" -or "
         "$_.CommandLine -like \"*$root*uvicorn*backend.app.main*\" -or "
-        "$_.CommandLine -like \"*$root*backend.app.services.app_window*\") } | "
+        "$_.CommandLine -match 'backend\\.app\\.services\\.app_window') } | "
         "ForEach-Object { if ($_.ProcessId -gt 0) { "
         "Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } };"
+        "Get-Process -ErrorAction SilentlyContinue | Where-Object {"
+        "  $_.MainWindowTitle -eq 'Scrap Download' -and $_.ProcessName -match '^pythonw?$'"
+        "} | ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue };"
         "$sessions = Join-Path $root 'data\\browser_app_sessions';"
         "if (Test-Path -LiteralPath $sessions) {"
         "  Get-CimInstance Win32_Process | Where-Object {"
@@ -323,6 +326,12 @@ def restart_app() -> dict:
 def shutdown_app() -> dict:
     def _shutdown() -> None:
         time.sleep(0.4)
+        try:
+            from backend.app.services.app_window import close_app_windows
+
+            close_app_windows()
+        except Exception:
+            pass
         _run_powershell(_powershell_kill_script())
         os._exit(0)
 
@@ -336,9 +345,9 @@ def open_viewer() -> dict:
     url = "http://127.0.0.1:8000"
     mode = load_app_settings().get("display_mode", "browser")
     if mode == "window":
-        from backend.app.services.app_window import spawn_app_window
+        from backend.app.services.app_window import open_or_focus_app_window
 
-        if spawn_app_window(url):
+        if open_or_focus_app_window(url):
             return {"ok": True, "mode": "window"}
         # Fall through: client may open a popup if native window fails.
         raise HTTPException(

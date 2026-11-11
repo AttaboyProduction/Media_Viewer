@@ -30,9 +30,10 @@ export function syncDisplayModeFromServer(mode: DisplayMode) {
 /** True inside the pywebview / named popup shell (not a normal browser tab). */
 export function isDedicatedAppWindow(): boolean {
   if (window.name === APP_WINDOW_NAME) return true
-  // WebView2 / pywebview often exposes chrome-less shells without our window.name.
+  // pywebview injects this after load; WebView2's UA does not include "WebView".
+  if ('pywebview' in window) return true
   const ua = navigator.userAgent
-  return /WebView|webview/i.test(ua)
+  return /ScrapDownloadApp|WebView|webview/i.test(ua)
 }
 
 export function openDedicatedAppWindow(): Window | null {

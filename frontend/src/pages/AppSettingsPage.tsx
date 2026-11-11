@@ -51,10 +51,15 @@ export default function AppSettingsPage() {
 
   const mutation = useMutation({
     mutationFn: patchAppSettings,
-    onSuccess: (result) => {
-      applyDisplayMode(result.display_mode)
+    onSuccess: (result, patch) => {
+      // Only open/switch shells when Display mode itself changed — other toggles
+      // (e.g. start minimized) used to call applyDisplayMode and spawn another window.
+      if (patch.display_mode !== undefined) {
+        applyDisplayMode(result.display_mode)
+      } else {
+        syncDisplayModeFromServer(result.display_mode)
+      }
       applyThemePreference(result.theme)
-      syncDisplayModeFromServer(result.display_mode)
       queryClient.setQueryData(['app-settings'], result)
       queryClient.invalidateQueries({ queryKey: ['media'] })
       queryClient.invalidateQueries({ queryKey: ['app-browsers'] })

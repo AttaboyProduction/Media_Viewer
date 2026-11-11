@@ -584,9 +584,9 @@ def open_app_window(url: str) -> bool:
     if sys.platform != "win32":
         return False
     try:
-        from backend.app.services.app_window import spawn_app_window
+        from backend.app.services.app_window import open_or_focus_app_window
 
-        if spawn_app_window(url):
+        if open_or_focus_app_window(url):
             return True
     except Exception as exc:
         log(f"Native app window unavailable ({exc}); trying browser app mode.")
