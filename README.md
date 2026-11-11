@@ -49,7 +49,7 @@ Double-click **`Update.bat`**:
 - If this folder is a **git clone**, it runs `git pull` on `main`.
 - If you installed from a **ZIP**, it downloads a fresh ZIP from GitHub and merges files into this folder (keeps `data/`, `media/`, `.venv/`, etc.).
 
-Then it runs `Run.bat restart`. There is no separate “download update from the app” channel — new source arrives via Update / pull / ZIP; the version gate below decides whether to rebuild.
+It only updates files — it does **not** start or restart the app. Run `Run.bat` when you want to launch; the version gate below decides whether to rebuild. There is no separate “download update from the app” channel.
 
 Private repo: ZIP download from the script needs a public repo or use a git clone with your login. Collaborators with clone access should use Update.bat’s git path.
 
@@ -146,7 +146,7 @@ Created/updated when you change app settings in the UI. Notable fields: `display
 
 ```
 Run.bat                 Launch (`Run.bat`) or restart (`Run.bat restart`)
-Update.bat              Pull or download ZIP of latest main, then Run.bat restart
+Update.bat              Pull or download ZIP of latest main (does not launch the app)
 Scrap Download.exe      Windows launcher written by the first Run.bat install (gitignored)
 VERSION                 Tracked app version (bump to force rebuild after update)
 versioning.py           VERSION vs data/installed_version helpers

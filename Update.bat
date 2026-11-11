@@ -2,9 +2,10 @@
 setlocal EnableExtensions EnableDelayedExpansion
 cd /d "%~dp0"
 
-rem Fetch the latest project files, then relaunch so the VERSION gate can rebuild.
+rem Fetch the latest project files only — does not start or restart the app.
 rem Prefer git pull when this folder is a clone; otherwise download the GitHub ZIP.
 rem Preserves local data\, media\, .venv\, and other machine-only folders.
+rem Run Run.bat afterward so a new VERSION can force pip / frontend rebuild if needed.
 
 set "REPO_OWNER=AttaboyProduction"
 set "REPO_NAME=Media_Viewer"
@@ -29,7 +30,7 @@ if exist "%~dp0.git\" (
     echo git pull failed. Fix conflicts or network access, then try again.
     goto :fail
   )
-  goto :relaunch
+  goto :done
 )
 
 echo No .git folder. Downloading ZIP from GitHub...
@@ -78,11 +79,12 @@ if errorlevel 1 (
   goto :fail
 )
 
-:relaunch
+:done
 echo.
-echo Relaunching so a new VERSION can force pip / frontend rebuild if needed...
-call "%~dp0Run.bat" restart
-exit /b %ERRORLEVEL%
+echo Update finished. This script does not start the app.
+echo Run Run.bat when you want to launch ^(it rebuilds if VERSION changed^).
+echo.
+exit /b 0
 
 :fail
 echo.
