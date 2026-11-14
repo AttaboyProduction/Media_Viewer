@@ -46,6 +46,8 @@ class ScrapeStatus:
     skipped_items: list[SkippedItem] = field(default_factory=list)
     # Process-lifetime session list — not cleared by _reset_status between jobs.
     recent_media_ids: list[int] = field(default_factory=list)
+    # URLs left behind by Stop this process. Kept for the progress line.
+    cancelled_urls: list[str] = field(default_factory=list)
     # True after the first scrape job starts in this process.
     ran_this_session: bool = False
     # Extension URLs join the running scrape through this queue.
@@ -159,13 +161,20 @@ def _cancelled() -> bool:
     return scrape_status.cancel
 
 
+def _record_cancelled(url: str) -> None:
+    """Mark one queued URL as cancelled for this job and for the session list."""
+    _record_skip(url, "cancelled")
+    if url not in scrape_status.cancelled_urls:
+        scrape_status.cancelled_urls.append(url)
+
+
 def _skip_cancelled_remainder() -> None:
     """Count every file still queued as skipped, and close the gap up to ``total``."""
     with scrape_lock:
         left = list(scrape_status.pending_urls)
         scrape_status.pending_urls = []
     for url in left:
-        _record_skip(url, "cancelled")
+        _record_cancelled(url)
         scrape_status.processed += 1
     gap = scrape_status.total - scrape_status.processed
     if gap > 0:
@@ -187,8 +196,7 @@ def abandon_running_job() -> None:
             left = list(scrape_status.pending_urls)
             scrape_status.pending_urls = []
             for url in left:
-                scrape_status.skipped += 1
-                scrape_status.skipped_items.append(SkippedItem(url=url, reason="cancelled"))
+                _record_cancelled(url)
                 scrape_status.processed += 1
             gap = scrape_status.total - scrape_status.processed
             if gap > 0:

@@ -82,6 +82,7 @@ def _status_out() -> ScrapeStatusOut:
             {"url": item.url, "reason": item.reason, "detail": item.detail}
             for item in scrape_status.skipped_items
         ],
+        cancelled_urls=list(scrape_status.cancelled_urls),
         hash_backfill_running=bool(backfill_status["running"]),
         hash_backfill_total=int(backfill_status["total"]),
         hash_backfill_done=int(backfill_status["done"]),

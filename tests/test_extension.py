@@ -144,6 +144,7 @@ def _idle_status() -> None:
     pipeline.scrape_status.ran_this_session = False
     pipeline.scrape_status.errors = []
     pipeline.scrape_status.skipped_items = []
+    pipeline.scrape_status.cancelled_urls = []
     pipeline.scrape_status.job_id = 0
 
 
@@ -566,6 +567,10 @@ class CancelRemainderTests(unittest.TestCase):
         self.assertEqual(pipeline.scrape_status.message, "Cancelled")
         self.assertFalse(pipeline.scrape_status.running)
         self.assertEqual([item.reason for item in pipeline.scrape_status.skipped_items], ["cancelled", "cancelled"])
+        self.assertEqual(
+            pipeline.scrape_status.cancelled_urls,
+            ["https://gallery.test/post/2", "https://gallery.test/post/3"],
+        )
 
     def test_stop_releases_a_hung_job_without_waiting(self) -> None:
         """Stop must free the queue even while one post fetch is still blocked."""
@@ -587,6 +592,7 @@ class CancelRemainderTests(unittest.TestCase):
         self.assertEqual(pipeline.scrape_status.skipped, 2)
         self.assertEqual(pipeline.scrape_status.job_id, 5)
         self.assertEqual(pipeline.scrape_status.pending_urls, [])
+        self.assertEqual(pipeline.scrape_status.cancelled_urls, ["https://gallery.test/post/9"])
         job = ScrapeJob(
             seed_urls=["https://gallery.test/post/1"],
             tags=[],

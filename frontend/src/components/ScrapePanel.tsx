@@ -133,6 +133,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
   const [excludeTags, setExcludeTags] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [skippedOpen, setSkippedOpen] = useState(false)
+  const [cancelledOpen, setCancelledOpen] = useState(false)
   const [localFolders, setLocalFolders] = useState<string[]>([])
   const [localFiles, setLocalFiles] = useState<string[]>([])
   const [localRecursive, setLocalRecursive] = useState(true)
@@ -324,6 +325,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
   const start = async () => {
     setError(null)
     setSkippedOpen(false)
+    setCancelledOpen(false)
     if (isLocalSource) {
       if (!localPaths.length) {
         setError('Add at least one folder or file before running.')
@@ -377,7 +379,8 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     ? statusMessageParts(status.message || (status.running ? 'Running...' : 'Idle'), status.current_url)
     : null
 
-  const skippedItems = status?.skipped_items ?? []
+  const cancelledUrls = status?.cancelled_urls ?? []
+  const skippedItems = (status?.skipped_items ?? []).filter((item) => item.reason !== 'cancelled')
 
   return (
     <div className="panel">
@@ -561,6 +564,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
               onClick={async () => {
                 setError(null)
                 setSkippedOpen(false)
+                setCancelledOpen(false)
                 try {
                   await startLocalImport(localFolders, localRecursive)
                 } catch (err) {
@@ -871,7 +875,34 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
             {` · ${isLocalSource ? 'added' : 'downloaded'} ${status.downloaded}`}
             {` · skipped ${status.skipped}`}
             {status.similar > 0 && ` · similar ${status.similar}`}
+            {cancelledUrls.length > 0 && ` · cancelled ${cancelledUrls.length}`}
           </div>
+          {cancelledUrls.length > 0 && (
+            <details
+              className="scrape-skipped"
+              open={cancelledOpen}
+              onToggle={(e) => setCancelledOpen((e.target as HTMLDetailsElement).open)}
+            >
+              <summary>
+                Cancelled ({cancelledUrls.length})
+              </summary>
+              {cancelledOpen && (
+                <ul className="scrape-skipped-list">
+                  {cancelledUrls.map((url) => (
+                    <li key={url}>
+                      {url.startsWith('http') ? (
+                        <a href={url} target="_blank" rel="noreferrer">
+                          {url}
+                        </a>
+                      ) : (
+                        <span title={url}>{url}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </details>
+          )}
           {skippedItems.length > 0 && (
             <details
               className="scrape-skipped"
