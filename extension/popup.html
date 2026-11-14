@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        width: 300px;
+        margin: 0;
+        padding: 12px;
+        font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+        color: #e8e8ea;
+        background: #18181b;
+      }
+      h1 { font-size: 14px; margin: 0 0 8px; }
+      .row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: #757575; flex: none; }
+      .dot.ok { background: #43a047; }
+      .dot.warn { background: #f9a825; }
+      .muted { color: #a1a1aa; }
+      .box { border: 1px solid #2f2f35; border-radius: 6px; padding: 8px; margin-top: 8px; }
+      button {
+        font: inherit;
+        color: #fff;
+        background: #2b2b31;
+        border: 1px solid #3f3f46;
+        border-radius: 5px;
+        padding: 5px 9px;
+        cursor: pointer;
+      }
+      button:hover { background: #36363d; }
+      button.primary { background: #1565c0; border-color: #1565c0; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      #download { width: 100%; margin-top: 10px; padding: 8px 12px; }
+      .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+    </style>
+  </head>
+  <body>
+    <h1>Scrap Download</h1>
+    <div class="row"><span id="appDot" class="dot"></span><span id="appText">Checking app…</span></div>
+    <div class="row"><span id="sitesDot" class="dot"></span><span id="sitesText"></span></div>
+    <button id="download" class="primary" type="button" disabled>Download media file</button>
+    <div id="pageText" class="muted"></div>
+    <div class="box">
+      <div id="jobText" class="muted">No scrape running.</div>
+    </div>
+    <div class="actions">
+      <button id="refresh" type="button">Reload sites</button>
+      <button id="viewer" type="button">Open viewer</button>
+    </div>
+    <script src="popup.js"></script>
+  </body>
+</html>

@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.api.app_control import router as app_control_router
+from backend.app.api.extension import router as extension_router
 from backend.app.api.media import router as media_router
 from backend.app.api.scrape import router as scrape_router
 from backend.app.api.tags import router as tags_router
@@ -36,6 +37,7 @@ app.include_router(tags_router, prefix="/api")
 app.include_router(tag_groups_router, prefix="/api")
 app.include_router(scrape_router, prefix="/api")
 app.include_router(app_control_router, prefix="/api")
+app.include_router(extension_router, prefix="/api")
 
 settings.media_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=str(settings.media_dir)), name="media_files")

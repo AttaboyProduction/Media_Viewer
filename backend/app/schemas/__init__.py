@@ -238,6 +238,31 @@ class ScrapeStatusOut(BaseModel):
     ran_this_session: bool = False
 
 
+class ExtensionSiteOut(BaseModel):
+    id: str
+    name: str
+    # Patterns the extension matches against the page URL (query already removed).
+    url_patterns: list[str]
+
+
+class ExtensionSitesOut(BaseModel):
+    scrape_enabled: bool
+    sites: list[ExtensionSiteOut] = Field(default_factory=list)
+
+
+class ExtensionUrlsIn(BaseModel):
+    urls: list[str] = Field(min_length=1, max_length=500)
+
+
+class ExtensionEnqueueOut(BaseModel):
+    started: bool
+    appended: bool = False
+    site_id: str | None = None
+    queued: list[str] = Field(default_factory=list)
+    rejected: list[str] = Field(default_factory=list)
+    status: ScrapeStatusOut | None = None
+
+
 class DuplicateActionRequest(BaseModel):
     action: Literal["keep_both", "discard", "discard_new", "discard_old"]
 

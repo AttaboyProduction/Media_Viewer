@@ -25,7 +25,7 @@ from backend.app.services.media_service import (
     media_ids_with_excluded_tags,
 )
 from backend.scraper.job import compile_scrape_job
-from backend.scraper.pipeline import run_job, scrape_status
+from backend.scraper.pipeline import _release_queue, begin_scrape_queue, run_job, scrape_lock, scrape_status
 from backend.scraper.sites import (
     SOURCE_LOCAL,
     ensure_session_settings_file,
@@ -40,8 +40,6 @@ from backend.scraper.sites import (
 )
 
 router = APIRouter(prefix="/scrape", tags=["scrape"])
-
-_scrape_lock = threading.Lock()
 
 
 def _session_response() -> SessionSettingsOut:
@@ -98,14 +96,14 @@ def _recent_ids_newest_first(db: Session) -> list[int]:
     return pruned
 
 
-def _start_job(payload: ScrapeRunRequest) -> None:
+def _start_job(payload: ScrapeRunRequest, job_id: int) -> None:
     try:
         job = compile_scrape_job(payload)
         run_job(job)
     except Exception as exc:
         scrape_status.errors.append(str(exc))
-        scrape_status.running = False
         scrape_status.message = f"Failed: {exc}"
+        _release_queue(job_id)
 
 
 @router.get("/session", response_model=SessionSettingsOut)
@@ -150,21 +148,36 @@ def patch_scrape_session(payload: SessionSettingsPatch) -> SessionSettingsOut:
     return _session_response()
 
 
-@router.post("/run", response_model=ScrapeStatusOut, dependencies=[Depends(require_scrape_page)])
-def post_scrape_run(payload: ScrapeRunRequest) -> ScrapeStatusOut:
-    with _scrape_lock:
+def start_scrape_run(payload: ScrapeRunRequest, before_start=None) -> ScrapeStatusOut:
+    """Start a scrape job in the background (409 if one is running).
+
+    ``before_start`` runs under the scrape lock once the job is known to start
+    (e.g. the extension switching the session Source to the post's site).
+    """
+    with scrape_lock:
         if scrape_status.running:
             raise HTTPException(status_code=409, detail="Scrape already running")
+        if before_start is not None:
+            before_start()
         try:
-            compile_scrape_job(payload)
+            job = compile_scrape_job(payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        scrape_status.job_id += 1
+        job_id = scrape_status.job_id
         scrape_status.running = True
         scrape_status.cancel = False
         scrape_status.message = "Queued"
-        thread = threading.Thread(target=_start_job, args=(payload,), daemon=True)
+        site = get_selected_site()
+        begin_scrape_queue(job, site["id"] if site else None)
+        thread = threading.Thread(target=_start_job, args=(payload, job_id), daemon=True)
         thread.start()
     return _status_out()
+
+
+@router.post("/run", response_model=ScrapeStatusOut, dependencies=[Depends(require_scrape_page)])
+def post_scrape_run(payload: ScrapeRunRequest) -> ScrapeStatusOut:
+    return start_scrape_run(payload)
 
 
 @router.post(
@@ -207,15 +220,20 @@ def post_import_run(payload: LocalImportRunRequest) -> ScrapeStatusOut:
     paths = [p.strip() for p in payload.paths if p and p.strip()]
     if not paths:
         raise HTTPException(status_code=400, detail="At least one path is required")
-    with _scrape_lock:
+    with scrape_lock:
         if scrape_status.running:
             raise HTTPException(status_code=409, detail="Scrape already running")
+        scrape_status.job_id += 1
+        job_id = scrape_status.job_id
+        scrape_status.kind = "import"
+        scrape_status.queue_open = False
+        scrape_status.site_id = None
         scrape_status.running = True
         scrape_status.cancel = False
         scrape_status.message = "Queued"
         thread = threading.Thread(
             target=run_local_import,
-            kwargs={"paths": paths, "recursive": payload.recursive},
+            kwargs={"paths": paths, "recursive": payload.recursive, "job_id": job_id},
             daemon=True,
         )
         thread.start()

@@ -1,0 +1,306 @@
+"""Browser extension: adapter `extension` block, URL → post resolution, check / enqueue."""
+
+from __future__ import annotations
+
+import unittest
+from unittest.mock import MagicMock, patch
+
+from fastapi import HTTPException
+
+from backend.app.api import extension as extension_api
+from backend.app.schemas import ExtensionUrlsIn, ScrapeStatusOut
+from backend.scraper import adapter_loader, pipeline, sites
+from backend.scraper.job import ScrapeJob
+
+GALLERY_EXTENSION = {
+    "page_matches": ["https://gallery.test/*", "https://cdn.gallery.test/*"],
+    "post_id_patterns": [
+        "^https?://(?:[\\w-]+\\.)?gallery\\.test/post/(\\d+)",
+        "^https?://cdn\\.gallery\\.test/posts/\\d+/(\\d+)/",
+    ],
+    "post_url_template": "https://gallery.test/post/{id}",
+}
+
+
+def _manifest(site_id: str, host: str, extension: object | None) -> dict:
+    site: dict = {
+        "id": site_id,
+        "name": site_id,
+        "base_url": f"https://{host}",
+        "media_cdn_host": f"https://cdn.{host}",
+    }
+    if extension is not None:
+        site["extension"] = extension
+    return {
+        "id": site_id,
+        "sites": [site],
+        "scrapers": [{"id": f"{site_id}_default", "name": "Default", "site_ids": [site_id]}],
+    }
+
+
+def _parsed_site(site_id: str, host: str, extension: object | None) -> dict:
+    parsed = adapter_loader.parse_adapter_manifest(_manifest(site_id, host, extension))
+    assert parsed is not None
+    return parsed["sites"][0]
+
+
+class ExtensionBlockParseTests(unittest.TestCase):
+    def test_valid_block_is_kept(self) -> None:
+        site = _parsed_site("gallery", "gallery.test", GALLERY_EXTENSION)
+        self.assertEqual(site["extension"], GALLERY_EXTENSION)
+
+    def test_invalid_and_groupless_patterns_are_dropped(self) -> None:
+        block = {
+            **GALLERY_EXTENSION,
+            "post_id_patterns": ["([", "^https://gallery\\.test/post/\\d+", *GALLERY_EXTENSION["post_id_patterns"]],
+        }
+        site = _parsed_site("gallery", "gallery.test", block)
+        self.assertEqual(site["extension"]["post_id_patterns"], GALLERY_EXTENSION["post_id_patterns"])
+
+    def test_template_without_id_drops_block(self) -> None:
+        block = {**GALLERY_EXTENSION, "post_url_template": "https://gallery.test/post/"}
+        self.assertNotIn("extension", _parsed_site("gallery", "gallery.test", block))
+
+    def test_missing_matches_or_patterns_drops_block(self) -> None:
+        self.assertNotIn(
+            "extension",
+            _parsed_site("gallery", "gallery.test", {**GALLERY_EXTENSION, "page_matches": []}),
+        )
+        self.assertNotIn(
+            "extension",
+            _parsed_site("gallery", "gallery.test", {**GALLERY_EXTENSION, "post_id_patterns": ["(["]}),
+        )
+
+    def test_site_without_block_still_loads(self) -> None:
+        site = _parsed_site("gallery", "gallery.test", None)
+        self.assertNotIn("extension", site)
+
+
+class ResolveExtensionUrlTests(unittest.TestCase):
+    def setUp(self) -> None:
+        catalog = {
+            "gallery": _parsed_site("gallery", "gallery.test", GALLERY_EXTENSION),
+            "plain": _parsed_site("plain", "plain.test", None),
+        }
+        self._patch = patch.dict(sites.KNOWN_SITES, catalog, clear=True)
+        self._patch.start()
+
+    def tearDown(self) -> None:
+        self._patch.stop()
+
+    def test_only_sites_with_block_are_listed(self) -> None:
+        self.assertEqual([s["id"] for s in sites.list_extension_sites()], ["gallery"])
+
+    def test_every_media_form_maps_to_full_post(self) -> None:
+        expected = ("gallery", "4725351", "https://gallery.test/post/4725351")
+        for url in (
+            "https://gallery.test/post/4725351",
+            "https://gallery.test/post/4725351?from=search#comments",
+            "https://www.gallery.test/post/4725351",
+            "https://cdn.gallery.test/posts/4725/4725351/4725351.pic.jpg",
+            "https://cdn.gallery.test/posts/4725/4725351/4725351.picsmall.jpg",
+            "https://cdn.gallery.test/posts/4725/4725351/4725351.pic256.avif",
+            "https://cdn.gallery.test/posts/4725/4725351/4725351.mov480.mp4",
+            "  https://gallery.test/post/4725351  ",
+        ):
+            with self.subTest(url=url):
+                self.assertEqual(sites.resolve_extension_url(url), expected)
+
+    def test_unsupported_urls_are_rejected(self) -> None:
+        for url in (
+            "",
+            "https://gallery.test/",
+            "https://gallery.test/post/abc",
+            "https://evil.test/post/1?u=https://gallery.test/post/1",
+            "https://gallery.test.evil.test/post/1",
+            "https://plain.test/post/1",
+        ):
+            with self.subTest(url=url):
+                self.assertIsNone(sites.resolve_extension_url(url))
+
+
+def _idle_status() -> None:
+    pipeline.scrape_status.running = False
+    pipeline.scrape_status.queue_open = False
+    pipeline.scrape_status.kind = ""
+    pipeline.scrape_status.site_id = None
+    pipeline.scrape_status.pending_urls = []
+    pipeline.scrape_status.accepted_urls = set()
+    pipeline.scrape_status.total = 0
+    pipeline.scrape_status.processed = 0
+    pipeline.scrape_status.downloaded = 0
+    pipeline.scrape_status.job_id = 0
+
+
+class ExtensionApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        catalog = {
+            "gallery": _parsed_site("gallery", "gallery.test", GALLERY_EXTENSION),
+            "other": _parsed_site(
+                "other",
+                "other.test",
+                {
+                    "page_matches": ["https://other.test/*"],
+                    "post_id_patterns": ["^https?://other\\.test/post/(\\d+)"],
+                    "post_url_template": "https://other.test/post/{id}",
+                },
+            ),
+        }
+        self._patch = patch.dict(sites.KNOWN_SITES, catalog, clear=True)
+        self._patch.start()
+        _idle_status()
+
+    def tearDown(self) -> None:
+        self._patch.stop()
+        _idle_status()
+
+    def test_post_page_drops_query_and_starts_url_filter(self) -> None:
+        captured: dict = {}
+
+        def fake_start(run, before_start=None):
+            captured["run"] = run
+            return ScrapeStatusOut(
+                running=True, total=1, processed=0, downloaded=0, skipped=0, errors=[], last_gallery_url=None
+            )
+
+        with (
+            patch.object(extension_api, "start_scrape_run", side_effect=fake_start),
+            patch.object(extension_api, "select_source_for_site") as select_source,
+        ):
+            out = extension_api.post_extension_enqueue(
+                ExtensionUrlsIn(
+                    urls=[
+                        "https://gallery.test/post/4776344?page=3&cursor=4776333&providerId=root",
+                        "javascript:alert(1)",
+                    ]
+                )
+            )
+        select_source.assert_called_once_with("gallery")
+        self.assertTrue(out.started)
+        self.assertFalse(out.appended)
+        self.assertEqual(out.queued, ["https://gallery.test/post/4776344"])
+        self.assertEqual(out.rejected, ["javascript:alert(1)"])
+        self.assertEqual(captured["run"].filters[0].value, "https://gallery.test/post/4776344")
+        self.assertEqual(captured["run"].limit, 0)
+
+    def test_cdn_page_is_queued_as_the_post(self) -> None:
+        captured: dict = {}
+
+        def fake_start(run, before_start=None):
+            captured["run"] = run
+            return ScrapeStatusOut(
+                running=True, total=1, processed=0, downloaded=0, skipped=0, errors=[], last_gallery_url=None
+            )
+
+        with patch.object(extension_api, "start_scrape_run", side_effect=fake_start):
+            out = extension_api.post_extension_enqueue(
+                ExtensionUrlsIn(urls=["https://cdn.gallery.test/posts/0/300/300.picsmall.jpg"])
+            )
+        self.assertEqual(out.queued, ["https://gallery.test/post/300"])
+        self.assertEqual(captured["run"].filters[0].value, "https://gallery.test/post/300")
+
+    def test_running_scrape_grows_its_queue(self) -> None:
+        pipeline.scrape_status.running = True
+        pipeline.scrape_status.kind = "scrape"
+        pipeline.scrape_status.queue_open = True
+        pipeline.scrape_status.site_id = "gallery"
+        pipeline.scrape_status.total = 2
+        pipeline.scrape_status.accepted_urls = {"https://gallery.test/post/1"}
+        with patch.object(extension_api, "start_scrape_run") as start:
+            out = extension_api.post_extension_enqueue(
+                ExtensionUrlsIn(
+                    urls=[
+                        "https://gallery.test/post/9?page=3&cursor=1",
+                        "https://gallery.test/post/1",
+                    ]
+                )
+            )
+        start.assert_not_called()
+        self.assertTrue(out.appended)
+        self.assertFalse(out.started)
+        self.assertEqual(out.queued, ["https://gallery.test/post/9"])
+        self.assertEqual(pipeline.scrape_status.total, 3)
+        self.assertEqual(pipeline.scrape_status.pending_urls, ["https://gallery.test/post/9"])
+
+    def test_enqueue_rejects_mixed_sites(self) -> None:
+        with patch.object(extension_api, "start_scrape_run") as start:
+            with self.assertRaises(HTTPException) as ctx:
+                extension_api.post_extension_enqueue(
+                    ExtensionUrlsIn(urls=["https://gallery.test/post/1", "https://other.test/post/2"])
+                )
+        self.assertEqual(ctx.exception.status_code, 400)
+        start.assert_not_called()
+
+    def test_other_job_is_a_conflict(self) -> None:
+        pipeline.scrape_status.running = True
+        pipeline.scrape_status.kind = "import"
+        with patch.object(extension_api, "start_scrape_run") as start:
+            with self.assertRaises(HTTPException) as ctx:
+                extension_api.post_extension_enqueue(
+                    ExtensionUrlsIn(urls=["https://gallery.test/post/9"])
+                )
+        self.assertEqual(ctx.exception.status_code, 409)
+        start.assert_not_called()
+
+    def test_url_list_bounds(self) -> None:
+        with self.assertRaises(ValueError):
+            ExtensionUrlsIn(urls=[])
+        with self.assertRaises(ValueError):
+            ExtensionUrlsIn(urls=["https://gallery.test/post/1"] * 501)
+
+
+class ExtensionQueueDrainTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        _idle_status()
+
+    def test_url_added_during_the_job_is_scraped(self) -> None:
+        seen: list[str] = []
+
+        def fake_process(client, db, job, url, existing):
+            seen.append(url)
+            if url.endswith("/1"):
+                added = pipeline.append_scrape_urls(["https://gallery.test/post/2"], "gallery")
+                self.assertEqual(added, ["https://gallery.test/post/2"])
+            return "ok"
+
+        job = ScrapeJob(
+            seed_urls=["https://gallery.test/post/1"],
+            tags=[],
+            tag_mode="and",
+            date_from=None,
+            date_to=None,
+            media_type=None,
+            sort="date_desc",
+            limit=0,
+            ignore_download_limit=True,
+        )
+        db = MagicMock()
+        db.query.return_value.all.return_value = []
+
+        class Client:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        _idle_status()
+        with (
+            patch.object(pipeline, "_process_post_url", side_effect=fake_process),
+            patch.object(pipeline, "PlaywrightClient", Client),
+            patch.object(pipeline, "SessionLocal", return_value=db),
+            patch.object(pipeline, "seed_database"),
+        ):
+            with pipeline.scrape_lock:
+                pipeline.scrape_status.job_id += 1
+                pipeline.scrape_status.running = True
+                pipeline.begin_scrape_queue(job, "gallery")
+            pipeline.run_job(job)
+
+        self.assertEqual(seen, ["https://gallery.test/post/1", "https://gallery.test/post/2"])
+        self.assertEqual(pipeline.scrape_status.total, 2)
+        self.assertFalse(pipeline.scrape_status.running)
+
+
+if __name__ == "__main__":
+    unittest.main()

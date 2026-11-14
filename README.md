@@ -120,6 +120,24 @@ CLI scrape (URL must match an *installed* adapter site):
 python -m backend.scraper.pipeline --url "https://example.com/gallery" --limit 10 --sort date_desc
 ```
 
+### Browser extension (Chrome / Opera)
+
+[`extension/`](extension/) is one plain-JS Manifest V3 extension for Chrome and Opera (no build step). It sends posts from supported gallery sites to the running app. The app downloads them with the normal scrape pipeline (tags, SHA-256 / similar checks, **Downloaded previously**).
+
+- **Install:** `chrome://extensions` or `opera://extensions` → Developer mode → **Load unpacked** → pick the `extension/` folder.
+- **Supported sites** come from the adapter: a site in `adapter.json` gets browser support by adding an `extension` block. The same entry is the Scrape page **Source**. The app tells the extension which page URLs it can scrape (`post_id_patterns`):
+
+  ```json
+  "extension": {
+    "page_matches": ["https://example.com/*", "https://cdn.example.com/*"],
+    "post_id_patterns": ["^https?://example\\.com/post/(\\d+)", "^https?://cdn\\.example\\.com/posts/\\d+/(\\d+)/"],
+    "post_url_template": "https://example.com/post/{id}"
+  }
+  ```
+
+  `post_id_patterns` match a page URL with the post id in group 1 (shared Python/JS regex subset: no `(?P<name>)`, no inline flags). The extension strips the query and fragment, then sends that page URL. A post page is scraped as that URL. A CDN preview the pattern recognizes is scraped as the post page, so the file is full size. `post_url_template` must contain `{id}`.
+- **Use:** click the extension icon and **Download media file**, or right-click the page and choose **Download this page**. The app adds that URL to its scrape queue (the same URL-filter scrape as the Scrape page: tags, hashes, **Downloaded previously**). If a scrape for that site is already running, the URL is added to it and the queue total goes up. The toolbar icon is **green** when this page is a URL the app can scrape, and **red** otherwise (`off` on the badge means the app is not running). Needs the Scrape page on (Settings → Hide Scrape page off).
+
 ## Configuration
 
 ### `backend/app/config.py`
@@ -147,6 +165,7 @@ VERSION                 Tracked app version (bump to force rebuild after update)
 versioning.py           VERSION vs data/installed_version helpers
 launcher.py             Install deps, uvicorn, tray, open viewer
 adapters/               Dev site adapter packages (install into data/adapters/)
+extension/              Chrome / Opera MV3 extension (Load unpacked)
 backend/                FastAPI, SQLite, scraper
 frontend/               React viewer and settings UI
 media/                  Downloaded files (gitignored)
@@ -363,5 +382,12 @@ Base URL: `http://127.0.0.1:8000/api`
 | GET | `/scrape/status` | Progress, errors, hash backfill status, `recent_media_ids` |
 | GET | `/scrape/recent-media` | Paged summaries (`scope=session` default or `scope=all` by `scraped_at`; optional `tags` with `tag_mode` `and`\|`or`, default `and`) |
 | POST | `/scrape/clear-recent` | Clear session recent-media id list |
+
+### Browser extension
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/extension/sites` | URL patterns the app can scrape, per installed adapter, plus `scrape_enabled` |
+| POST | `/extension/enqueue` | `{urls}` (1–500, query strings ignored) from one site → add them to the running scrape queue (total grows) or start a URL-filter scrape. 409 if another job is running or the Scrape page is hidden |
 
 Static files: `/media/...` (downloads), `/assets/...` (built UI).

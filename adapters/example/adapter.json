@@ -14,7 +14,18 @@
         "curl",
         "playwright_api",
         "html"
-      ]
+      ],
+      "extension": {
+        "page_matches": [
+          "https://example.com/*",
+          "https://cdn.example.com/*"
+        ],
+        "post_id_patterns": [
+          "^https?://example\\.com/post/(\\d+)",
+          "^https?://cdn\\.example\\.com/posts/\\d+/(\\d+)/"
+        ],
+        "post_url_template": "https://example.com/post/{id}"
+      }
     }
   ],
   "scrapers": [

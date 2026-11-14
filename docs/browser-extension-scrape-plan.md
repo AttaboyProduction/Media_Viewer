@@ -1,6 +1,17 @@
 # Browser extension scrape plan
 
-The plan is ready. Below is the approach, tied to the current codebase.
+## Status (v1 implemented)
+
+Implemented in `extension/`, `backend/app/api/extension.py`, and the adapter `extension` block (see README → *Browser extension*). Differences from the original plan below:
+
+- **The extension does not download.** It receives `url_patterns` from `GET /extension/sites` and sends the page URL with the query and fragment removed. The app scrapes that URL with the normal pipeline. A post page is queued as itself; a CDN preview the adapter recognizes is queued as the post page.
+- **The app's queue grows.** If a scrape for that site is already running, the URL is appended and `total` increases. The extension keeps no queue of its own.
+- **No token yet.** Enqueue only accepts `application/json`. Web pages can't send that cross-origin without a CORS preflight, which the allowlist refuses, and a `text/plain` body gets 422.
+- Toolbar icon is green when the current page matches a pattern the app can scrape, and red otherwise. Popup **Download media file** and the right-click **Download this page** are the only actions.
+
+---
+
+The original plan follows.
 
 ## Overall approach: one MV3 extension for both browsers
 

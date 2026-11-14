@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -64,7 +65,51 @@ def _normalize_site(raw: object) -> dict[str, Any] | None:
     order = raw.get("tag_fetch_order")
     if isinstance(order, list):
         site["tag_fetch_order"] = [str(item) for item in order if isinstance(item, str) and item]
+    extension = _normalize_extension(raw.get("extension"), site_id=site["id"])
+    if extension:
+        site["extension"] = extension
     return site
+
+
+def _string_list(raw: object) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [item.strip() for item in raw if isinstance(item, str) and item.strip()]
+
+
+def _normalize_extension(raw: object, *, site_id: str) -> dict[str, Any] | None:
+    """Browser-extension block of a site: where it runs and how URLs map to post ids.
+
+    ``post_id_patterns`` are evaluated by both Python ``re`` and JS ``RegExp``, so
+    they must stay in the shared subset (no ``(?P<name>)``, no inline flags); group 1
+    is the post id. ``post_url_template`` must contain ``{id}``.
+    """
+    if not isinstance(raw, dict):
+        return None
+    page_matches = _string_list(raw.get("page_matches"))
+    patterns: list[str] = []
+    for pattern in _string_list(raw.get("post_id_patterns")):
+        try:
+            compiled = re.compile(pattern)
+        except re.error as exc:
+            logger.warning("Site %s: invalid extension post_id_pattern %r: %s", site_id, pattern, exc)
+            continue
+        if compiled.groups < 1:
+            logger.warning("Site %s: post_id_pattern %r has no capture group", site_id, pattern)
+            continue
+        patterns.append(pattern)
+    template = raw.get("post_url_template")
+    if not isinstance(template, str) or "{id}" not in template:
+        logger.warning("Site %s: extension post_url_template must contain {id}", site_id)
+        return None
+    if not page_matches or not patterns:
+        logger.warning("Site %s: extension needs page_matches and post_id_patterns", site_id)
+        return None
+    return {
+        "page_matches": page_matches,
+        "post_id_patterns": patterns,
+        "post_url_template": template.strip(),
+    }
 
 
 def _normalize_scraper(raw: object) -> dict[str, Any] | None:

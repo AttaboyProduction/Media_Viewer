@@ -79,7 +79,7 @@ def link_one_file(db: Session, path: Path) -> tuple[MediaItem | None, str | None
     return media, None
 
 
-def run_local_import(paths: list[str], *, recursive: bool) -> None:
+def run_local_import(paths: list[str], *, recursive: bool, job_id: int = 0) -> None:
     """Background job: scan paths, hash, insert linked rows; updates scrape_status."""
     scrape_status.running = True
     scrape_status.cancel = False
@@ -137,5 +137,13 @@ def run_local_import(paths: list[str], *, recursive: bool) -> None:
         scrape_status.errors.append(str(exc))
         scrape_status.message = f"Failed: {exc}"
     finally:
-        scrape_status.running = False
+        from backend.scraper.pipeline import scrape_lock
+
+        with scrape_lock:
+            if job_id and scrape_status.job_id == job_id:
+                scrape_status.running = False
+                scrape_status.queue_open = False
+                scrape_status.kind = ""
+            elif not job_id:
+                scrape_status.running = False
         scrape_status.current_url = None

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import threading
 from dataclasses import dataclass, field
 
 from backend.app.config import settings
@@ -39,15 +40,24 @@ class ScrapeStatus:
     recent_media_ids: list[int] = field(default_factory=list)
     # True after the first scrape job starts in this process.
     ran_this_session: bool = False
+    # Extension URLs join the running scrape through this queue.
+    job_id: int = 0
+    kind: str = ""  # "scrape" | "import" | ""
+    site_id: str | None = None
+    queue_open: bool = False
+    pending_urls: list[str] = field(default_factory=list)
+    accepted_urls: set[str] = field(default_factory=set)
 
 
 scrape_status = ScrapeStatus()
+# Shared with the scrape API so a new job and an extension append can't overlap.
+scrape_lock = threading.Lock()
 
 
 def _reset_status(gallery_url: str) -> None:
     scrape_status.running = True
     scrape_status.cancel = False
-    scrape_status.total = 0
+    # total / pending_urls belong to the queue opened by begin_scrape_queue.
     scrape_status.processed = 0
     scrape_status.downloaded = 0
     scrape_status.skipped = 0
@@ -59,6 +69,58 @@ def _reset_status(gallery_url: str) -> None:
     scrape_status.skipped_items = []
     scrape_status.ran_this_session = True
     # recent_media_ids intentionally retained across scrapes in this process
+
+
+def begin_scrape_queue(job: ScrapeJob, site_id: str | None) -> None:
+    """Open the running scrape's URL queue. Caller holds ``scrape_lock``."""
+    post_seeds = [url for url in job.seed_urls if extract_post_id(url)]
+    scrape_status.kind = "scrape"
+    scrape_status.site_id = site_id
+    scrape_status.accepted_urls = set(post_seeds)
+    scrape_status.pending_urls = list(post_seeds)
+    scrape_status.total = len(post_seeds)
+    scrape_status.queue_open = True
+
+
+def append_scrape_urls(urls: list[str], site_id: str) -> list[str] | None:
+    """Add post URLs to the running scrape. ``None`` when this job can't take them.
+
+    Newly added URLs increase ``total``, which is the scrape queue the UI shows.
+    """
+    with scrape_lock:
+        if (
+            not scrape_status.running
+            or scrape_status.kind != "scrape"
+            or not scrape_status.queue_open
+            or scrape_status.site_id != site_id
+        ):
+            return None
+        added: list[str] = []
+        for url in urls:
+            if url in scrape_status.accepted_urls:
+                continue
+            scrape_status.accepted_urls.add(url)
+            scrape_status.pending_urls.append(url)
+            added.append(url)
+        scrape_status.total += len(added)
+        return added
+
+
+def _pop_pending() -> str | None:
+    with scrape_lock:
+        if scrape_status.pending_urls:
+            return scrape_status.pending_urls.pop(0)
+        return None
+
+
+def _release_queue(job_id: int) -> None:
+    with scrape_lock:
+        if scrape_status.job_id != job_id:
+            return
+        scrape_status.running = False
+        scrape_status.queue_open = False
+        scrape_status.kind = ""
+        scrape_status.pending_urls = []
 
 
 def _cancelled() -> bool:
@@ -186,7 +248,64 @@ def _process_post_url(
                 pass
 
 
+def _drain_pending(client: PlaywrightClient, db, job: ScrapeJob, existing_posts: dict) -> str:
+    """Scrape URLs waiting on the job, including ones added while this runs."""
+    while True:
+        if _cancelled() or _quota_met(job):
+            return "stop_cancel" if _cancelled() else "ok"
+        url = _pop_pending()
+        if url is None:
+            return "ok"
+        outcome = _process_post_url(client, db, job, url, existing_posts)
+        if outcome != "ok":
+            return outcome
+
+
+def _finish_queue(my_id: int, client: PlaywrightClient, db, job: ScrapeJob, existing_posts: dict) -> None:
+    """Scrape whatever is left, then close the queue so a new job can start."""
+    while not _cancelled():
+        with scrape_lock:
+            if scrape_status.job_id != my_id:
+                return
+            if scrape_status.pending_urls:
+                url = scrape_status.pending_urls.pop(0)
+            else:
+                if _cancelled():
+                    scrape_status.message = "Cancelled"
+                elif not scrape_status.message.startswith("Reached"):
+                    if (
+                        job.limit > 0
+                        and not job.ignore_download_limit
+                        and scrape_status.downloaded < job.limit
+                    ):
+                        scrape_status.message = "Done — no more posts"
+                    else:
+                        scrape_status.message = "Done"
+                scrape_status.current_url = None
+                scrape_status.running = False
+                scrape_status.queue_open = False
+                scrape_status.kind = ""
+                return
+        outcome = _process_post_url(client, db, job, url, existing_posts)
+        if outcome == "stop_cancel":
+            break
+    with scrape_lock:
+        if scrape_status.job_id == my_id:
+            scrape_status.message = "Cancelled"
+            scrape_status.current_url = None
+            scrape_status.running = False
+            scrape_status.queue_open = False
+            scrape_status.kind = ""
+
+
 def run_job(job: ScrapeJob) -> ScrapeStatus:
+    if not scrape_status.queue_open:
+        with scrape_lock:
+            if not scrape_status.queue_open:
+                scrape_status.job_id += 1
+                scrape_status.running = True
+                begin_scrape_queue(job, None)
+    my_id = scrape_status.job_id
     _reset_status(job.gallery_url)
     db = SessionLocal()
     try:
@@ -197,29 +316,19 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
         }
 
         with PlaywrightClient() as client:
-            post_seeds = [url for url in job.seed_urls if extract_post_id(url)]
             gallery_seeds = [url for url in job.seed_urls if not extract_post_id(url)]
 
-            # Target downloads for progress when limiting gallery scrapes.
+            # Gallery scrapes show the download limit as the queue, plus any
+            # extension URLs already waiting. URL-filter jobs keep the seed count.
             if job.limit > 0 and not job.ignore_download_limit:
-                scrape_status.total = job.limit
-            else:
-                scrape_status.total = len(post_seeds)
+                with scrape_lock:
+                    scrape_status.total = job.limit + len(scrape_status.pending_urls)
 
             scrape_status.message = "Collecting posts..."
+            outcome = _drain_pending(client, db, job, existing_posts)
+            stop = outcome == "stop_date"
 
-            stop = False
-            for post_url in post_seeds:
-                if _cancelled() or _quota_met(job):
-                    break
-                outcome = _process_post_url(client, db, job, post_url, existing_posts)
-                if outcome == "stop_date":
-                    stop = True
-                    break
-                if outcome == "stop_cancel":
-                    break
-
-            if not stop and not _cancelled():
+            if not stop and outcome != "stop_cancel":
                 for gallery_url in gallery_seeds:
                     if _cancelled() or _quota_met(job):
                         break
@@ -239,9 +348,10 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
                             if _cancelled() or _quota_met(job):
                                 break
                             if job.ignore_download_limit or job.limit <= 0:
-                                scrape_status.total = max(
-                                    scrape_status.total, scrape_status.processed + 1
-                                )
+                                with scrape_lock:
+                                    scrape_status.total = max(
+                                        scrape_status.total, scrape_status.processed + 1
+                                    )
                             outcome = _process_post_url(
                                 client, db, job, post_url, existing_posts
                             )
@@ -250,31 +360,22 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
                                 break
                             if outcome == "stop_cancel":
                                 break
+                            queued = _drain_pending(client, db, job, existing_posts)
+                            if queued == "stop_cancel":
+                                break
                     finally:
                         page.close()
                     if stop or _cancelled() or _quota_met(job):
                         break
 
-            if _cancelled():
-                scrape_status.message = "Cancelled"
-            elif not scrape_status.message.startswith("Reached"):
-                if (
-                    job.limit > 0
-                    and not job.ignore_download_limit
-                    and scrape_status.downloaded < job.limit
-                ):
-                    # Listing exhausted (or only skips left) before the download quota.
-                    scrape_status.message = "Done — no more posts"
-                else:
-                    scrape_status.message = "Done"
-            scrape_status.current_url = None
+            _finish_queue(my_id, client, db, job, existing_posts)
     except Exception as exc:  # noqa: BLE001
         scrape_status.errors.append(str(exc))
         scrape_status.message = "Failed"
         scrape_status.current_url = None
         raise
     finally:
-        scrape_status.running = False
+        _release_queue(my_id)
         db.close()
     return scrape_status
 

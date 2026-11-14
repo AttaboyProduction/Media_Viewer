@@ -11,7 +11,9 @@ that can scrape one or more sites.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any
 
 from backend.app.config import settings
@@ -266,6 +268,70 @@ def get_selected_scraper() -> dict[str, Any] | None:
     if site_id and site_id not in scraper.get("site_ids", []):
         return None
     return dict(scraper)
+
+
+def list_extension_sites() -> list[dict[str, Any]]:
+    """Installed sites that declare an ``extension`` block (browser button support)."""
+    return [
+        {"id": site["id"], "name": site["name"], **site["extension"]}
+        for site in KNOWN_SITES.values()
+        if site.get("extension")
+    ]
+
+
+def clean_page_url(url: str) -> str:
+    """Page address without query or fragment: ``/post/1?page=3`` → ``/post/1``."""
+    parsed = urlparse((url or "").strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return ""
+    return f"{parsed.scheme}://{parsed.netloc}{parsed.path or '/'}"
+
+
+def resolve_extension_url(url: str) -> tuple[str, str, str] | None:
+    """Map a supported page URL to ``(site_id, post_id, post_url)``.
+
+    Query and fragment are ignored. ``post_url`` is the adapter's post page, which is
+    what the scraper downloads (full-size file, tags, duplicates).
+    """
+    text = clean_page_url(url)
+    if not text:
+        return None
+    for site in list_extension_sites():
+        for pattern in site["post_id_patterns"]:
+            match = re.search(pattern, text)
+            if match and match.group(1) and match.group(1).isdigit():
+                post_id = match.group(1)
+                return site["id"], post_id, site["post_url_template"].replace("{id}", post_id)
+    return None
+
+
+def extension_scrape_target(url: str) -> tuple[str, str] | None:
+    """``(site_id, url to put on the scrape queue)`` for one page the extension sent.
+
+    A post page is queued as itself, without query or fragment. Any other URL the
+    adapter recognizes (a CDN preview, for example) is queued as that post's page,
+    so the scraper fetches the full-size file.
+    """
+    from backend.scraper.gallery import extract_post_id
+
+    cleaned = clean_page_url(url)
+    if not cleaned:
+        return None
+    hit = resolve_extension_url(cleaned)
+    if hit is None:
+        return None
+    site_id, _post_id, post_url = hit
+    if extract_post_id(cleaned):
+        return site_id, cleaned
+    return site_id, post_url
+
+
+def select_source_for_site(site_id: str) -> None:
+    """Point the Scrape panel Source at ``site_id``, keeping its scraper when still valid."""
+    current = load_session_settings()
+    if current.get("selected_site_id") == site_id and get_selected_scraper() is not None:
+        return
+    save_session_settings({"selected_source_id": site_id})
 
 
 def require_selected_site() -> dict[str, Any]:
