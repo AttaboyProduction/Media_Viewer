@@ -67,5 +67,21 @@
     return "";
   }
 
-  globalThis.ScrapShared = { compileSites, cleanPageUrl, siteFor, scrapableUrl, matchPatternToRegExp };
+  function isPostPage(url) {
+    return /\/post\/\d+(?:\/|$)/.test(url || "");
+  }
+
+  // F on a post page queues that post, even if the pointer is on the video file.
+  // A hovered link to a different post (a listing thumbnail) still wins.
+  function chooseFileHotkey(sites, pageUrl, hintUrl) {
+    const pageHit = scrapableUrl(sites, pageUrl);
+    const hintHit = scrapableUrl(sites, hintUrl);
+    if (isPostPage(hintHit) && hintHit !== pageHit) return hintHit;
+    if (isPostPage(pageHit)) return pageHit;
+    return hintHit || pageHit || "";
+  }
+
+  const api = { compileSites, cleanPageUrl, siteFor, scrapableUrl, matchPatternToRegExp, chooseFileHotkey };
+  globalThis.ScrapShared = api;
+  if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

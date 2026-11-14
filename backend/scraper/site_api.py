@@ -192,6 +192,8 @@ def fetch_post_json_curl_cffi(
     last_error: BaseException | None = None
 
     for attempt in range(retries):
+        if _scrape_cancelled():
+            raise RuntimeError("cancelled")
         impersonate = _IMPERSONATE_CANDIDATES[min(attempt, len(_IMPERSONATE_CANDIDATES) - 1)]
         try:
             response = curl_requests.get(
@@ -213,7 +215,7 @@ def fetch_post_json_curl_cffi(
             raise
         except Exception as exc:
             last_error = exc
-            if attempt >= retries - 1:
+            if attempt >= retries - 1 or _scrape_cancelled():
                 raise
             time.sleep(min(0.8 * (attempt + 1), 3.0))
 
@@ -370,10 +372,18 @@ def _json_transport_order() -> tuple[str, ...]:
     return tuple(name for name in order if name in _JSON_FETCHERS)
 
 
+def _scrape_cancelled() -> bool:
+    from backend.scraper.pipeline import scrape_status
+
+    return bool(scrape_status.cancel)
+
+
 def fetch_post_payload(post_page_url: str) -> dict:
     """Fetch full post JSON, trying preferred transports in order until one succeeds."""
     errors: list[str] = []
     for name in _json_transport_order():
+        if _scrape_cancelled():
+            raise RuntimeError("cancelled")
         fetcher = _JSON_FETCHERS[name]
         try:
             return fetcher(post_page_url)

@@ -1,0 +1,31 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Allow F / P</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font: 13px/1.4 system-ui, "Segoe UI", sans-serif;
+        color: #e8e8ea;
+        background: #18181b;
+      }
+      p { margin: 0 0 12px; }
+      button {
+        font: inherit;
+        color: #fff;
+        background: #1565c0;
+        border: 1px solid #1565c0;
+        border-radius: 5px;
+        padding: 6px 10px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <p id="msg">Shortcut keys: F = one file, P = whole page. Chrome will ask to read this site so those keys can find posts.</p>
+    <button id="allow" type="button">Allow F / P on this site</button>
+    <script src="hotkeys.js"></script>
+  </body>
+</html>

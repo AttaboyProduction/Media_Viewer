@@ -107,5 +107,74 @@ class FetchMediaBytesTests(unittest.TestCase):
         self.assertEqual(get.call_count, 1)
 
 
+class VideoQualityTests(unittest.TestCase):
+    def test_candidates_start_at_the_highest_quality(self) -> None:
+        from backend.scraper import storage
+
+        urls = storage.video_download_urls(
+            "https://rule34xyz.b-cdn.net/posts/3348/3348391/3348391.mov.mp4"
+        )
+        stem = "https://rule34xyz.b-cdn.net/posts/3348/3348391/3348391"
+        self.assertEqual(
+            urls,
+            [
+                stem + suffix
+                for suffix in (
+                    ".mov.mp4",
+                    ".mov4320.mp4",
+                    ".mov2160.mp4",
+                    ".mov1440.mp4",
+                    ".mov1080.mp4",
+                    ".mov720.mp4",
+                    ".mov480.mp4",
+                    ".mov360.mp4",
+                    ".mov240.mp4",
+                    ".mp4",
+                    ".webm",
+                )
+            ],
+        )
+        self.assertTrue(storage.video_can_improve("video/4624086.mov480.mp4"))
+        self.assertTrue(storage.video_can_improve("video/3348391.mov720.mp4"))
+        self.assertTrue(storage.video_can_improve("video/1.mov4320.mp4"))
+        self.assertTrue(storage.video_can_improve("video/1.mov240.mp4"))
+        self.assertFalse(storage.video_can_improve("video/3348391.mov.mp4"))
+        self.assertFalse(storage.video_can_improve("image/1.pic.jpg"))
+
+    def test_download_uses_the_first_quality_that_exists(self) -> None:
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+
+        from backend.scraper import storage
+        from backend.scraper.post import PostData
+
+        def fake(url: str) -> bytes:
+            if url.endswith(".mov720.mp4"):
+                return b"video-bytes"
+            err = RuntimeError("404")
+            err.response = MagicMock(status_code=404)  # type: ignore[attr-defined]
+            raise err
+
+        post = PostData(
+            post_id="3348391",
+            post_url="https://rule34.xyz/post/3348391",
+            tags=[],
+            media_type="video",
+            media_url="https://cdn/posts/3348/3348391/3348391.mov.mp4",
+            extension=".mov.mp4",
+            posted_at=None,
+        )
+        with TemporaryDirectory() as tmp:
+            with (
+                patch.object(storage, "fetch_media_bytes", side_effect=fake),
+                patch.object(storage, "sha256_file", return_value="abc"),
+                patch.object(storage, "perceptual_hash", return_value=None),
+                patch.object(storage.settings, "media_dir", Path(tmp)),
+            ):
+                stored = storage.download_media(post)
+            self.assertTrue(stored.path.name.endswith("3348391.mov720.mp4"))
+        self.assertTrue(post.media_url.endswith(".mov720.mp4"))
+
+
 if __name__ == "__main__":
     unittest.main()

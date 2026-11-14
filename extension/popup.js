@@ -19,8 +19,27 @@ function splitList(value) {
     .filter(Boolean);
 }
 
+// date/time inputs show the OS locale; the value is still yyyy-MM-dd / HH:mm.
+function localDateTime(dateId, timeId) {
+  const date = $(dateId).value;
+  if (!date) return "";
+  const time = $(timeId).value;
+  return time ? `${date}T${time}` : date;
+}
+
+let holdNotice = "";
+let holdTimer = 0;
+
+function setHold(text) {
+  holdNotice = text;
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => {
+    holdNotice = "";
+  }, 8000);
+}
+
 function render(status) {
-  if (!status) return;
+  if (!status || !Array.isArray(status.sites)) return;
   current = status;
 
   $("appDot").className = `dot ${status.online ? (status.scrapeEnabled ? "ok" : "warn") : ""}`;
@@ -49,9 +68,11 @@ function renderPage() {
   const actions = $("actions");
   const filters = $("filters");
   const text = $("pageText");
+  const hotkey = $("hotkeyText");
   const ready = current && current.online && current.scrapeEnabled;
   actions.hidden = true;
   filters.hidden = true;
+  hotkey.textContent = "";
   $("downloadFile").hidden = true;
   $("downloadPage").hidden = true;
   if (!ready) {
@@ -63,28 +84,39 @@ function renderPage() {
     return;
   }
   actions.hidden = false;
+  hotkey.textContent = "Shortcut keys: F = one file, P = whole page";
+
   if (page.scrapable) {
     $("downloadFile").hidden = false;
-    text.textContent = page.url;
+    text.textContent = holdNotice || page.url;
     return;
   }
   $("downloadPage").hidden = false;
   filters.hidden = false;
-  text.textContent = page.siteName ? `${page.siteName} — filters apply to this site.` : "Filters apply to this site.";
+  text.textContent = holdNotice || (page.siteName ? `${page.siteName} — filters apply to this site.` : "Filters apply to this site.");
 }
 
 async function note(result) {
   if (result && result.ok && result.result) {
     const queued = result.result.queued || [];
-    $("pageText").textContent = queued.length
-      ? `Added ${queued.length} to the scrape queue.`
-      : result.result.appended
-        ? "Already in the scrape queue."
-        : "Scrape started.";
+    const saved = result.result.already_saved || [];
+    setHold(
+      !queued.length && saved.length
+        ? "Already in your library."
+        : queued.length
+          ? `Added ${queued.length} to the scrape queue.`
+          : result.result.appended
+            ? "Already in the scrape queue."
+            : "Scrape started."
+    );
   } else if (result && result.error) {
-    $("pageText").textContent = result.error;
+    setHold(result.error);
+  } else if (!result) {
+    setHold("Extension didn't answer. Reload it from the extensions page.");
   }
-  render(await send("getStatus"));
+  const tab = await activeTab();
+  render(await send({ type: "getStatus", url: (tab && tab.url) || "" }));
+  if (holdNotice) $("pageText").textContent = holdNotice;
 }
 
 $("downloadFile").addEventListener("click", async () => {
@@ -113,8 +145,8 @@ $("runFilters").addEventListener("click", async () => {
       tags: splitList($("tags").value),
       tagMode: $("tagMode").value,
       excludeTags: splitList($("exclude").value),
-      dateFrom: $("dateFrom").value,
-      dateTo: $("dateTo").value,
+      dateFrom: localDateTime("dateFrom", "timeFrom"),
+      dateTo: localDateTime("dateTo", "timeTo"),
       mediaType: $("mediaType").value,
       sort: $("sort").value,
       limit: Number.isFinite(limit) && limit >= 0 ? limit : 10,
@@ -123,15 +155,20 @@ $("runFilters").addEventListener("click", async () => {
   $("runFilters").disabled = false;
 });
 
-$("refresh").addEventListener("click", async () => render(await send("refresh")));
+$("refresh").addEventListener("click", async () => {
+  const tab = await activeTab();
+  page = await send({ type: "describePage", url: (tab && tab.url) || "" });
+  render(await send("refresh"));
+});
 $("viewer").addEventListener("click", () =>
   chrome.tabs.create({ url: (current && current.viewerUrl) || "http://127.0.0.1:8000/" })
 );
 
 async function refreshAll() {
   const tab = await activeTab();
-  page = await send({ type: "describePage", url: (tab && tab.url) || "" });
-  render(await send("getStatus"));
+  const url = (tab && tab.url) || "";
+  page = await send({ type: "describePage", url });
+  render(await send({ type: "getStatus", url }));
 }
 
 refreshAll();

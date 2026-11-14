@@ -136,6 +136,7 @@ export interface ScrapeSession {
 export interface ScrapeSkippedItem {
   url: string
   reason: string
+  detail?: string
 }
 
 export interface ScrapeStatus {

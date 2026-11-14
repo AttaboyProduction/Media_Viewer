@@ -833,7 +833,12 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
         <button type="button" className="btn btn-primary" onClick={start} disabled={!canRun}>
           {isLocalSource ? 'Run import' : 'Run scrape'}
         </button>
-        <button type="button" className="btn btn-danger" onClick={stop} disabled={!status?.running}>
+        <button
+          type="button"
+          className="btn btn-danger"
+          onClick={stop}
+          disabled={!status?.running && !(status?.errors?.length)}
+        >
           Stop
         </button>
       </div>
@@ -879,7 +884,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
               {skippedOpen && (
                 <ul className="scrape-skipped-list">
                   {skippedItems.map((item) => (
-                    <li key={`${item.url}:${item.reason}`}>
+                    <li key={`${item.url}:${item.reason}:${item.detail || ''}`}>
                       {item.url.startsWith('http') ? (
                         <a href={item.url} target="_blank" rel="noreferrer">
                           {item.url}
@@ -888,6 +893,12 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                         <span title={item.url}>{item.url}</span>
                       )}
                       <span className="scrape-skipped-reason">{item.reason}</span>
+                      {item.detail ? (
+                        <details className="scrape-skipped-error">
+                          <summary>Error</summary>
+                          <pre>{item.detail}</pre>
+                        </details>
+                      ) : null}
                     </li>
                   ))}
                 </ul>

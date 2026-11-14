@@ -9,6 +9,7 @@ from backend.app.api.scrape import _status_out, start_scrape_run
 from backend.app.schemas import (
     ExtensionEnqueueOut,
     ExtensionFileIn,
+    ExtensionSavedOut,
     ExtensionScrapeIn,
     ExtensionSiteOut,
     ExtensionSitesOut,
@@ -21,6 +22,72 @@ from backend.scraper.pipeline import append_scrape_urls, begin_remote_download, 
 from backend.scraper.sites import extension_scrape_target, list_extension_sites, select_source_for_site
 
 router = APIRouter(prefix="/extension", tags=["extension"])
+
+
+def _pending_or_saved(urls: list[str]) -> tuple[list[str], list[str]]:
+    """Posts not in the library (or saved as a smaller video) vs already saved."""
+    from backend.app.db.models import MediaItem
+    from backend.app.db.session import SessionLocal
+    from backend.scraper.gallery import extract_post_id
+    from backend.scraper.storage import video_can_improve
+
+    db = SessionLocal()
+    try:
+        todo: list[str] = []
+        saved: list[str] = []
+        for url in urls:
+            post_id = extract_post_id(url)
+            row = (
+                db.query(MediaItem).filter(MediaItem.source_post_id == post_id).first()
+                if post_id
+                else None
+            )
+            if row is not None and not (
+                row.media_type == "video" and video_can_improve(row.local_path or "")
+            ):
+                saved.append(url)
+            else:
+                todo.append(url)
+        return todo, saved
+    finally:
+        db.close()
+
+
+def _existing_post_ids(post_ids: set[str]) -> set[str]:
+    if not post_ids:
+        return set()
+    from backend.app.db.models import MediaItem
+    from backend.app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        rows = (
+            db.query(MediaItem.source_post_id)
+            .filter(MediaItem.source_post_id.in_(post_ids))
+            .all()
+        )
+        return {row[0] for row in rows}
+    finally:
+        db.close()
+
+
+def saved_post_urls(urls: list[str]) -> list[str]:
+    """Input URLs whose post id is already a library row.
+
+    A CDN file URL counts as that post. A smaller video encode still counts as saved.
+    """
+    from backend.scraper.sites import resolve_extension_url
+
+    pairs: list[tuple[str, str]] = []
+    for raw in urls:
+        hit = resolve_extension_url(raw)
+        if hit is None:
+            continue
+        _site_id, post_id, _post_url = hit
+        if post_id:
+            pairs.append((raw, post_id))
+    found = _existing_post_ids({post_id for _raw, post_id in pairs})
+    return [raw for raw, post_id in pairs if post_id in found]
 
 
 def _targets(urls: list[str]) -> tuple[dict[str, str], list[str]]:
@@ -53,6 +120,15 @@ def get_extension_sites() -> ExtensionSitesOut:
 
 
 @router.post(
+    "/saved",
+    response_model=ExtensionSavedOut,
+    dependencies=[Depends(require_scrape_page)],
+)
+def post_extension_saved(payload: ExtensionUrlsIn) -> ExtensionSavedOut:
+    return ExtensionSavedOut(saved=saved_post_urls(payload.urls))
+
+
+@router.post(
     "/enqueue",
     response_model=ExtensionEnqueueOut,
     dependencies=[Depends(require_scrape_page)],
@@ -66,14 +142,22 @@ def post_extension_enqueue(payload: ExtensionUrlsIn) -> ExtensionEnqueueOut:
     if site_id is None:
         return ExtensionEnqueueOut(started=False, rejected=rejected)
 
-    urls = list(chosen)
-    added = append_scrape_urls(urls, site_id)
+    todo, already_saved = _pending_or_saved(list(chosen))
+    if not todo:
+        return ExtensionEnqueueOut(
+            started=False,
+            site_id=site_id,
+            already_saved=already_saved,
+            rejected=rejected,
+        )
+    added = append_scrape_urls(todo, site_id)
     if added is not None:
         return ExtensionEnqueueOut(
             started=False,
             appended=True,
             site_id=site_id,
             queued=added,
+            already_saved=already_saved,
             rejected=rejected,
             status=_status_out(),
         )
@@ -82,14 +166,16 @@ def post_extension_enqueue(payload: ExtensionUrlsIn) -> ExtensionEnqueueOut:
 
     select_source_for_site(site_id)
     run = ScrapeRunRequest(
-        filters=[ScrapeFilterIn(type="url", value="\n".join(urls))],
+        filters=[ScrapeFilterIn(type="url", value="\n".join(todo))],
         limit=0,
     )
-    status = start_scrape_run(run)
+    # After a finished 1/1, the next file must grow the queue (1/2 → 2/2), not reset.
+    status = start_scrape_run(run, continue_counts=True)
     return ExtensionEnqueueOut(
         started=True,
         site_id=site_id,
-        queued=urls,
+        queued=todo,
+        already_saved=already_saved,
         rejected=rejected,
         status=status,
     )

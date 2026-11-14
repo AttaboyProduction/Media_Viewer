@@ -217,6 +217,7 @@ class LocalPathsOut(BaseModel):
 class ScrapeSkippedItemOut(BaseModel):
     url: str
     reason: str
+    detail: str = ""
 
 
 class ScrapeStatusOut(BaseModel):
@@ -258,11 +259,16 @@ class ExtensionUrlsIn(BaseModel):
     urls: list[str] = Field(min_length=1, max_length=500)
 
 
+class ExtensionSavedOut(BaseModel):
+    saved: list[str] = Field(default_factory=list)
+
+
 class ExtensionEnqueueOut(BaseModel):
     started: bool
     appended: bool = False
     site_id: str | None = None
     queued: list[str] = Field(default_factory=list)
+    already_saved: list[str] = Field(default_factory=list)
     rejected: list[str] = Field(default_factory=list)
     status: ScrapeStatusOut | None = None
 

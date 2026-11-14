@@ -140,6 +140,8 @@ def _idle_status() -> None:
     pipeline.scrape_status.downloaded = 0
     pipeline.scrape_status.skipped = 0
     pipeline.scrape_status.cancel = False
+    pipeline.scrape_status.continue_counts = False
+    pipeline.scrape_status.ran_this_session = False
     pipeline.scrape_status.errors = []
     pipeline.scrape_status.skipped_items = []
     pipeline.scrape_status.job_id = 0
@@ -161,16 +163,23 @@ class ExtensionApiTests(unittest.TestCase):
         }
         self._patch = patch.dict(sites.KNOWN_SITES, catalog, clear=True)
         self._patch.start()
+        self._saved = patch.object(
+            extension_api,
+            "_pending_or_saved",
+            side_effect=lambda urls: (list(urls), []),
+        )
+        self._saved.start()
         _idle_status()
 
     def tearDown(self) -> None:
+        self._saved.stop()
         self._patch.stop()
         _idle_status()
 
     def test_post_page_drops_query_and_starts_url_filter(self) -> None:
         captured: dict = {}
 
-        def fake_start(run, before_start=None):
+        def fake_start(run, before_start=None, *, continue_counts=False):
             captured["run"] = run
             return ScrapeStatusOut(
                 running=True, total=1, processed=0, downloaded=0, skipped=0, errors=[], last_gallery_url=None
@@ -199,7 +208,7 @@ class ExtensionApiTests(unittest.TestCase):
     def test_cdn_page_is_queued_as_the_post(self) -> None:
         captured: dict = {}
 
-        def fake_start(run, before_start=None):
+        def fake_start(run, before_start=None, *, continue_counts=False):
             captured["run"] = run
             return ScrapeStatusOut(
                 running=True, total=1, processed=0, downloaded=0, skipped=0, errors=[], last_gallery_url=None
@@ -211,6 +220,112 @@ class ExtensionApiTests(unittest.TestCase):
             )
         self.assertEqual(out.queued, ["https://gallery.test/post/300"])
         self.assertEqual(captured["run"].filters[0].value, "https://gallery.test/post/300")
+
+    def test_second_file_after_done_keeps_session_counts(self) -> None:
+        """A finished 1/1 must become 1/2 when the next extension file starts."""
+        pipeline.scrape_status.ran_this_session = True
+        pipeline.scrape_status.total = 1
+        pipeline.scrape_status.processed = 1
+        pipeline.scrape_status.downloaded = 1
+        pipeline.scrape_status.skipped = 0
+        pipeline.scrape_status.accepted_urls = {"https://gallery.test/post/1"}
+        pipeline.scrape_status.pending_urls = []
+        job = ScrapeJob(
+            seed_urls=["https://gallery.test/post/2"],
+            tags=[],
+            tag_mode="and",
+            date_from=None,
+            date_to=None,
+            media_type=None,
+            sort="date_desc",
+            limit=0,
+            ignore_download_limit=True,
+        )
+        with pipeline.scrape_lock:
+            pipeline.begin_scrape_queue(job, "gallery", continue_counts=True)
+        self.assertTrue(pipeline.scrape_status.continue_counts)
+        self.assertEqual(pipeline.scrape_status.total, 2)
+        self.assertEqual(pipeline.scrape_status.processed, 1)
+        self.assertEqual(pipeline.scrape_status.downloaded, 1)
+        self.assertEqual(pipeline.scrape_status.pending_urls, ["https://gallery.test/post/2"])
+        pipeline._reset_status("https://gallery.test/post/2")
+        self.assertEqual(pipeline.scrape_status.processed, 1)
+        self.assertEqual(pipeline.scrape_status.downloaded, 1)
+        self.assertEqual(pipeline.scrape_status.total, 2)
+        self.assertFalse(pipeline.scrape_status.continue_counts)
+
+    def test_finished_url_can_be_queued_again(self) -> None:
+        """A cancelled or failed post stays in accepted_urls and must still download later."""
+        pipeline.scrape_status.ran_this_session = True
+        pipeline.scrape_status.total = 1
+        pipeline.scrape_status.processed = 1
+        pipeline.scrape_status.accepted_urls = {"https://gallery.test/post/9"}
+        pipeline.scrape_status.pending_urls = []
+        job = ScrapeJob(
+            seed_urls=["https://gallery.test/post/9"],
+            tags=[],
+            tag_mode="and",
+            date_from=None,
+            date_to=None,
+            media_type=None,
+            sort="date_desc",
+            limit=0,
+            ignore_download_limit=True,
+        )
+        with pipeline.scrape_lock:
+            pipeline.begin_scrape_queue(job, "gallery", continue_counts=True)
+        self.assertEqual(pipeline.scrape_status.pending_urls, ["https://gallery.test/post/9"])
+        self.assertEqual(pipeline.scrape_status.total, 2)
+
+    def test_saved_check_uses_the_post_number(self) -> None:
+        with patch.object(extension_api, "_existing_post_ids", return_value={"1"}) as existing:
+            out = extension_api.post_extension_saved(
+                ExtensionUrlsIn(
+                    urls=[
+                        "https://gallery.test/post/1?page=2",
+                        "https://cdn.gallery.test/posts/0/2/2.jpg",
+                        "https://example.com/nope",
+                    ]
+                )
+            )
+        existing.assert_called_once()
+        self.assertEqual(existing.call_args.args[0], {"1", "2"})
+        self.assertEqual(out.saved, ["https://gallery.test/post/1?page=2"])
+
+    def test_saved_post_is_not_queued_again(self) -> None:
+        with (
+            patch.object(
+                extension_api,
+                "_pending_or_saved",
+                return_value=([], ["https://gallery.test/post/1"]),
+            ),
+            patch.object(extension_api, "start_scrape_run") as start,
+        ):
+            out = extension_api.post_extension_enqueue(
+                ExtensionUrlsIn(urls=["https://gallery.test/post/1"])
+            )
+        start.assert_not_called()
+        self.assertFalse(out.started)
+        self.assertEqual(out.already_saved, ["https://gallery.test/post/1"])
+        self.assertEqual(out.queued, [])
+
+    def test_enqueue_after_done_asks_to_continue_counts(self) -> None:
+        captured: dict = {}
+
+        def fake_start(run, before_start=None, *, continue_counts=False):
+            captured["continue_counts"] = continue_counts
+            return ScrapeStatusOut(
+                running=True, total=2, processed=1, downloaded=1, skipped=0, errors=[], last_gallery_url=None
+            )
+
+        with (
+            patch.object(extension_api, "start_scrape_run", side_effect=fake_start),
+            patch.object(extension_api, "select_source_for_site"),
+        ):
+            extension_api.post_extension_enqueue(
+                ExtensionUrlsIn(urls=["https://gallery.test/post/9"])
+            )
+        self.assertTrue(captured["continue_counts"])
 
     def test_running_scrape_grows_its_queue(self) -> None:
         pipeline.scrape_status.running = True
@@ -264,7 +379,7 @@ class ExtensionApiTests(unittest.TestCase):
     def test_popup_filters_start_a_gallery_scrape(self) -> None:
         captured: dict = {}
 
-        def fake_start(run, before_start=None):
+        def fake_start(run, before_start=None, *, continue_counts=False):
             captured["run"] = run
             return ScrapeStatusOut(
                 running=True, total=10, processed=0, downloaded=0, skipped=0, errors=[], last_gallery_url=None
@@ -339,6 +454,26 @@ class ExtensionApiTests(unittest.TestCase):
             pipeline.scrape_status.pending_urls,
             ["https://cdn.example/a.jpg", "https://cdn.example/b.png?token=1"],
         )
+
+    def test_raw_file_after_done_keeps_session_counts(self) -> None:
+        pipeline.scrape_status.running = False
+        pipeline.scrape_status.ran_this_session = True
+        pipeline.scrape_status.total = 1
+        pipeline.scrape_status.processed = 1
+        pipeline.scrape_status.downloaded = 1
+        pipeline.scrape_status.skipped = 0
+        pipeline.scrape_status.accepted_urls = {"https://cdn.example/a.jpg"}
+        pipeline.scrape_status.pending_urls = []
+        with patch.object(pipeline.threading, "Thread") as thread:
+            out = extension_api.post_extension_save_file(
+                ExtensionFileIn(url="https://cdn.example/b.png")
+            )
+        thread.assert_called_once()
+        self.assertTrue(out.started)
+        self.assertEqual(pipeline.scrape_status.total, 2)
+        self.assertEqual(pipeline.scrape_status.processed, 1)
+        self.assertEqual(pipeline.scrape_status.downloaded, 1)
+        self.assertEqual(pipeline.scrape_status.pending_urls, ["https://cdn.example/b.png"])
 
 
 class ExtensionQueueDrainTests(unittest.TestCase):
@@ -431,6 +566,42 @@ class CancelRemainderTests(unittest.TestCase):
         self.assertEqual(pipeline.scrape_status.message, "Cancelled")
         self.assertFalse(pipeline.scrape_status.running)
         self.assertEqual([item.reason for item in pipeline.scrape_status.skipped_items], ["cancelled", "cancelled"])
+
+    def test_stop_releases_a_hung_job_without_waiting(self) -> None:
+        """Stop must free the queue even while one post fetch is still blocked."""
+        pipeline.scrape_status.running = True
+        pipeline.scrape_status.queue_open = True
+        pipeline.scrape_status.kind = "scrape"
+        pipeline.scrape_status.job_id = 4
+        pipeline.scrape_status.total = 10
+        pipeline.scrape_status.processed = 8
+        pipeline.scrape_status.downloaded = 8
+        pipeline.scrape_status.skipped = 0
+        pipeline.scrape_status.pending_urls = ["https://gallery.test/post/9"]
+        pipeline.scrape_status.message = "Cancelling..."
+        pipeline.abandon_running_job()
+        self.assertFalse(pipeline.scrape_status.running)
+        self.assertFalse(pipeline.scrape_status.queue_open)
+        self.assertEqual(pipeline.scrape_status.message, "Cancelled")
+        self.assertEqual(pipeline.scrape_status.processed, 10)
+        self.assertEqual(pipeline.scrape_status.skipped, 2)
+        self.assertEqual(pipeline.scrape_status.job_id, 5)
+        self.assertEqual(pipeline.scrape_status.pending_urls, [])
+        job = ScrapeJob(
+            seed_urls=["https://gallery.test/post/1"],
+            tags=[],
+            tag_mode="and",
+            date_from=None,
+            date_to=None,
+            media_type=None,
+            sort="date_desc",
+            limit=0,
+            ignore_download_limit=True,
+        )
+        pipeline._finish_queue(4, None, None, job, {})
+        self.assertFalse(pipeline.scrape_status.running)
+        self.assertEqual(pipeline.scrape_status.processed, 10)
+        self.assertEqual(pipeline.scrape_status.pending_urls, [])
 
     def test_stop_counts_a_limit_that_was_not_reached(self) -> None:
         pipeline.scrape_status.total = 10

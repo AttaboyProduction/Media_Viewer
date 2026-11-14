@@ -183,14 +183,89 @@ def fetch_media_bytes(url: str, *, sleep=time.sleep) -> bytes:
         raise last_exc
 
 
+# Original file first, then encodes from 8K down. Some posts 404 on .mov.mp4
+# and only publish a smaller name such as .mov720.mp4.
+_VIDEO_SUFFIXES = (
+    ".mov.mp4",
+    ".mov4320.mp4",
+    ".mov2160.mp4",
+    ".mov1440.mp4",
+    ".mov1080.mp4",
+    ".mov720.mp4",
+    ".mov480.mp4",
+    ".mov360.mp4",
+    ".mov240.mp4",
+    ".mp4",
+    ".webm",
+)
+
+
+def video_suffix_rank(filename: str) -> int:
+    """Lower is better. Unknown names sort after every known suffix."""
+    name = filename.replace("\\", "/").rsplit("/", 1)[-1].split("?", 1)[0]
+    for index, suffix in enumerate(_VIDEO_SUFFIXES):
+        if name.endswith(suffix):
+            return index
+    return len(_VIDEO_SUFFIXES)
+
+
+def video_can_improve(filename: str) -> bool:
+    """True when the saved name is a known encode smaller than the original."""
+    return 0 < video_suffix_rank(filename) < len(_VIDEO_SUFFIXES)
+
+
+def video_download_urls(media_url: str) -> list[str]:
+    """Same CDN stem, each known video suffix, best quality first."""
+    query = ""
+    path = media_url
+    if "?" in media_url:
+        path, query = media_url.split("?", 1)
+        query = "?" + query
+    stem = path
+    for suffix in _VIDEO_SUFFIXES:
+        if stem.endswith(suffix):
+            stem = stem[: -len(suffix)]
+            break
+    return [stem + suffix + query for suffix in _VIDEO_SUFFIXES]
+
+
+def _missing_media(exc: Exception) -> bool:
+    if _is_http_status_error(exc):
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return status == 404
+    text = str(exc).lower()
+    return "404" in text or "not found" in text
+
+
 def download_media(post: PostData) -> StoredFile:
     media_dir = settings.media_dir / post.media_type
     media_dir.mkdir(parents=True, exist_ok=True)
+    urls = video_download_urls(post.media_url) if post.media_type == "video" else [post.media_url]
+    content: bytes | None = None
+    chosen = urls[0]
+    last_exc: Exception | None = None
+    for url in urls:
+        try:
+            content = fetch_media_bytes(url)
+            chosen = url
+            break
+        except Exception as exc:  # noqa: BLE001 — try the next video quality
+            last_exc = exc
+            if post.media_type == "video" and _missing_media(exc):
+                continue
+            raise
+    if content is None:
+        assert last_exc is not None
+        raise last_exc
+    post.media_url = chosen
+    for suffix in _VIDEO_SUFFIXES:
+        if chosen.split("?", 1)[0].endswith(suffix):
+            post.extension = suffix
+            break
     filename = f"{post.post_id}{post.extension}"
     dest = media_dir / filename
 
     if not dest.exists():
-        content = fetch_media_bytes(post.media_url)
         tmp = dest.with_name(dest.name + ".part")
         tmp.write_bytes(content)
         tmp.replace(dest)

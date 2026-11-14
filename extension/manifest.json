@@ -3,8 +3,8 @@
   "name": "Scrap Download",
   "version": "0.1.0",
   "description": "Send the current page to your local Scrap Download app.",
-  "permissions": ["storage", "contextMenus", "tabs", "scripting", "activeTab"],
-  "host_permissions": ["http://127.0.0.1:8000/*"],
+  "permissions": ["storage", "contextMenus", "tabs", "scripting", "activeTab", "alarms"],
+  "host_permissions": ["http://127.0.0.1:8000/*", "http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js"
   },

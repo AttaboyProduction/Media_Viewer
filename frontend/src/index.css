@@ -1853,6 +1853,23 @@ tr.selected {
   white-space: nowrap;
 }
 
+.scrape-skipped-error {
+  margin-top: 0.2rem;
+}
+
+.scrape-skipped-error summary {
+  cursor: pointer;
+  color: var(--text-error);
+}
+
+.scrape-skipped-error pre {
+  margin: 0.25rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+  font: inherit;
+}
+
 .banner {
   background: var(--bg-hover);
   border: 1px solid var(--border-banner);

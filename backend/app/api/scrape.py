@@ -25,7 +25,14 @@ from backend.app.services.media_service import (
     media_ids_with_excluded_tags,
 )
 from backend.scraper.job import compile_scrape_job
-from backend.scraper.pipeline import _release_queue, begin_scrape_queue, run_job, scrape_lock, scrape_status
+from backend.scraper.pipeline import (
+    _release_queue,
+    abandon_running_job,
+    begin_scrape_queue,
+    run_job,
+    scrape_lock,
+    scrape_status,
+)
 from backend.scraper.sites import (
     SOURCE_LOCAL,
     ensure_session_settings_file,
@@ -72,7 +79,8 @@ def _status_out() -> ScrapeStatusOut:
         message=scrape_status.message,
         current_url=scrape_status.current_url,
         skipped_items=[
-            {"url": item.url, "reason": item.reason} for item in scrape_status.skipped_items
+            {"url": item.url, "reason": item.reason, "detail": item.detail}
+            for item in scrape_status.skipped_items
         ],
         hash_backfill_running=bool(backfill_status["running"]),
         hash_backfill_total=int(backfill_status["total"]),
@@ -148,7 +156,9 @@ def patch_scrape_session(payload: SessionSettingsPatch) -> SessionSettingsOut:
     return _session_response()
 
 
-def start_scrape_run(payload: ScrapeRunRequest, before_start=None) -> ScrapeStatusOut:
+def start_scrape_run(
+    payload: ScrapeRunRequest, before_start=None, *, continue_counts: bool = False
+) -> ScrapeStatusOut:
     """Start a scrape job in the background (409 if one is running).
 
     ``before_start`` runs under the scrape lock once the job is known to start
@@ -169,7 +179,7 @@ def start_scrape_run(payload: ScrapeRunRequest, before_start=None) -> ScrapeStat
         scrape_status.cancel = False
         scrape_status.message = "Queued"
         site = get_selected_site()
-        begin_scrape_queue(job, site["id"] if site else None)
+        begin_scrape_queue(job, site["id"] if site else None, continue_counts=continue_counts)
         thread = threading.Thread(target=_start_job, args=(payload, job_id), daemon=True)
         thread.start()
     return _status_out()
@@ -242,9 +252,9 @@ def post_import_run(payload: LocalImportRunRequest) -> ScrapeStatusOut:
 
 @router.post("/cancel", response_model=ScrapeStatusOut)
 def post_scrape_cancel() -> ScrapeStatusOut:
-    scrape_status.cancel = True
-    if scrape_status.running:
-        scrape_status.message = "Cancelling..."
+    # Release the queue in this request. The in-flight fetch may still be
+    # blocked, but it no longer owns the job, so the next download can start.
+    abandon_running_job()
     return _status_out()
 
 
