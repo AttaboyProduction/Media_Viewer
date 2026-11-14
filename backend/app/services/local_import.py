@@ -82,7 +82,7 @@ def link_one_file(db: Session, path: Path) -> tuple[MediaItem | None, str | None
 def run_local_import(paths: list[str], *, recursive: bool, job_id: int = 0) -> None:
     """Background job: scan paths, hash, insert linked rows; updates scrape_status."""
     scrape_status.running = True
-    scrape_status.cancel = False
+    # Leave cancel alone so a Stop click before this thread starts still stops it.
     scrape_status.total = 0
     scrape_status.processed = 0
     scrape_status.downloaded = 0
@@ -130,6 +130,11 @@ def run_local_import(paths: list[str], *, recursive: bool, job_id: int = 0) -> N
                     db.rollback()
                     scrape_status.processed += 1
                     scrape_status.errors.append(f"{path}: {exc}")
+            if cancelled:
+                left = scrape_status.total - scrape_status.processed
+                if left > 0:
+                    scrape_status.skipped += left
+                    scrape_status.processed += left
             scrape_status.message = "Cancelled" if cancelled else "Done"
         finally:
             db.close()

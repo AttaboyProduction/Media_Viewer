@@ -131,12 +131,13 @@ python -m backend.scraper.pipeline --url "https://example.com/gallery" --limit 1
   "extension": {
     "page_matches": ["https://example.com/*", "https://cdn.example.com/*"],
     "post_id_patterns": ["^https?://example\\.com/post/(\\d+)", "^https?://cdn\\.example\\.com/posts/\\d+/(\\d+)/"],
-    "post_url_template": "https://example.com/post/{id}"
+    "post_url_template": "https://example.com/post/{id}",
+    "file_matches": ["https://example.com/post/*", "https://cdn.example.com/posts/*"]
   }
   ```
 
-  `post_id_patterns` match a page URL with the post id in group 1 (shared Python/JS regex subset: no `(?P<name>)`, no inline flags). The extension strips the query and fragment, then sends that page URL. A post page is scraped as that URL. A CDN preview the pattern recognizes is scraped as the post page, so the file is full size. `post_url_template` must contain `{id}`.
-- **Use:** click the extension icon and **Download media file**, or right-click the page and choose **Download this page**. The app adds that URL to its scrape queue (the same URL-filter scrape as the Scrape page: tags, hashes, **Downloaded previously**). If a scrape for that site is already running, the URL is added to it and the queue total goes up. The toolbar icon is **green** when this page is a URL the app can scrape, and **red** otherwise (`off` on the badge means the app is not running). Needs the Scrape page on (Settings → Hide Scrape page off).
+  `post_id_patterns` match a page or element URL with the post id in group 1 (shared Python/JS regex subset: no `(?P<name>)`, no inline flags). The extension strips the query and fragment, then sends that URL. A post page is scraped as that URL. A CDN preview the pattern recognizes is scraped as the post page, so the file is full size. `post_url_template` must contain `{id}`. `file_matches` are Chrome match patterns for the right-click **Download this file** item (a post link or a CDN file on a listing).
+- **Use:** the toolbar icon is **green** on any page of a supported site (including the front page) and **red** elsewhere (`off` on the badge means the app is not running). On a supported site, right-click **Download this page** sends every post or picture URL on the page, and right-click **Download this file** on a matching link or image sends that one. On the front page, the popup has the same filters as the Scrape page (tags, match mode, exclude, dates, media type, sort, max files) and runs that site. One queued file shows as `1/1` on the Scrape page; more files raise the total and do not reset processed, downloaded, or skipped. **Stop** ends the job and counts every file still left as skipped. Off a supported site, right-click a picture and choose **Download this file (site not supported)** — the app saves that file with no tags and stores the picture URL. Needs the Scrape page on (Settings → Hide Scrape page off). Reload the unpacked extension after an update.
 
 ## Configuration
 
@@ -387,7 +388,9 @@ Base URL: `http://127.0.0.1:8000/api`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/extension/sites` | URL patterns the app can scrape, per installed adapter, plus `scrape_enabled` |
-| POST | `/extension/enqueue` | `{urls}` (1–500, query strings ignored) from one site → add them to the running scrape queue (total grows) or start a URL-filter scrape. 409 if another job is running or the Scrape page is hidden |
+| GET | `/extension/sites` | Per installed adapter: `page_matches`, post `url_patterns`, `file_matches`, plus `scrape_enabled` |
+| POST | `/extension/enqueue` | `{urls}` (1–500, query strings ignored) from one site → add them to the running scrape queue (total grows, counters are not reset) or start a URL-filter scrape. 409 if another job is running or the Scrape page is hidden |
+| POST | `/extension/scrape` | Popup filters (`site_id`, tags, `tag_mode`, `exclude_tags`, `date_from`/`date_to`, `media_type`, `sort`, `limit`) → start that site's gallery scrape |
+| POST | `/extension/save-file` | `{url}` picture from an unsupported site → save the file with no tags (the picture URL is the source URL). A second file while this download is running increases the total |
 
 Static files: `/media/...` (downloads), `/assets/...` (built UI).

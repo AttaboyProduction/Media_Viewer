@@ -13,7 +13,7 @@ from backend.scraper.client import PlaywrightClient
 from backend.scraper.gallery import extract_post_id, iter_post_urls
 from backend.scraper.job import ScrapeJob, compile_scrape_job, date_in_range, should_stop_for_date
 from backend.scraper.post import normalize_tag_name, scrape_post, scrape_post_from_api
-from backend.scraper.storage import download_media, upsert_post
+from backend.scraper.storage import download_media, save_remote_file, upsert_post
 
 
 @dataclass
@@ -56,7 +56,8 @@ scrape_lock = threading.Lock()
 
 def _reset_status(gallery_url: str) -> None:
     scrape_status.running = True
-    scrape_status.cancel = False
+    # Leave cancel alone. The starter clears it, and a Stop click that lands
+    # before this runs must still stop the job.
     # total / pending_urls belong to the queue opened by begin_scrape_queue.
     scrape_status.processed = 0
     scrape_status.downloaded = 0
@@ -125,6 +126,20 @@ def _release_queue(job_id: int) -> None:
 
 def _cancelled() -> bool:
     return scrape_status.cancel
+
+
+def _skip_cancelled_remainder() -> None:
+    """Count every file still queued as skipped, and close the gap up to ``total``."""
+    with scrape_lock:
+        left = list(scrape_status.pending_urls)
+        scrape_status.pending_urls = []
+    for url in left:
+        _record_skip(url, "cancelled")
+        scrape_status.processed += 1
+    gap = scrape_status.total - scrape_status.processed
+    if gap > 0:
+        scrape_status.skipped += gap
+        scrape_status.processed += gap
 
 
 def _record_skip(url: str, reason: str) -> None:
@@ -257,6 +272,11 @@ def _drain_pending(client: PlaywrightClient, db, job: ScrapeJob, existing_posts:
         if url is None:
             return "ok"
         outcome = _process_post_url(client, db, job, url, existing_posts)
+        if outcome == "stop_cancel":
+            # Popped, but not processed. Put it back so the cancel count includes it.
+            with scrape_lock:
+                scrape_status.pending_urls.insert(0, url)
+            return outcome
         if outcome != "ok":
             return outcome
 
@@ -288,7 +308,13 @@ def _finish_queue(my_id: int, client: PlaywrightClient, db, job: ScrapeJob, exis
                 return
         outcome = _process_post_url(client, db, job, url, existing_posts)
         if outcome == "stop_cancel":
+            with scrape_lock:
+                if scrape_status.job_id == my_id:
+                    scrape_status.pending_urls.insert(0, url)
             break
+    if scrape_status.job_id != my_id or not _cancelled():
+        return
+    _skip_cancelled_remainder()
     with scrape_lock:
         if scrape_status.job_id == my_id:
             scrape_status.message = "Cancelled"
@@ -296,6 +322,86 @@ def _finish_queue(my_id: int, client: PlaywrightClient, db, job: ScrapeJob, exis
             scrape_status.running = False
             scrape_status.queue_open = False
             scrape_status.kind = ""
+
+
+def begin_remote_download(url: str) -> str:
+    """Queue one file URL the gallery scrapers don't know.
+
+    Returns ``started``, ``appended``, ``duplicate`` (already in this download),
+    or ``busy`` when a scrape or import is running. Added files increase ``total``
+    and do not reset processed, downloaded, or skipped.
+    """
+    with scrape_lock:
+        if scrape_status.running and scrape_status.kind == "download" and scrape_status.queue_open:
+            if url in scrape_status.accepted_urls:
+                return "duplicate"
+            scrape_status.accepted_urls.add(url)
+            scrape_status.pending_urls.append(url)
+            scrape_status.total += 1
+            return "appended"
+        if scrape_status.running:
+            return "busy"
+        scrape_status.job_id += 1
+        job_id = scrape_status.job_id
+        scrape_status.running = True
+        scrape_status.cancel = False
+        scrape_status.kind = "download"
+        scrape_status.site_id = None
+        scrape_status.queue_open = True
+        scrape_status.accepted_urls = {url}
+        scrape_status.pending_urls = [url]
+        scrape_status.total = 1
+        scrape_status.processed = 0
+        scrape_status.downloaded = 0
+        scrape_status.skipped = 0
+        scrape_status.similar = 0
+        scrape_status.errors = []
+        scrape_status.skipped_items = []
+        scrape_status.message = "Queued"
+        scrape_status.current_url = url
+        scrape_status.ran_this_session = True
+        threading.Thread(target=_run_remote_downloads, args=(job_id,), daemon=True).start()
+        return "started"
+
+
+def _run_remote_downloads(job_id: int) -> None:
+    """Save queued picture URLs with no tags. Stop counts the rest as skipped."""
+    try:
+        while not _cancelled() and scrape_status.job_id == job_id:
+            url = _pop_pending()
+            if url is None:
+                break
+            if _cancelled():
+                with scrape_lock:
+                    if scrape_status.job_id == job_id:
+                        scrape_status.pending_urls.insert(0, url)
+                break
+            scrape_status.message = "Downloading file"
+            scrape_status.current_url = url
+            try:
+                result = save_remote_file(url)
+            except Exception as exc:  # noqa: BLE001 — one bad file should not drop the rest
+                scrape_status.errors.append(f"{url}: {exc}")
+                scrape_status.processed += 1
+                continue
+            scrape_status.processed += 1
+            if result.skipped_reason:
+                _record_skip(url, result.skipped_reason)
+            else:
+                scrape_status.downloaded += 1
+                if result.media is not None and result.media.id is not None:
+                    scrape_status.recent_media_ids.append(result.media.id)
+        if scrape_status.job_id == job_id and _cancelled():
+            _skip_cancelled_remainder()
+            with scrape_lock:
+                if scrape_status.job_id == job_id:
+                    scrape_status.message = "Cancelled"
+                    scrape_status.current_url = None
+        elif scrape_status.job_id == job_id:
+            scrape_status.message = "Done"
+            scrape_status.current_url = None
+    finally:
+        _release_queue(job_id)
 
 
 def run_job(job: ScrapeJob) -> ScrapeStatus:

@@ -363,13 +363,10 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     queryClient.setQueryData(['scrape-status'], next)
   }
 
-  const effectiveLimit = isLocalSource ? 0 : hasUrlFilters ? 0 : limit
   const percent =
-    status && effectiveLimit > 0 && (status.running || status.downloaded > 0)
-      ? Math.min(100, Math.round((status.downloaded / effectiveLimit) * 100))
-      : status && status.total > 0
-        ? Math.round((status.processed / status.total) * 100)
-        : 0
+    status && status.total > 0
+      ? Math.min(100, Math.round((status.processed / status.total) * 100))
+      : 0
 
   const canRun = isLocalSource
     ? localPaths.length > 0 && !status?.running
@@ -865,8 +862,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                 {msgParts.after}
               </>
             )}
-            {status.total > 0 &&
-              ` · ${effectiveLimit > 0 ? `${status.downloaded}/${effectiveLimit}` : `${status.processed}/${status.total}`}`}
+            {status.total > 0 && ` · ${status.processed}/${status.total}`}
             {` · ${isLocalSource ? 'added' : 'downloaded'} ${status.downloaded}`}
             {` · skipped ${status.skipped}`}
             {status.similar > 0 && ` · similar ${status.similar}`}

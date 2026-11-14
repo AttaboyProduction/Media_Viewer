@@ -105,10 +105,15 @@ def _normalize_extension(raw: object, *, site_id: str) -> dict[str, Any] | None:
     if not page_matches or not patterns:
         logger.warning("Site %s: extension needs page_matches and post_id_patterns", site_id)
         return None
+    # Chrome match patterns for the right-click "Download this file" item
+    # (a post link or a CDN file). Optional: when omitted, the item shows on
+    # any link or image on the site and the click checks post_id_patterns.
+    file_matches = [item for item in _string_list(raw.get("file_matches")) if "://" in item]
     return {
         "page_matches": page_matches,
         "post_id_patterns": patterns,
         "post_url_template": template.strip(),
+        "file_matches": file_matches,
     }
 
 

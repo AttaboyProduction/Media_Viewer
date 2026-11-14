@@ -4,10 +4,11 @@
 
 Implemented in `extension/`, `backend/app/api/extension.py`, and the adapter `extension` block (see README → *Browser extension*). Differences from the original plan below:
 
-- **The extension does not download.** It receives `url_patterns` from `GET /extension/sites` and sends the page URL with the query and fragment removed. The app scrapes that URL with the normal pipeline. A post page is queued as itself; a CDN preview the adapter recognizes is queued as the post page.
-- **The app's queue grows.** If a scrape for that site is already running, the URL is appended and `total` increases. The extension keeps no queue of its own.
+- **The extension does not download gallery files.** Adapter `page_matches`, `post_id_patterns`, and `file_matches` come from `GET /extension/sites`. It sends cleaned URLs (query and fragment removed). A post page is queued as itself; a CDN preview the adapter recognizes is queued as the post page.
+- **The app's queue grows.** If a scrape for that site is already running, URLs are appended, `total` increases, and processed / downloaded / skipped are not reset. The progress line is `processed/total` from the job, so one file is `1/1`.
+- **Menus.** On a supported site: **Download this file** (element URL matching `file_matches`) and **Download this page** (every matching post or picture). The icon is green for the whole site, including the front page. The popup on the front page runs Scrape-page filters via `POST /extension/scrape`. Off a supported site, **Download this file (site not supported)** sends the picture URL; `POST /extension/save-file` saves it with no tags.
+- **Stop** is not cleared when the job thread starts. Files still left are added to skipped.
 - **No token yet.** Enqueue only accepts `application/json`. Web pages can't send that cross-origin without a CORS preflight, which the allowlist refuses, and a `text/plain` body gets 422.
-- Toolbar icon is green when the current page matches a pattern the app can scrape, and red otherwise. Popup **Download media file** and the right-click **Download this page** are the only actions.
 
 ---
 

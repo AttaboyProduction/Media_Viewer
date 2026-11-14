@@ -241,8 +241,12 @@ class ScrapeStatusOut(BaseModel):
 class ExtensionSiteOut(BaseModel):
     id: str
     name: str
-    # Patterns the extension matches against the page URL (query already removed).
+    # Chrome match patterns: the site is supported anywhere under these (green icon).
+    page_matches: list[str] = Field(default_factory=list)
+    # Regexes the extension matches against a page or element URL (query already removed).
     url_patterns: list[str]
+    # Chrome match patterns for the right-click "Download this file" item.
+    file_matches: list[str] = Field(default_factory=list)
 
 
 class ExtensionSitesOut(BaseModel):
@@ -261,6 +265,24 @@ class ExtensionEnqueueOut(BaseModel):
     queued: list[str] = Field(default_factory=list)
     rejected: list[str] = Field(default_factory=list)
     status: ScrapeStatusOut | None = None
+
+
+class ExtensionScrapeIn(BaseModel):
+    """Scrape-page filters, sent from the extension popup on a site's main page."""
+
+    site_id: str
+    tags: list[str] = Field(default_factory=list)
+    tag_mode: Literal["and", "or"] = "and"
+    exclude_tags: list[str] = Field(default_factory=list)
+    date_from: str = ""
+    date_to: str = ""
+    media_type: str = ""
+    sort: Literal["date_desc", "date_asc"] = "date_desc"
+    limit: int = Field(default=10, ge=0, le=5000)
+
+
+class ExtensionFileIn(BaseModel):
+    url: str = Field(min_length=1, max_length=4000)
 
 
 class DuplicateActionRequest(BaseModel):

@@ -1,6 +1,9 @@
+import hashlib
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 from sqlalchemy.orm import Session
 
@@ -325,5 +328,147 @@ def upsert_post(db: Session, post: PostData, stored: StoredFile) -> UpsertResult
     _apply_visual_match(db, media, stored.phash)
 
     _merge_scraped_tags(db, media, post)
+    db.flush()
+    return UpsertResult(media=media)
+
+
+def classify_remote_media(url: str, data: bytes) -> tuple[str, str]:
+    """``(media_type, extension)`` for a file the extension handed the app.
+
+    Magic bytes win. The URL suffix is only a fallback, so an HTML page is not
+    saved just because its path ends in ``.jpg``.
+    """
+    if data.startswith(b"GIF87a") or data.startswith(b"GIF89a"):
+        return "gif", ".gif"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image", ".png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image", ".jpg"
+    if len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+        return "image", ".webp"
+    if data.startswith(b"BM"):
+        return "image", ".bmp"
+    if len(data) >= 8 and data[4:8] == b"ftyp":
+        return "video", _video_extension(url)
+    head = data.lstrip()[:16].lower()
+    if head.startswith((b"<", b"{", b"[")):
+        raise ValueError("Not a picture or video")
+    suffix = Path(urlparse(url).path).suffix.lower()
+    by_suffix = {
+        ".gif": ("gif", ".gif"),
+        ".png": ("image", ".png"),
+        ".jpg": ("image", ".jpg"),
+        ".jpeg": ("image", ".jpg"),
+        ".webp": ("image", ".webp"),
+        ".bmp": ("image", ".bmp"),
+        ".mp4": ("video", ".mp4"),
+        ".webm": ("video", ".webm"),
+        ".mkv": ("video", ".mkv"),
+        ".mov": ("video", ".mov"),
+    }
+    if suffix in by_suffix:
+        return by_suffix[suffix]
+    raise ValueError("Not a picture or video")
+
+
+def _video_extension(url: str) -> str:
+    suffix = Path(urlparse(url).path).suffix.lower()
+    if suffix in {".mp4", ".webm", ".mkv", ".mov"}:
+        return suffix
+    return ".mp4"
+
+
+def _fit_source_url(url: str) -> str:
+    text = url.strip()
+    return text if len(text) <= 512 else text[:512]
+
+
+def save_remote_file(url: str) -> UpsertResult:
+    """Download one http(s) file into the library. No tags. The file URL is the source URL.
+
+    The same picture bytes already in the library are not saved again; the file URL
+    is attached to the existing row instead.
+    """
+    from backend.app.db.session import SessionLocal
+
+    data = fetch_media_bytes(url)
+    media_type, ext = classify_remote_media(url, data)
+    post_id = "ext_" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]
+    media_dir = settings.media_dir / media_type
+    media_dir.mkdir(parents=True, exist_ok=True)
+    dest = media_dir / f"{post_id}{ext}"
+    if not dest.exists():
+        tmp = dest.with_name(dest.name + ".part")
+        tmp.write_bytes(data)
+        tmp.replace(dest)
+    try:
+        phash = perceptual_hash(dest, media_type)
+    except Exception:  # noqa: BLE001 — a hash miss still keeps the file
+        phash = None
+    stored = StoredFile(
+        path=dest,
+        content_hash=sha256_file(dest),
+        phash=phash,
+        file_size=dest.stat().st_size,
+    )
+    db = SessionLocal()
+    try:
+        result = _upsert_remote_file(db, post_id, _fit_source_url(url), media_type, stored)
+        db.commit()
+        return result
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _upsert_remote_file(
+    db: Session,
+    post_id: str,
+    url: str,
+    media_type: str,
+    stored: StoredFile,
+) -> UpsertResult:
+    from backend.app.services.media_service import absolute_path_for_media
+
+    relative_path = _relative_path(stored.path)
+    exact = db.query(MediaItem).filter(MediaItem.content_hash == stored.content_hash).first()
+    by_post = db.query(MediaItem).filter(MediaItem.source_post_id == post_id).first()
+
+    if exact and (not by_post or exact.id != by_post.id):
+        _add_source_url(db, exact, url)
+        kept = absolute_path_for_media(exact)
+        if stored.path.exists() and stored.path.resolve() != kept.resolve():
+            stored.path.unlink(missing_ok=True)
+        db.flush()
+        return UpsertResult(media=exact, skipped_reason="duplicate_hash")
+
+    if by_post is not None and by_post.content_hash == stored.content_hash:
+        _add_source_url(db, by_post, url)
+        return UpsertResult(media=by_post, skipped_reason="already_have")
+
+    media = by_post
+    if media is None:
+        media = MediaItem(
+            source_post_id=post_id,
+            source_url=url,
+            local_path=relative_path,
+            storage_kind="managed",
+            media_type=media_type,
+            scraped_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        db.add(media)
+        db.flush()
+    else:
+        media.source_url = url
+        media.local_path = relative_path
+        media.storage_kind = "managed"
+        media.media_type = media_type
+
+    media.content_hash = stored.content_hash
+    media.phash = stored.phash
+    media.file_size = stored.file_size
+    _apply_visual_match(db, media, stored.phash)
     db.flush()
     return UpsertResult(media=media)

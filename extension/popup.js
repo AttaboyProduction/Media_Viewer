@@ -7,9 +7,16 @@ function send(message) {
   return new Promise((resolve) => chrome.runtime.sendMessage(payload, resolve));
 }
 
-async function activeTabUrl() {
+async function activeTab() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  return (tab && tab.url) || "";
+  return tab || null;
+}
+
+function splitList(value) {
+  return String(value || "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
 }
 
 function render(status) {
@@ -29,9 +36,9 @@ function render(status) {
     : "No supported sites — install a site adapter with an extension block.";
 
   const job = status.job;
-  if (job && job.running) {
-    const total = job.total ? ` / ${job.total}` : "";
-    $("jobText").textContent = `Scrape queue: ${job.processed}${total} processed, ${job.downloaded} downloaded, ${job.skipped} skipped.`;
+  if (job && (job.running || job.total > 0)) {
+    const fraction = job.total > 0 ? `${job.processed}/${job.total}` : `${job.processed}`;
+    $("jobText").textContent = `Scrape: ${fraction} · downloaded ${job.downloaded} · skipped ${job.skipped}`;
   } else {
     $("jobText").textContent = job && job.message ? `Last scrape: ${job.message}` : "No scrape running.";
   }
@@ -39,38 +46,81 @@ function render(status) {
 }
 
 function renderPage() {
-  const button = $("download");
+  const actions = $("actions");
+  const filters = $("filters");
   const text = $("pageText");
-  if (!current || !current.online || !current.scrapeEnabled) {
-    button.disabled = true;
-    button.textContent = "Download media file";
+  const ready = current && current.online && current.scrapeEnabled;
+  actions.hidden = true;
+  filters.hidden = true;
+  $("downloadFile").hidden = true;
+  $("downloadPage").hidden = true;
+  if (!ready) {
     text.textContent = current && current.online ? "Scraping is off in the app." : "Start the app to download.";
     return;
   }
-  if (!page || !page.scrapable) {
-    button.disabled = true;
-    button.textContent = "Download media file";
-    text.textContent = "This page isn't a URL the app can scrape.";
+  if (!page || !page.onSite) {
+    text.textContent = "This site isn't supported. Right-click a picture and choose Download this file (site not supported).";
     return;
   }
-  button.disabled = false;
-  button.textContent = "Download media file";
-  text.textContent = page.url;
+  actions.hidden = false;
+  if (page.scrapable) {
+    $("downloadFile").hidden = false;
+    text.textContent = page.url;
+    return;
+  }
+  $("downloadPage").hidden = false;
+  filters.hidden = false;
+  text.textContent = page.siteName ? `${page.siteName} — filters apply to this site.` : "Filters apply to this site.";
 }
 
-$("download").addEventListener("click", async () => {
-  const url = await activeTabUrl();
-  $("download").disabled = true;
-  const result = await send({ type: "downloadPage", url });
+async function note(result) {
   if (result && result.ok && result.result) {
     const queued = result.result.queued || [];
     $("pageText").textContent = queued.length
-      ? `Added to the scrape queue: ${queued[0]}`
-      : "Already in the scrape queue.";
+      ? `Added ${queued.length} to the scrape queue.`
+      : result.result.appended
+        ? "Already in the scrape queue."
+        : "Scrape started.";
   } else if (result && result.error) {
     $("pageText").textContent = result.error;
   }
   render(await send("getStatus"));
+}
+
+$("downloadFile").addEventListener("click", async () => {
+  const tab = await activeTab();
+  $("downloadFile").disabled = true;
+  await note(await send({ type: "downloadFile", url: (tab && tab.url) || "" }));
+  $("downloadFile").disabled = false;
+});
+
+$("downloadPage").addEventListener("click", async () => {
+  const tab = await activeTab();
+  if (!tab) return;
+  $("downloadPage").disabled = true;
+  await note(await send({ type: "downloadPage", tabId: tab.id }));
+  $("downloadPage").disabled = false;
+});
+
+$("runFilters").addEventListener("click", async () => {
+  if (!page || !page.siteId) return;
+  $("runFilters").disabled = true;
+  const limit = Number($("limit").value);
+  await note(
+    await send({
+      type: "runScrape",
+      siteId: page.siteId,
+      tags: splitList($("tags").value),
+      tagMode: $("tagMode").value,
+      excludeTags: splitList($("exclude").value),
+      dateFrom: $("dateFrom").value,
+      dateTo: $("dateTo").value,
+      mediaType: $("mediaType").value,
+      sort: $("sort").value,
+      limit: Number.isFinite(limit) && limit >= 0 ? limit : 10,
+    })
+  );
+  $("runFilters").disabled = false;
 });
 
 $("refresh").addEventListener("click", async () => render(await send("refresh")));
@@ -79,7 +129,8 @@ $("viewer").addEventListener("click", () =>
 );
 
 async function refreshAll() {
-  page = await send({ type: "describePage", url: await activeTabUrl() });
+  const tab = await activeTab();
+  page = await send({ type: "describePage", url: (tab && tab.url) || "" });
   render(await send("getStatus"));
 }
 
