@@ -123,9 +123,37 @@ async function refreshSavedPosts(urls) {
   }
 }
 
+let queueDotUntil = 0;
+let queueDotTimer = 0;
+
+function queueDotVisible() {
+  return Date.now() < queueDotUntil;
+}
+
+function flashQueueDot() {
+  queueDotUntil = Date.now() + ScrapIconProgress.QUEUE_DOT_MS;
+  if (queueDotTimer) clearTimeout(queueDotTimer);
+  paintAllTabs().catch(() => {});
+  queueDotTimer = setTimeout(() => {
+    queueDotTimer = 0;
+    queueDotUntil = 0;
+    paintAllTabs().catch(() => {});
+  }, ScrapIconProgress.QUEUE_DOT_MS);
+}
+
+function queuedAFile(result) {
+  if (!result || !result.ok) return false;
+  if (result.offline) return true;
+  const data = result.result;
+  if (!data) return false;
+  if (data.started || data.appended) return true;
+  return Array.isArray(data.queued) && data.queued.length > 0;
+}
+
 async function iconImageData(url) {
-  const busy = watching && lastJob && ScrapIconProgress.isBusy(lastJob);
-  const ratio = busy ? ScrapIconProgress.progressRatio(lastJob) : null;
+  const jobBusy = watching && lastJob && ScrapIconProgress.isBusy(lastJob);
+  const busy = jobBusy || queueDotVisible();
+  const ratio = jobBusy ? ScrapIconProgress.progressRatio(lastJob) : null;
   const saved = savedPostUrls.has(libraryKey(url));
   if (!busy && ratio == null && !saved) return null;
   const paths = iconFor(url);
@@ -348,12 +376,31 @@ async function paintAllTabs() {
   }
 }
 
+function applyConfig(config) {
+  const raw = config && Array.isArray(config.sites) ? config.sites : [];
+  sites = ScrapShared.compileSites(raw);
+  scrapeEnabled = !!(config && config.scrape_enabled);
+}
+
 async function loadConfig() {
   const { config } = await chrome.storage.local.get("config");
-  const raw = config?.sites || [];
-  sites = ScrapShared.compileSites(raw);
-  scrapeEnabled = !!config?.scrape_enabled;
+  const stored = config && Array.isArray(config.sites) ? config.sites : [];
+  // An empty saved list must not wipe sites just read from the running app.
+  if (stored.length || !sites.length) applyConfig(config);
   return config || { sites: [], scrape_enabled: false };
+}
+
+// The popup asks every couple of seconds. Read the app's list then, instead of
+// keeping an empty copy from before the site adapter was installed.
+async function pullConfig() {
+  const res = await api("/extension/sites");
+  if (res.ok && res.data && Array.isArray(res.data.sites)) {
+    applyConfig(res.data);
+    chrome.storage.local.set({ config: res.data }).catch(() => {});
+    return true;
+  }
+  await loadConfig();
+  return false;
 }
 
 function createMenu(item) {
@@ -592,11 +639,7 @@ function rememberPendingOrigins(origins) {
 
 async function refreshConfig() {
   await loadPersistedHotkeyOrigins();
-  const res = await api("/extension/sites");
-  if (res.ok && res.data) {
-    await chrome.storage.local.set({ config: res.data });
-  }
-  await loadConfig();
+  await pullConfig();
   await setupMenu();
   await setupHotkeys();
   await paintAllTabs();
@@ -623,9 +666,12 @@ async function sendUrls(urls) {
   if (res.ok && res.data) {
     await dropOffline(batch);
     noteJobStarted(res.data.status);
-    return { ok: true, scrapable: true, result: res.data };
+    const out = { ok: true, scrapable: true, result: res.data };
+    if (queuedAFile(out)) flashQueueDot();
+    return out;
   }
   if (heldOffline(res)) {
+    flashQueueDot();
     return { ok: true, scrapable: true, offline: true, result: { queued: batch } };
   }
   return { ok: false, scrapable: true, error: detailOf(res), result: { queued: batch } };
@@ -677,9 +723,12 @@ async function saveRawFile(url) {
   if (res.ok && res.data) {
     await dropOffline([url]);
     noteJobStarted(res.data.status);
-    return { ok: true, result: res.data };
+    const out = { ok: true, result: res.data };
+    if (queuedAFile(out)) flashQueueDot();
+    return out;
   }
   if (heldOffline(res)) {
+    flashQueueDot();
     return { ok: true, offline: true, result: { queued: [url] } };
   }
   return { ok: false, error: detailOf(res), result: { queued: [url] } };
@@ -708,9 +757,13 @@ async function runScrape(message) {
 }
 
 async function getStatus(pageUrl) {
-  await loadConfig();
   const health = await api("/health");
-  if (health.ok) await flushOfflineQueue();
+  if (health.ok) {
+    await pullConfig();
+    await flushOfflineQueue();
+  } else {
+    await loadConfig();
+  }
   await readOfflineQueue();
   const scrape = health.ok ? await api("/scrape/status") : { ok: false };
   const site = pageUrl ? ScrapShared.siteFor(sites, pageUrl) : null;
@@ -847,7 +900,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handlers = {
     getStatus: () => getStatus(message.url),
     describePage: async () => {
-      await loadConfig();
+      await pullConfig();
       return describe(message.url);
     },
     downloadFile: async () => {

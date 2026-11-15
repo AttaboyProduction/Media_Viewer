@@ -2,6 +2,7 @@
 (function (root) {
   const BUSY_POLL_MS = 5000;
   const IDLE_POLL_MS = 30000;
+  const QUEUE_DOT_MS = 2000;
   const DEFAULT_TITLE = "MediaViewer";
 
   function num(value) {
@@ -72,6 +73,7 @@
   const api = {
     BUSY_POLL_MS,
     IDLE_POLL_MS,
+    QUEUE_DOT_MS,
     DEFAULT_TITLE,
     isBusy,
     isWatchDone,

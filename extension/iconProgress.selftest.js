@@ -7,6 +7,7 @@ const {
   busyDotGeometry,
   savedDotGeometry,
   BUSY_POLL_MS,
+  QUEUE_DOT_MS,
   DEFAULT_TITLE,
 } = require("./iconProgress.js");
 
@@ -15,6 +16,7 @@ function assert(cond, msg) {
 }
 
 assert(BUSY_POLL_MS === 5000, "busy poll is 5s");
+assert(QUEUE_DOT_MS === 2000, "queue dot stays for 2s");
 assert(!isBusy(null) && isWatchDone(null), "null status is idle");
 assert(isBusy({ running: true, total: 0, processed: 0 }), "running is busy");
 assert(isBusy({ running: false, total: 10, processed: 3 }), "unfinished queue is busy");
