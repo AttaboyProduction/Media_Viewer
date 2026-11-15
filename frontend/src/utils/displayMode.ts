@@ -1,4 +1,4 @@
-export const APP_WINDOW_NAME = 'scrap_download_app_window'
+export const APP_WINDOW_NAME = 'MediaViewer'
 
 export type DisplayMode = 'browser' | 'window'
 

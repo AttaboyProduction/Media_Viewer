@@ -34,7 +34,7 @@ set "REPO_BRANCH=main"
 set "ZIP_URL=https://github.com/%REPO_OWNER%/%REPO_NAME%/archive/refs/heads/%REPO_BRANCH%.zip"
 
 echo.
-echo === Scrap Download update ===
+echo === MediaViewer update ===
 echo.
 echo Downloading ZIP from GitHub...
 echo %ZIP_URL%

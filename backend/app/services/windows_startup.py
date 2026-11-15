@@ -2,7 +2,7 @@
 
 Task Manager names a startup item from the target program's file description.
 A shortcut to pythonw.exe therefore shows up as Python, so startup launches a
-small Scrap Download.exe whose description is the app name.
+small MediaViewer.exe whose description is the app name.
 """
 
 from __future__ import annotations
@@ -18,30 +18,31 @@ ROOT = Path(__file__).resolve().parents[3]
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 # Older installs registered this Run value, which Task Manager lists as pythonw.exe.
 LEGACY_RUN_VALUE = "ScrapDownloadViewer"
-APP_NAME = "Scrap Download"
+APP_NAME = "MediaViewer"
+APP_ID = "MediaViewer"
 # Bump when the stub source changes so an existing exe is rebuilt.
-STUB_ID = "1"
-STUB_PATH = ROOT / f"{APP_NAME}.exe"
+STUB_ID = "4"
+STUB_PATH = ROOT / f"{APP_ID}.exe"
 
-_STUB_SOURCE = r"""
+_STUB_SOURCE = rf"""
 using System;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 
-[assembly: AssemblyTitle("Scrap Download")]
-[assembly: AssemblyProduct("Scrap Download")]
-[assembly: AssemblyCompany("Scrap Download")]
-[assembly: AssemblyDescription("Scrap Download")]
+[assembly: AssemblyTitle("{APP_NAME}")]
+[assembly: AssemblyProduct("{APP_NAME}")]
+[assembly: AssemblyCompany("{APP_NAME}")]
+[assembly: AssemblyDescription("{APP_NAME}")]
 [assembly: AssemblyFileVersion("1.0.0.0")]
 [assembly: AssemblyVersion("1.0.0.0")]
 
-namespace ScrapDownloadStartup
-{
+namespace {APP_ID}Startup
+{{
     static class Program
-    {
+    {{
         static void Main()
-        {
+        {{
             string root = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
             string pythonw = Path.Combine(root, ".venv", "Scripts", "pythonw.exe");
             string python = Path.Combine(root, ".venv", "Scripts", "python.exe");
@@ -54,9 +55,9 @@ namespace ScrapDownloadStartup
             psi.UseShellExecute = false;
             psi.CreateNoWindow = true;
             Process.Start(psi);
-        }
-    }
-}
+        }}
+    }}
+}}
 """
 
 
@@ -68,11 +69,11 @@ def _startup_dir() -> Path:
 
 
 def shortcut_path() -> Path:
-    return _startup_dir() / f"{APP_NAME}.lnk"
+    return _startup_dir() / f"{APP_ID}.lnk"
 
 
 def _stamp_path() -> Path:
-    return ROOT / "data" / ".scrap_download_stub"
+    return ROOT / "data" / f".{APP_ID}_stub"
 
 
 def _csc_path() -> Path | None:
@@ -93,8 +94,8 @@ def _compile_stub(dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     with tempfile.TemporaryDirectory() as tmp:
-        source = Path(tmp) / "ScrapDownloadStartup.cs"
-        built = Path(tmp) / "ScrapDownload.exe"
+        source = Path(tmp) / f"{APP_ID}Startup.cs"
+        built = Path(tmp) / f"{APP_ID}.exe"
         source.write_text(_STUB_SOURCE, encoding="utf-8")
         subprocess.run(
             [
@@ -112,7 +113,7 @@ def _compile_stub(dest: Path) -> None:
 
 
 def ensure_launcher_exe() -> Path | None:
-    """Build Scrap Download.exe beside the project when it is missing. Windows only."""
+    """Build MediaViewer.exe beside the project when it is missing. Windows only."""
     if sys.platform != "win32":
         return None
     return _ensure_stub()
@@ -126,6 +127,9 @@ def _ensure_stub() -> Path:
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.write_text(STUB_ID, encoding="utf-8")
         _set_friendly_name(STUB_PATH)
+        old_stamp = ROOT / "data" / ".scrap_download_stub"
+        if old_stamp.is_file() and old_stamp.resolve() != stamp.resolve():
+            old_stamp.unlink(missing_ok=True)
     return STUB_PATH
 
 

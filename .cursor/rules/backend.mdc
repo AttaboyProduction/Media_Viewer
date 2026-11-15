@@ -1,5 +1,5 @@
 ---
-description: Backend / scraper / API conventions for Scrap Download Viewer
+description: Backend / scraper / API conventions for MediaViewer Viewer
 globs: backend/**/*
 alwaysApply: false
 ---

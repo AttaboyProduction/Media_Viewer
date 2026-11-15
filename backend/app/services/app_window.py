@@ -30,7 +30,7 @@ PROFILE_DIR = DATA_DIR / "webview_profile"
 BROWSER_APP_PROFILE_DIR = DATA_DIR / "browser_app_profile"
 CREATE_NO_WINDOW = 0x08000000
 DETACHED_PROCESS = 0x00000008
-WINDOW_TITLE = "Scrap Download"
+WINDOW_TITLE = "MediaViewer"
 MODULE = "backend.app.services.app_window"
 # A host that was just spawned has not written its state yet; treat it as open.
 SPAWN_GRACE_SECONDS = 15.0

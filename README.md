@@ -1,4 +1,4 @@
-# Scrap Download Viewer
+# MediaViewer Viewer
 
 Local Windows app: scrape configured gallery sources (or link local folders), store files + SQLite metadata, and browse them in a viewer with tags, ratings, and duplicate review.
 
@@ -10,7 +10,7 @@ Local Windows app: scrape configured gallery sources (or link local folders), st
 - Exact byte duplicates skipped by SHA-256 (tags and URL copied onto the kept row). Near-identical pictures (pHash Hamming 0–2) and videos with the same four sampled frames go to **Identical** for merge. Looser picture matches (crops, watermarks) go to **Similar**. **Skip identical** (Settings and the Scrape page, off by default) drops a new identical download and copies its tags and URL onto the kept file. Media detail can hand-mark another post or database id as identical or similar. Review uses **Keep all** and **Keep selected**.
 - Viewer grid with tag filters (**AND** / **OR**; search uses the full tag list, not only tags on the current page); hide tags/groups and **Show discarded** persist in settings across reload. **Hide content** (Settings → Tags, separate from hidden tags) blurs matching previews on viewer, detail, scrape, related, and duplicates without removing items from lists; unlock via **Show hidden content** (Viewer toolbar, after the hidden-tags control) or tap blur, with optional per-rule messages. In Select mode, tapping a blurred card selects it instead of opening the reveal dialog. Current-page tag chips/sidebar omit tags that appear only on still-blurred files. With a tag filter active, still-blurred files are left out of the result list until unlocked. Settings can **Hide again** per rule or **Hide all content again**. Detail modal: Fit/Fill/zoom/pan, multi-URL sources, rescrape, refresh tags, delete. Esc closes nested panels before the modal.
 - Tags and groups: rename, multi-group assign, merge/alias, drag reorder (order islands), palette colors.
-- Settings groups: **General** (theme, display), **Tags** (aliases, hidden tags, hide-content blur rules, recalculate counts), **Viewer** (chip or left-sidebar tag layout, plus viewer options), **Other** (scrape). Browser tab or native app window (WebView2 title bar). In window mode there is one viewer window: tray **Open viewer** and `Run.bat` bring it to the front instead of opening another, and tray **Quit** / **Exit** close it. The first `Run.bat` install writes `Scrap Download.exe` in the project folder. **Launch on startup** adds a Startup shortcut to that exe (Task Manager shows Scrap Download, not pythonw). That program and `Run.bat` open the viewer when the app is already running, instead of starting a second tray icon. Scrape browser Auto / Obscura / Playwright lives under Other → Scrape (with limit, sort, exclude tags, and skip identical) and is hidden while **Hide Scrape page** is on; nav **Reload** / **Exit**.
+- Settings groups: **General** (theme, display), **Tags** (aliases, hidden tags, hide-content blur rules, recalculate counts), **Viewer** (chip or left-sidebar tag layout, plus viewer options), **Other** (scrape). Browser tab or native app window (WebView2 title bar). In window mode there is one viewer window: tray **Open viewer** and `Run.bat` bring it to the front instead of opening another, and tray **Quit** / **Exit** close it. The first `Run.bat` install writes `MediaViewer.exe` in the project folder. **Launch on startup** adds a Startup shortcut to that exe (Task Manager shows MediaViewer, not pythonw). That program and `Run.bat` open the viewer when the app is already running, instead of starting a second tray icon. Scrape browser Auto / Obscura / Playwright lives under Other → Scrape (with limit, sort, exclude tags, and skip identical) and is hidden while **Hide Scrape page** is on; nav **Reload** / **Exit**.
 - The Scrape page is on by default. You can hide it with **Hide Scrape page** (Settings → Other → Scrape). While hidden, settings below that checkbox stay hidden, the app does not check, download or update browsers, and media detail hides **Rescrape** and **Update tags from URLs**.
 
 ## Setup and run
@@ -35,7 +35,7 @@ On first run it will, as needed:
 1. Install **Python 3.12** via `winget` (needs [App Installer](https://apps.microsoft.com/detail/9nblggh4nns1) / winget)
 2. Create `.venv` and install Python packages
 3. Install **Node.js LTS** via winget and build the viewer if `frontend/dist` is missing or stale
-4. Write `Scrap Download.exe` next to `Run.bat` (opens the app; if it is already running, only opens the viewer)
+4. Write `MediaViewer.exe` next to `Run.bat` (opens the app; if it is already running, only opens the viewer)
 5. Start the server, open the viewer, show a tray icon
 
 Scrape browsers are not downloaded at setup. With the Scrape page visible (default; or after turning off **Hide Scrape page**), the Scrape page and Settings offer **Download** for **Obscura** (stealth build, into `data/browsers/obscura/`) and **Playwright Chromium** (~300 MB). While the Scrape page is on, each start checks installed browsers for updates at most once a day, unless **Check for updates on start** is off. That checkbox starts off when Windows reports a metered connection, and on otherwise.
@@ -50,7 +50,7 @@ Private repo: ZIP download needs a public repo, or download the ZIP while signed
 
 ### App version gate
 
-Tracked `VERSION` is compared to local `data/installed_version` on every `Run.bat` / `Scrap Download.exe` launch (including after `Update.bat`):
+Tracked `VERSION` is compared to local `data/installed_version` on every `Run.bat` / `MediaViewer.exe` launch (including after `Update.bat`):
 
 - **Mismatch or missing stamp** — stop a running app if needed, force `pip` + frontend rebuild, recreate the exe stub if missing, then stamp `data/installed_version` and start the server.
 - **Match** — light checks only (rebuild when requirements/UI mtimes require it). If the server is already healthy, only open the viewer; otherwise start the server.
@@ -161,7 +161,7 @@ Created/updated when you change app settings in the UI. Notable fields: `display
 ```
 Run.bat                 Launch (`Run.bat`) or restart (`Run.bat restart`)
 Update.bat              Download ZIP of latest main and merge (does not launch the app)
-Scrap Download.exe      Windows launcher written by the first Run.bat install (gitignored)
+MediaViewer.exe      Windows launcher written by the first Run.bat install (gitignored)
 VERSION                 Tracked app version (bump to force rebuild after update)
 versioning.py           VERSION vs data/installed_version helpers
 launcher.py             Install deps, uvicorn, tray, open viewer

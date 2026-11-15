@@ -30,7 +30,7 @@
           try {
             return new RegExp(pattern);
           } catch (err) {
-            console.warn("Scrap Download: bad url pattern", pattern, err);
+            console.warn("MediaViewer: bad url pattern", pattern, err);
             return null;
           }
         })

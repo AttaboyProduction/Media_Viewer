@@ -20,7 +20,7 @@ Chrome cannot receive a push from the local app; those two paths are the start s
 - Poll `/api/scrape/status` every **5 seconds**.
 - **Badge:** small red top-right mark (Chrome action badge) while busy.
 - **Icon:** keep green/red site coloring; draw a thin progress strip along the bottom. Fill = `processed / total` when `total > 0`; omit the strip if `total` is 0.
-- **Tooltip (`action.setTitle`):** e.g. `Scrap Download · 3/10 · downloaded 2 · skipped 1`.
+- **Tooltip (`action.setTitle`):** e.g. `MediaViewer · 3/10 · downloaded 2 · skipped 1`.
 
 ### Stop (hide bar + red mark)
 

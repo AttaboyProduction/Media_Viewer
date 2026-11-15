@@ -1,5 +1,5 @@
 ---
-description: Frontend conventions and routes for Scrap Download Viewer
+description: Frontend conventions and routes for MediaViewer Viewer
 globs: frontend/**/*
 alwaysApply: false
 ---
@@ -34,4 +34,4 @@ alwaysApply: false
 | `/duplicates` | → `/scrape` or `/` |
 | `/settings` | Theme, hidden tags, defaults |
 
-Nav brand **Media Viewer** → `/`. Esc uses a LIFO stack (`utils/escapeStack`) so the topmost overlay/panel wins (confirm → media modal → expanded tag lists). Detail ←/→ and on-screen `<`/`>` use current page `mediaIds` (disabled at ends, including in full view). ↑/↓ scroll the media scroller when it overflows (full-view Fill/zoom), otherwise the detail modal panel when that has a vertical scrollbar. Media controls (`<`, full-view / `F`, `>`, plus Fit/Fill/± in full view) live in a small panel outside and above the detail modal; the viewer modal is vertically centered in the remaining space (`scrollbar-gutter: stable` so the control panel does not shift). Full view Fit stays contained; Fill (and beyond) pans via an inner scroller while size is measured on an outer padded frame (avoids scrollbar flicker). Ctrl+scroll zooms.
+Nav brand **MediaViewer** → `/`. Esc uses a LIFO stack (`utils/escapeStack`) so the topmost overlay/panel wins (confirm → media modal → expanded tag lists). Detail ←/→ and on-screen `<`/`>` use current page `mediaIds` (disabled at ends, including in full view). ↑/↓ scroll the media scroller when it overflows (full-view Fill/zoom), otherwise the detail modal panel when that has a vertical scrollbar. Media controls (`<`, full-view / `F`, `>`, plus Fit/Fill/± in full view) live in a small panel outside and above the detail modal; the viewer modal is vertically centered in the remaining space (`scrollbar-gutter: stable` so the control panel does not shift). Full view Fit stays contained; Fill (and beyond) pans via an inner scroller while size is measured on an outer padded frame (avoids scrollbar flicker). Ctrl+scroll zooms.

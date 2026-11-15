@@ -39,7 +39,7 @@ Gitignored / local-only (do not force-add):
 - `downloaded_content/`, `downloads/`, `media/`, `data/` (DB, logs, local state)
 - `.env`, `.env.*` (except `.env.example` if present)
 - `.venv/`, `node_modules/`, `frontend/dist/`
-- `*.db`, `*.log`, `TODO.md`, `Scrap Download.exe`, secrets/credentials
+- `*.db`, `*.log`, `TODO.md`, `MediaViewer.exe`, secrets/credentials
 
 Warn the user if they explicitly ask to commit any of the above.
 

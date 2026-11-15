@@ -2,7 +2,7 @@
 (function (root) {
   const BUSY_POLL_MS = 5000;
   const IDLE_POLL_MS = 30000;
-  const DEFAULT_TITLE = "Scrap Download";
+  const DEFAULT_TITLE = "MediaViewer";
 
   function num(value) {
     const n = Number(value);

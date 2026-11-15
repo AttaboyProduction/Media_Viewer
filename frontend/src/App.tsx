@@ -81,7 +81,7 @@ function TopNav({ hideScrapePage }: { hideScrapePage: boolean }) {
     <>
       <nav className="top-nav" aria-busy={reloading}>
         <Link to="/" className="top-nav-brand">
-          Media Viewer
+          MediaViewer
         </Link>
         {savedVisible && <span className="saved-badge">Saved</span>}
         <Link className={location.pathname === '/' ? 'active' : ''} to="/">

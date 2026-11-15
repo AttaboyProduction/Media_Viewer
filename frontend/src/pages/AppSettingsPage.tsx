@@ -183,7 +183,7 @@ export default function AppSettingsPage() {
               checked={settings.launch_on_startup}
               onChange={(e) => save({ launch_on_startup: e.target.checked })}
             />
-            Open Scrap Download when Windows starts
+            Open MediaViewer when Windows starts
           </label>
         </SettingsOption>
         <SettingsOption

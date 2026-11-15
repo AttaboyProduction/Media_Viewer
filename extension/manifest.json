@@ -1,15 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "Scrap Download",
+  "name": "MediaViewer",
   "version": "0.1.0",
-  "description": "Send the current page to your local Scrap Download app.",
+  "description": "Send the current page to your local MediaViewer app.",
   "permissions": ["storage", "contextMenus", "tabs", "scripting", "activeTab", "alarms"],
   "host_permissions": ["http://127.0.0.1:8000/*", "http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Scrap Download",
+    "default_title": "MediaViewer",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/red16.png",

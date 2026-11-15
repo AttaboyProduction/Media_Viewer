@@ -44,7 +44,7 @@ function render(status) {
 
   $("appDot").className = `dot ${status.online ? (status.scrapeEnabled ? "ok" : "warn") : ""}`;
   $("appText").textContent = !status.online
-    ? "App is not running — start Scrap Download."
+    ? "App is not running — start MediaViewer."
     : status.scrapeEnabled
       ? "App is running."
       : "Scraping is off (Settings → Hide Scrape page).";

@@ -1,4 +1,4 @@
-# AGENTS.md — Scrap Download Viewer
+# AGENTS.md — MediaViewer Viewer
 
 Agent guidance lives in **`.cursor/rules/`** (split by concern):
 

@@ -71,7 +71,7 @@ Download, tags, SHA-256 dedupe, and “Downloaded previously” all reuse the ex
 
 - **Job already running (409)** → button shows “Scrape in progress” instead of a silent failure. A real queue can wait; for v1 an honest refuse is simpler.
 - **Cloudflare / anti-bot is not a problem:** the extension downloads nothing itself — it only forwards URLs; the backend still downloads via Obscura/Playwright as usual.
-- **Backend not running** → gray badge; button click shows “Start Scrap Download”.
+- **Backend not running** → gray badge; button click shows “Start MediaViewer”.
 - **Quota:** with URL filters the limit does not apply (already true in `job.py`), so “Scrape this page” downloads exactly the selection.
 
 ## User install

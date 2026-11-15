@@ -197,7 +197,7 @@ def winget_install(package_id: str) -> None:
     refresh_windows_path()
 
 
-def alert(message: str, title: str = "Scrap Download") -> None:
+def alert(message: str, title: str = "MediaViewer") -> None:
     log(message)
     if sys.platform == "win32":
         import ctypes
@@ -508,13 +508,13 @@ def force_update_install() -> None:
 
 
 def ensure_windows_launcher() -> None:
-    """First Run.bat install writes Scrap Download.exe next to the project."""
+    """First Run.bat install writes MediaViewer.exe next to the project."""
     if sys.platform != "win32":
         return
     from backend.app.services.windows_startup import STUB_PATH, ensure_launcher_exe
 
     if not STUB_PATH.is_file():
-        log("Creating Scrap Download.exe...")
+        log("Creating MediaViewer.exe...")
     ensure_launcher_exe()
 
 
@@ -686,7 +686,7 @@ def run_tray(owned_process: subprocess.Popen | None) -> None:
         pystray.MenuItem("Open viewer", open_viewer, default=True),
         pystray.MenuItem("Quit", on_quit),
     )
-    icon = pystray.Icon("scrap_download", image, "Scrap Download", menu)
+    icon = pystray.Icon("MediaViewer", image, "MediaViewer", menu)
     hide_console()
     if not skip_open_viewer() and not read_app_settings().get("start_minimized", True):
         open_viewer_ui()

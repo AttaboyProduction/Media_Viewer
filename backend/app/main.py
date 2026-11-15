@@ -15,7 +15,7 @@ from backend.app.config import settings
 from backend.app.services.hash_backfill import start_hash_backfill
 from backend.init_db import init_db
 
-app = FastAPI(title="Scrap Download Viewer")
+app = FastAPI(title="MediaViewer Viewer")
 # Changes on every process start so Reload can wait for a real restart, not the dying server.
 BOOT_ID = str(uuid.uuid4())
 

@@ -217,7 +217,7 @@ function scheduleIdlePoll() {
 
 function noteJobStarted(status) {
   if (status && typeof status === "object") lastJob = status;
-  startWatch().catch((err) => console.warn("Scrap Download: watch", err));
+  startWatch().catch((err) => console.warn("MediaViewer: watch", err));
 }
 
 function detailOf(res) {
@@ -277,7 +277,7 @@ function createMenu(item) {
   try {
     chrome.contextMenus.create(item);
   } catch (err) {
-    console.warn("Scrap Download: menu", item.id, err);
+    console.warn("MediaViewer: menu", item.id, err);
   }
 }
 
@@ -496,7 +496,7 @@ async function setupHotkeys() {
       },
     ]);
   } catch (err) {
-    console.warn("Scrap Download: hotkey script", err);
+    console.warn("MediaViewer: hotkey script", err);
   }
   // Pages already open need an explicit inject; registration only affects new loads.
   await injectHotkeysIntoOpenTabs(matches);

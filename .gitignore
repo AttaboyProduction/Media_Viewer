@@ -19,7 +19,7 @@ frontend/dist/
 *.tsbuildinfo
 TODO.md
 scripts/_*.py
-Scrap Download.exe
+MediaViewer.exe
 
 # Real site adapters stay local / private; only example/ is tracked.
 adapters/*

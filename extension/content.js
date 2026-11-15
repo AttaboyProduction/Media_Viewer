@@ -95,7 +95,7 @@
           hint: hinted && hinted.indexOf("blob:") === 0 ? "" : hinted,
         }, (result) => {
           if (chrome.runtime.lastError) {
-            flash("Scrap Download is not available");
+            flash("MediaViewer is not available");
             return;
           }
           if (result && result.ok) flash("Queued this file");
@@ -106,7 +106,7 @@
 
       chrome.runtime.sendMessage({ type: "hotkeyPage" }, (result) => {
         if (chrome.runtime.lastError) {
-          flash("Scrap Download is not available");
+          flash("MediaViewer is not available");
           return;
         }
         if (result && result.ok) {
