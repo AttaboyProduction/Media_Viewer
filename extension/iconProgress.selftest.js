@@ -7,7 +7,6 @@ const {
   busyDotGeometry,
   savedDotGeometry,
   BUSY_POLL_MS,
-  QUEUE_DOT_MS,
   DEFAULT_TITLE,
 } = require("./iconProgress.js");
 
@@ -16,7 +15,6 @@ function assert(cond, msg) {
 }
 
 assert(BUSY_POLL_MS === 5000, "busy poll is 5s");
-assert(QUEUE_DOT_MS === 2000, "queue dot stays for 2s");
 assert(!isBusy(null) && isWatchDone(null), "null status is idle");
 assert(isBusy({ running: true, total: 0, processed: 0 }), "running is busy");
 assert(isBusy({ running: false, total: 10, processed: 3 }), "unfinished queue is busy");
@@ -32,7 +30,7 @@ const dot16 = busyDotGeometry(16);
 const dot32 = busyDotGeometry(32);
 assert(dot16.diameter === 10, "16px dot is twice the previous mark");
 assert(dot32.diameter === 16, "32px dot is twice the previous mark");
-assert(dot32.x === 24 && dot32.y === 10, "red dot is nudged right, not up");
+assert(dot32.x === 24 && dot32.y === 8, "red dot is flush top-right, level with the blue dot");
 assert(dot32.x > 16 && dot32.y < 16, "dot sits in the top-right quadrant");
 const saved32 = savedDotGeometry(32);
 assert(saved32.diameter === dot32.diameter, "saved dot matches the busy dot");

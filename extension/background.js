@@ -123,38 +123,69 @@ async function refreshSavedPosts(urls) {
   }
 }
 
-let queueDotUntil = 0;
-let queueDotTimer = 0;
+const queuedPostUrls = new Set();
+let queuedPostsLoaded = null;
 
-function queueDotVisible() {
-  return Date.now() < queueDotUntil;
+function loadQueuedPosts() {
+  if (!queuedPostsLoaded) {
+    queuedPostsLoaded = new Promise((resolve) => {
+      chrome.storage.local.get({ queuedPosts: [] }, (stored) => {
+        const list = Array.isArray(stored.queuedPosts) ? stored.queuedPosts : [];
+        for (const url of list) queuedPostUrls.add(url);
+        resolve();
+      });
+    });
+  }
+  return queuedPostsLoaded;
 }
 
-function flashQueueDot() {
-  queueDotUntil = Date.now() + ScrapIconProgress.QUEUE_DOT_MS;
-  if (queueDotTimer) clearTimeout(queueDotTimer);
+function persistQueuedPosts() {
+  chrome.storage.local.set({ queuedPosts: [...queuedPostUrls] }).catch(() => {});
+}
+
+function markQueued(urls) {
+  let changed = false;
+  for (const url of urls) {
+    const key = libraryKey(url) || url;
+    if (!key || queuedPostUrls.has(key)) continue;
+    queuedPostUrls.add(key);
+    changed = true;
+  }
+  if (changed) persistQueuedPosts();
   paintAllTabs().catch(() => {});
-  queueDotTimer = setTimeout(() => {
-    queueDotTimer = 0;
-    queueDotUntil = 0;
-    paintAllTabs().catch(() => {});
-  }, ScrapIconProgress.QUEUE_DOT_MS);
 }
 
-function queuedAFile(result) {
-  if (!result || !result.ok) return false;
-  if (result.offline) return true;
-  const data = result.result;
-  if (!data) return false;
-  if (data.started || data.appended) return true;
-  return Array.isArray(data.queued) && data.queued.length > 0;
+function queuedUrlsFrom(result, fallback) {
+  if (!result || !result.ok) return [];
+  if (result.offline) return fallback;
+  const data = result.result || {};
+  if (Array.isArray(data.queued) && data.queued.length) return data.queued;
+  if (data.started || data.appended) return fallback;
+  return [];
+}
+
+async function settleQueuedPosts() {
+  await loadQueuedPosts();
+  if (queuedPostUrls.size) await refreshSavedPosts([...queuedPostUrls]);
+  await readOfflineQueue();
+  const waiting = new Set(offlineQueue.map((url) => libraryKey(url) || url));
+  let changed = false;
+  for (const url of [...queuedPostUrls]) {
+    if (savedPostUrls.has(url) || !waiting.has(url)) {
+      queuedPostUrls.delete(url);
+      changed = true;
+    }
+  }
+  if (changed) persistQueuedPosts();
 }
 
 async function iconImageData(url) {
+  await loadQueuedPosts();
   const jobBusy = watching && lastJob && ScrapIconProgress.isBusy(lastJob);
-  const busy = jobBusy || queueDotVisible();
+  const busy = jobBusy;
   const ratio = jobBusy ? ScrapIconProgress.progressRatio(lastJob) : null;
-  const saved = savedPostUrls.has(libraryKey(url));
+  const key = libraryKey(url);
+  const saved = !!(key && (savedPostUrls.has(key) || queuedPostUrls.has(key)));
   if (!busy && ratio == null && !saved) return null;
   const paths = iconFor(url);
   const imageData = {};
@@ -194,6 +225,7 @@ async function stopWatch() {
   }
   applyChromeBadge();
   await applyTitle();
+  await settleQueuedPosts();
   await paintAllTabs();
 }
 
@@ -667,11 +699,11 @@ async function sendUrls(urls) {
     await dropOffline(batch);
     noteJobStarted(res.data.status);
     const out = { ok: true, scrapable: true, result: res.data };
-    if (queuedAFile(out)) flashQueueDot();
+    markQueued(queuedUrlsFrom(out, batch));
     return out;
   }
   if (heldOffline(res)) {
-    flashQueueDot();
+    markQueued(batch);
     return { ok: true, scrapable: true, offline: true, result: { queued: batch } };
   }
   return { ok: false, scrapable: true, error: detailOf(res), result: { queued: batch } };
@@ -724,11 +756,11 @@ async function saveRawFile(url) {
     await dropOffline([url]);
     noteJobStarted(res.data.status);
     const out = { ok: true, result: res.data };
-    if (queuedAFile(out)) flashQueueDot();
+    markQueued(queuedUrlsFrom(out, [url]));
     return out;
   }
   if (heldOffline(res)) {
-    flashQueueDot();
+    markQueued([url]);
     return { ok: true, offline: true, result: { queued: [url] } };
   }
   return { ok: false, error: detailOf(res), result: { queued: [url] } };

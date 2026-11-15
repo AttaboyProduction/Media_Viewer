@@ -2,7 +2,6 @@
 (function (root) {
   const BUSY_POLL_MS = 5000;
   const IDLE_POLL_MS = 30000;
-  const QUEUE_DOT_MS = 2000;
   const DEFAULT_TITLE = "MediaViewer";
 
   function num(value) {
@@ -46,17 +45,13 @@
     return parts.join(" · ");
   }
 
-  function dotMargin(size) {
-    return Math.max(1, Math.round(size / 16));
-  }
-
-  // Top-right busy dot, twice the previous corner mark, flush with the right edge.
+  // Top-right busy dot, flush with the corner, mirroring the blue dot on the left.
   function busyDotGeometry(size) {
     const diameter = Math.max(10, Math.round(size / 2));
     return {
       diameter,
       x: size - diameter / 2,
-      y: dotMargin(size) + diameter / 2,
+      y: diameter / 2,
     };
   }
 
@@ -73,7 +68,6 @@
   const api = {
     BUSY_POLL_MS,
     IDLE_POLL_MS,
-    QUEUE_DOT_MS,
     DEFAULT_TITLE,
     isBusy,
     isWatchDone,
