@@ -195,7 +195,89 @@ async function tickWatch() {
   scheduleWatchTick();
 }
 
+let offlineQueue = [];
+let flushingQueue = false;
+
+function queueIdentity(url) {
+  try {
+    const parsed = new URL(url);
+    let host = parsed.hostname.toLowerCase();
+    if (host.startsWith("www.")) host = host.slice(4);
+    let path = parsed.pathname || "/";
+    if (path.length > 1 && path.endsWith("/")) path = path.slice(0, -1);
+    return host + path;
+  } catch {
+    return "";
+  }
+}
+
+function readOfflineQueue() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ offlineQueue: [] }, (stored) => {
+      offlineQueue = Array.isArray(stored.offlineQueue) ? stored.offlineQueue : [];
+      resolve(offlineQueue);
+    });
+  });
+}
+
+function rememberOffline(urls) {
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ offlineQueue: [] }, (stored) => {
+      const current = Array.isArray(stored.offlineQueue) ? stored.offlineQueue : [];
+      const seen = new Set(current.map((url) => queueIdentity(url)));
+      const next = current.slice();
+      for (const url of urls) {
+        const key = queueIdentity(url);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        next.push(url);
+      }
+      offlineQueue = next;
+      chrome.storage.local.set({ offlineQueue: next }, () => resolve(next));
+    });
+  });
+}
+
+function dropOffline(urls) {
+  const drop = new Set(urls.map((url) => queueIdentity(url)).filter(Boolean));
+  return new Promise((resolve) => {
+    chrome.storage.local.get({ offlineQueue: [] }, (stored) => {
+      const current = Array.isArray(stored.offlineQueue) ? stored.offlineQueue : [];
+      const next = current.filter((url) => !drop.has(queueIdentity(url)));
+      offlineQueue = next;
+      chrome.storage.local.set({ offlineQueue: next }, () => resolve(next));
+    });
+  });
+}
+
+function heldOffline(res) {
+  if (res.status === 0) return true;
+  const detail = res.data && res.data.detail;
+  return res.status === 409 && typeof detail === "string" && /Hide Scrape page/.test(detail);
+}
+
+async function flushOfflineQueue() {
+  if (flushingQueue) return;
+  await readOfflineQueue();
+  if (!offlineQueue.length) return;
+  flushingQueue = true;
+  try {
+    const batch = offlineQueue.slice(0, 500);
+    const res = await api("/extension/enqueue", {
+      method: "POST",
+      body: JSON.stringify({ urls: batch }),
+    });
+    if (res.ok) {
+      await dropOffline(batch);
+      if (res.data && res.data.status) noteJobStarted(res.data.status);
+    }
+  } finally {
+    flushingQueue = false;
+  }
+}
+
 async function checkIdleForJob() {
+  await flushOfflineQueue();
   if (watching) return;
   const res = await api("/scrape/status");
   if (res.ok && res.data && ScrapIconProgress.isBusy(res.data)) {
@@ -206,13 +288,14 @@ async function checkIdleForJob() {
 
 function scheduleIdlePoll() {
   if (idleTimer) clearTimeout(idleTimer);
+  const wait = offlineQueue.length ? 5000 : ScrapIconProgress.IDLE_POLL_MS;
   idleTimer = setTimeout(async () => {
     try {
       await checkIdleForJob();
     } finally {
       scheduleIdlePoll();
     }
-  }, ScrapIconProgress.IDLE_POLL_MS);
+  }, wait);
 }
 
 function noteJobStarted(status) {
@@ -517,6 +600,7 @@ async function refreshConfig() {
   await setupMenu();
   await setupHotkeys();
   await paintAllTabs();
+  await flushOfflineQueue();
 }
 
 async function sendUrls(urls) {
@@ -530,15 +614,21 @@ async function sendUrls(urls) {
     cleaned.push(hit);
   }
   if (!cleaned.length) return { ok: false, scrapable: false, error: "No supported posts there" };
+  const batch = cleaned.slice(0, 500);
+  await rememberOffline(batch);
   const res = await api("/extension/enqueue", {
     method: "POST",
-    body: JSON.stringify({ urls: cleaned.slice(0, 500) }),
+    body: JSON.stringify({ urls: batch }),
   });
   if (res.ok && res.data) {
+    await dropOffline(batch);
     noteJobStarted(res.data.status);
     return { ok: true, scrapable: true, result: res.data };
   }
-  return { ok: false, scrapable: true, error: detailOf(res) };
+  if (heldOffline(res)) {
+    return { ok: true, scrapable: true, offline: true, result: { queued: batch } };
+  }
+  return { ok: false, scrapable: true, error: detailOf(res), result: { queued: batch } };
 }
 
 // Every post or picture URL on the tab that the adapter can scrape.
@@ -579,15 +669,20 @@ async function collectPage(tabId) {
 
 async function saveRawFile(url) {
   if (!url) return { ok: false, error: "No picture URL" };
+  await rememberOffline([url]);
   const res = await api("/extension/save-file", {
     method: "POST",
     body: JSON.stringify({ url }),
   });
   if (res.ok && res.data) {
+    await dropOffline([url]);
     noteJobStarted(res.data.status);
     return { ok: true, result: res.data };
   }
-  return { ok: false, error: detailOf(res) };
+  if (heldOffline(res)) {
+    return { ok: true, offline: true, result: { queued: [url] } };
+  }
+  return { ok: false, error: detailOf(res), result: { queued: [url] } };
 }
 
 async function runScrape(message) {
@@ -615,6 +710,8 @@ async function runScrape(message) {
 async function getStatus(pageUrl) {
   await loadConfig();
   const health = await api("/health");
+  if (health.ok) await flushOfflineQueue();
+  await readOfflineQueue();
   const scrape = health.ok ? await api("/scrape/status") : { ok: false };
   const site = pageUrl ? ScrapShared.siteFor(sites, pageUrl) : null;
   // Ask Chrome only for this tab's host — not CDN / wildcard siblings that kept Allow stuck.
@@ -626,6 +723,7 @@ async function getStatus(pageUrl) {
     scrapeEnabled,
     sites: sites.map((s) => s.name),
     job: scrape.ok ? scrape.data : null,
+    queue: offlineQueue.slice(),
     viewerUrl: VIEWER_URL,
     // True only for the active tab's site — hides the Allow button after that site is granted.
     hotkeys,

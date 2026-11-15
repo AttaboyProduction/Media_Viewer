@@ -20,6 +20,7 @@ frontend/dist/
 TODO.md
 scripts/_*.py
 MediaViewer.exe
+*.update-old
 
 # Real site adapters stay local / private; only example/ is tracked.
 adapters/*

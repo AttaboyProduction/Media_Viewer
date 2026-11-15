@@ -61,6 +61,10 @@
       .when input[type="time"] { flex: 1 1 0; font-size: 11px; padding: 3px 4px; }
       .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
       #filters { max-height: 360px; overflow-x: hidden; overflow-y: auto; }
+      details.queue { margin-top: 8px; }
+      details.queue summary { cursor: pointer; }
+      #queueList { margin: 6px 0 0; padding-left: 16px; max-height: 140px; overflow: auto; word-break: break-all; }
+      #queueList a { color: #fff; }
     </style>
   </head>
   <body>
@@ -73,6 +77,10 @@
     </div>
     <div id="pageText" class="muted"></div>
     <div id="hotkeyText" class="muted"></div>
+    <details id="queueBox" class="queue" open hidden>
+      <summary id="queueSummary">Queue</summary>
+      <ul id="queueList"></ul>
+    </details>
     <div id="filters" hidden>
       <label>Tags
         <input id="tags" type="text" placeholder="comma-separated, any site tag" />

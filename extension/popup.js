@@ -54,6 +54,7 @@ function render(status) {
     ? `Sites: ${status.sites.join(", ")}`
     : "No supported sites — install a site adapter with an extension block.";
 
+  renderQueue(status.queue || []);
   const job = status.job;
   if (job && (job.running || job.total > 0)) {
     const fraction = job.total > 0 ? `${job.processed}/${job.total}` : `${job.processed}`;
@@ -64,40 +65,72 @@ function render(status) {
   renderPage();
 }
 
+function renderQueue(urls) {
+  const box = $("queueBox");
+  const list = $("queueList");
+  if (!urls.length) {
+    box.hidden = true;
+    list.replaceChildren();
+    return;
+  }
+  box.hidden = false;
+  $("queueSummary").textContent = `Queue (${urls.length})`;
+  list.replaceChildren();
+  for (const url of urls) {
+    const li = document.createElement("li");
+    const link = document.createElement("a");
+    link.href = url;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = url;
+    li.append(link);
+    list.append(li);
+  }
+}
+
 function renderPage() {
   const actions = $("actions");
   const filters = $("filters");
   const text = $("pageText");
   const hotkey = $("hotkeyText");
   const ready = current && current.online && current.scrapeEnabled;
-  actions.hidden = true;
+  const onSite = !!(page && page.onSite);
+  actions.hidden = !onSite;
   filters.hidden = true;
-  hotkey.textContent = "";
-  $("downloadFile").hidden = true;
-  $("downloadPage").hidden = true;
+  hotkey.textContent = onSite ? "Shortcut keys: F = one file, P = whole page" : "";
+  $("downloadFile").hidden = !(onSite && page.scrapable);
+  $("downloadPage").hidden = !(onSite && !page.scrapable);
+  if (!onSite) {
+    text.textContent =
+      "This site isn't supported. Right-click a picture and choose Download this file (site not supported).";
+    return;
+  }
   if (!ready) {
-    text.textContent = current && current.online ? "Scraping is off in the app." : "Start the app to download.";
+    const offline = !(current && current.online);
+    text.textContent =
+      holdNotice ||
+      (offline
+        ? "The app is not running. Download still adds this page to the queue."
+        : "Scraping is off in the app. Download still adds this page to the queue.");
     return;
   }
-  if (!page || !page.onSite) {
-    text.textContent = "This site isn't supported. Right-click a picture and choose Download this file (site not supported).";
-    return;
-  }
-  actions.hidden = false;
-  hotkey.textContent = "Shortcut keys: F = one file, P = whole page";
-
   if (page.scrapable) {
-    $("downloadFile").hidden = false;
     text.textContent = holdNotice || page.url;
     return;
   }
-  $("downloadPage").hidden = false;
   filters.hidden = false;
   text.textContent = holdNotice || (page.siteName ? `${page.siteName} — filters apply to this site.` : "Filters apply to this site.");
 }
 
 async function note(result) {
-  if (result && result.ok && result.result) {
+  if (result && result.ok && result.offline) {
+    const n = (result.result && result.result.queued && result.result.queued.length) || 0;
+    setHold(
+      n
+        ? `Queued ${n}. They will download when MediaViewer is running.`
+        : "Queued. It will download when MediaViewer is running."
+    );
+  } else if (result && result.ok && result.result) {
     const queued = result.result.queued || [];
     const saved = result.result.already_saved || [];
     setHold(

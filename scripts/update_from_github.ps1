@@ -6,6 +6,43 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Copy-UpdateFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+    $leaf = Split-Path -Leaf $Destination
+    try {
+        Copy-Item -LiteralPath $Source -Destination $Destination -Force -ErrorAction Stop
+        return
+    }
+    catch {
+        $message = $_.Exception.Message
+        $locked = $message -match 'user-mapped section|being used by another process|cannot access the file'
+        if (-not $locked) {
+            throw ("Could not copy " + $leaf + ": " + $message)
+        }
+        Write-Host ("In use, replacing " + $leaf + "...")
+    }
+    # Overwriting a mapped file fails. Renaming it frees the name; the open
+    # program keeps the old bytes until it closes them.
+    $parent = Split-Path -Parent $Destination
+    $bakName = $leaf + ".update-old"
+    $bak = Join-Path $parent $bakName
+    if (Test-Path -LiteralPath $bak) {
+        Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue
+    }
+    try {
+        Rename-Item -LiteralPath $Destination -NewName $bakName -ErrorAction Stop
+    }
+    catch {
+        throw ("Could not replace " + $leaf + " because it is open in another program. Close it and run Update.bat again.")
+    }
+    Copy-Item -LiteralPath $Source -Destination $Destination -Force
+    Remove-Item -LiteralPath $bak -Force -ErrorAction SilentlyContinue
+}
+
 $Root = (Resolve-Path -LiteralPath $Root).Path
 $tmp = Join-Path $env:TEMP ("scrap_download_update_" + [guid]::NewGuid().ToString("n"))
 $zipPath = Join-Path $tmp "source.zip"
@@ -58,7 +95,7 @@ try {
             $global:LASTEXITCODE = 0
         }
         else {
-            Copy-Item -LiteralPath $_.FullName -Destination $dest -Force
+            Copy-UpdateFile -Source $_.FullName -Destination $dest
         }
     }
     Write-Host "Files updated."

@@ -53,8 +53,10 @@ exit /b 0
 
 :fail
 echo.
-echo ZIP update failed. For a private repo, download the ZIP while signed in
-echo through the GitHub website, or make the repo public.
+echo ZIP update failed.
+echo If the message above says a file is open, close it and run Update.bat again.
+echo If the download itself failed, a private repo needs a signed-in GitHub
+echo session, or the repo has to be public.
 echo.
 echo Update failed.
 pause

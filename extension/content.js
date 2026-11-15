@@ -98,7 +98,9 @@
             flash("MediaViewer is not available");
             return;
           }
-          if (result && result.ok) flash("Queued this file");
+          if (result && result.ok) {
+            flash(result.offline ? "Queued. Downloads when MediaViewer is running." : "Queued this file");
+          }
           else flash((result && result.error) || "No supported file there");
         });
         return;
@@ -111,7 +113,13 @@
         }
         if (result && result.ok) {
           const n = (result.result && result.result.queued && result.result.queued.length) || 0;
-          flash(n ? `Queued ${n} from this page` : "Added to the scrape queue");
+          flash(
+            result.offline
+              ? "Queued. Downloads when MediaViewer is running."
+              : n
+                ? `Queued ${n} from this page`
+                : "Added to the scrape queue"
+          );
         } else flash((result && result.error) || "No supported posts on this page");
       });
   }
