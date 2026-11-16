@@ -34,3 +34,9 @@ Failed Skipped retries continue to behave as retryable failures: `_complete_skip
 
 - Existing working tree had unrelated uncommitted UI/docs/extension changes before this task. I preserved them and did not stage those unrelated files.
 - The shell prints an existing startup warning, `Invoke-Expression: Missing '{' in configuration statement.`, before commands; tests still ran and passed.
+
+## Critical Finding Fix
+
+- Fixed `enqueue_discovered_urls` so URLs already accepted or pending in the current run are skipped before `scrape_leftovers.add_queue`.
+- Added `test_discovered_post_already_accepted_is_not_queued_again` to prove a re-discovered accepted URL does not grow `scrape_leftovers.queue_urls()` or change pending.
+- PASS: `.\.venv\Scripts\python.exe -m unittest tests.test_scrape_leftovers -v`

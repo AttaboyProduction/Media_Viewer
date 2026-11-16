@@ -195,6 +195,9 @@ def enqueue_discovered_urls(urls: list[str], *, site_id: str | None) -> list[str
     """Persist gallery finds into Queue to scrape before this job drains them."""
     from backend.app.services.scrape_leftovers import add_queue
 
+    with scrape_lock:
+        known_urls = scrape_status.accepted_urls | set(scrape_status.pending_urls)
+    urls = [url for url in urls if url not in known_urls]
     stored = add_queue(urls)
     if not stored:
         return []

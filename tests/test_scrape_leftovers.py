@@ -165,6 +165,31 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertEqual(pipeline.scrape_status.pending_urls, [url])
         self.assertEqual(pipeline.scrape_status.total, 1)
 
+    def test_discovered_post_already_accepted_is_not_queued_again(self) -> None:
+        """A re-discovered post accepted this run must not remain in Queue."""
+        url = "https://gallery.test/post/43"
+        with pipeline.scrape_lock:
+            pipeline.scrape_status.running = True
+            pipeline.scrape_status.kind = "scrape"
+            pipeline.scrape_status.queue_open = True
+            pipeline.scrape_status.site_id = "gallery"
+            pipeline.scrape_status.pending_urls = []
+            pipeline.scrape_status.accepted_urls = set()
+            pipeline.scrape_status.total = 0
+            pipeline.scrape_status.processed = 0
+
+        self.assertEqual(pipeline.enqueue_discovered_urls([url], site_id="gallery"), [url])
+        scrape_leftovers.forget(url)
+        with pipeline.scrape_lock:
+            pipeline.scrape_status.pending_urls = []
+            pending_before = list(pipeline.scrape_status.pending_urls)
+            total_before = pipeline.scrape_status.total
+
+        self.assertEqual(pipeline.enqueue_discovered_urls([url], site_id="gallery"), [])
+        self.assertEqual(scrape_leftovers.queue_urls(), [])
+        self.assertEqual(pipeline.scrape_status.pending_urls, pending_before)
+        self.assertEqual(pipeline.scrape_status.total, total_before)
+
     def test_complete_skip_on_retry_leaves_job_running(self) -> None:
         """A Skipped retry that fails again stays skipped without cancelling."""
         url = "https://gallery.test/post/7"
