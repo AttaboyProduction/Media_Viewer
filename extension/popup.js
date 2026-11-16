@@ -1,6 +1,12 @@
 const $ = (id) => document.getElementById(id);
 let current = null;
 let page = null;
+let listedUrl = "";
+
+const FLOPPY_SVG =
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">' +
+  '<path fill="currentColor" d="M4 4a2 2 0 0 1 2-2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4zm2 0v16h12V8h-4V4H6zm2 10h8v4H8v-4z"/>' +
+  "</svg>";
 
 function send(message) {
   const payload = typeof message === "string" ? { type: message } : message;
@@ -104,10 +110,12 @@ function renderPage() {
   $("downloadFile").hidden = !(onSite && page.scrapable);
   $("downloadPage").hidden = !(onSite && !page.scrapable);
   if (!onSite) {
-    text.textContent =
-      "This site isn't supported. Right-click a picture and choose Download this file (site not supported).";
+    text.textContent = holdNotice || "This site isn't supported. F saves the largest file.";
+    hotkey.textContent = "Shortcut key: F = largest file";
+    $("pageFiles").hidden = false;
     return;
   }
+  $("pageFiles").hidden = true;
   if (!ready) {
     const offline = !(current && current.online);
     text.textContent =
@@ -192,19 +200,77 @@ $("runFilters").addEventListener("click", async () => {
 });
 
 $("refresh").addEventListener("click", async () => {
-  const tab = await activeTab();
-  page = await send({ type: "describePage", url: (tab && tab.url) || "" });
-  render(await send("refresh"));
+  listedUrl = "";
+  await refreshAll();
 });
 $("viewer").addEventListener("click", () =>
   chrome.tabs.create({ url: (current && current.viewerUrl) || "http://127.0.0.1:8000/" })
 );
+
+function renderPageFiles(files) {
+  const list = $("pageFilesList");
+  const rows = Array.isArray(files) ? files : [];
+  $("pageFilesSummary").textContent = `Files on this page (${rows.length})`;
+  list.replaceChildren();
+  for (const item of rows) {
+    const li = document.createElement("li");
+    const thumb = document.createElement("span");
+    thumb.className = "file-thumb";
+    if (item.preview) {
+      const img = document.createElement("img");
+      img.alt = "";
+      img.src = item.preview;
+      thumb.append(img);
+    } else if (item.kind === "video") {
+      const video = document.createElement("video");
+      video.muted = true;
+      video.preload = "metadata";
+      video.playsInline = true;
+      video.src = `${item.url}#t=0.1`;
+      thumb.append(video);
+    }
+    const label = document.createElement("span");
+    label.className = "file-label";
+    label.title = item.url;
+    label.textContent = item.sizeText ? `${item.label} · ${item.sizeText}` : item.label;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "save-file";
+    button.title = "Download";
+    button.setAttribute("aria-label", `Download ${item.label}`);
+    button.innerHTML = FLOPPY_SVG;
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      await note(await send({ type: "saveRawFile", url: item.url }));
+      button.disabled = false;
+    });
+    li.append(thumb, label, button);
+    list.append(li);
+  }
+}
+
+async function loadPageFiles(tab) {
+  if (!tab || typeof tab.id !== "number") return;
+  $("pageFilesSummary").textContent = "Files on this page";
+  const result = await send({ type: "listPageMedia", tabId: tab.id });
+  if (!result || result.error) {
+    $("pageFilesSummary").textContent = "Files on this page (0)";
+    $("pageFilesList").replaceChildren();
+    return;
+  }
+  renderPageFiles(result.files || []);
+}
 
 async function refreshAll() {
   const tab = await activeTab();
   const url = (tab && tab.url) || "";
   page = await send({ type: "describePage", url });
   render(await send({ type: "getStatus", url }));
+  if (!(page && page.onSite) && tab && url && url !== listedUrl) {
+    listedUrl = url;
+    await loadPageFiles(tab);
+  }
+  if (page && page.onSite) listedUrl = "";
 }
 
 refreshAll();

@@ -8,6 +8,12 @@
   let hoverUrl = "";
   let lastHotkeyAt = 0;
 
+  chrome.runtime.sendMessage({ type: "describePage", url: location.href }, (desc) => {
+    if (desc && desc.onSite && document.documentElement) {
+      document.documentElement.dataset.scrapHotkeys = "site";
+    }
+  });
+
   function absUrl(value) {
     if (!value || typeof value !== "string") return "";
     try {
@@ -98,6 +104,7 @@
             flash("MediaViewer is not available");
             return;
           }
+          if (result && result.ignored) return;
           if (result && result.ok) {
             flash(result.offline ? "Queued. Downloads when MediaViewer is running." : "Queued this file");
           }
@@ -111,6 +118,7 @@
           flash("MediaViewer is not available");
           return;
         }
+        if (result && result.ignored) return;
         if (result && result.ok) {
           const n = (result.result && result.result.queued && result.result.queued.length) || 0;
           flash(
@@ -130,6 +138,9 @@
     const pressedF = isHotkey(event, "KeyF", "f");
     const pressedP = isHotkey(event, "KeyP", "p");
     if (!pressedF && !pressedP) return;
+    if (pressedP && (!document.documentElement || document.documentElement.dataset.scrapHotkeys !== "site")) {
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();

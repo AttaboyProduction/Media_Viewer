@@ -13,6 +13,11 @@
       if (event.code === "KeyF" || key === "f") which = "f";
       else if (event.code === "KeyP" || key === "p") which = "p";
       else return;
+      // P stays a gallery shortcut. F also saves the largest file off a supported site.
+      if (which === "p") {
+        const root = document.documentElement;
+        if (!root || root.dataset.scrapHotkeys !== "site") return;
+      }
       const tag = event.target && event.target.tagName ? event.target.tagName.toLowerCase() : "";
       if (tag === "textarea" || tag === "select") return;
       if (tag === "input") {

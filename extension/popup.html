@@ -65,6 +65,52 @@
       details.queue summary { cursor: pointer; }
       #queueList { margin: 6px 0 0; padding-left: 16px; max-height: 140px; overflow: auto; word-break: break-all; }
       #queueList a { color: #fff; }
+      #pageFilesList {
+        list-style: none;
+        margin: 6px 0 0;
+        padding: 0;
+        max-height: 180px;
+        overflow: auto;
+      }
+      #pageFilesList li {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 2px 0;
+      }
+      #pageFilesList .file-thumb {
+        flex: none;
+        width: 36px;
+        height: 36px;
+        border-radius: 4px;
+        overflow: hidden;
+        background: #101013;
+        border: 1px solid #3f3f46;
+      }
+      #pageFilesList .file-thumb img,
+      #pageFilesList .file-thumb video {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        pointer-events: none;
+      }
+      #pageFilesList .file-label {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      button.save-file {
+        flex: none;
+        width: 26px;
+        height: 26px;
+        padding: 4px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
     </style>
   </head>
   <body>
@@ -77,6 +123,10 @@
     </div>
     <div id="pageText" class="muted"></div>
     <div id="hotkeyText" class="muted"></div>
+    <details id="pageFiles" class="queue" hidden>
+      <summary id="pageFilesSummary">Files on this page</summary>
+      <ul id="pageFilesList"></ul>
+    </details>
     <details id="queueBox" class="queue" hidden>
       <summary id="queueSummary">Queue</summary>
       <ul id="queueList"></ul>

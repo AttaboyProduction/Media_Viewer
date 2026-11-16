@@ -1,4 +1,4 @@
-importScripts("shared.js", "hotkeyPermission.js", "iconProgress.js");
+importScripts("shared.js", "hotkeyPermission.js", "iconProgress.js", "pageMedia.js");
 
 const API = "http://127.0.0.1:8000/api";
 const VIEWER_URL = "http://127.0.0.1:8000/";
@@ -626,38 +626,36 @@ async function injectHotkeysIntoTab(tabId) {
   }
 }
 
-async function injectHotkeysIntoOpenTabs(matches) {
+async function injectHotkeysIntoOpenTabs() {
   let tabs = [];
   try {
     tabs = await chrome.tabs.query({});
   } catch {
     return;
   }
-  const rules = matches.map((pattern) => ScrapShared.matchPatternToRegExp(pattern)).filter(Boolean);
   await Promise.all(
     tabs.map(async (tab) => {
-      if (typeof tab.id !== "number" || !tab.url) return;
-      const cleaned = ScrapShared.cleanPageUrl(tab.url) || tab.url;
-      const byPattern = rules.some((re) => re.test(cleaned) || re.test(tab.url));
-      if (!byPattern && !ScrapShared.siteFor(sites, tab.url)) return;
+      if (typeof tab.id !== "number" || !tab.url || !/^https?:/i.test(tab.url)) return;
       await injectHotkeysIntoTab(tab.id);
     })
   );
 }
 
 async function setupHotkeys() {
-  const matches = pageMatchOrigins();
+  const anyPage = ["http://*/*", "https://*/*"];
   try {
-    await chrome.scripting.unregisterContentScripts({ ids: ["scrap-hotkeys", "scrap-hotkeys-main"] });
+    await chrome.scripting.unregisterContentScripts({
+      ids: ["scrap-hotkeys", "scrap-hotkeys-main", "scrap-hotkeys-any", "scrap-hotkeys-any-main"],
+    });
   } catch {
     // Not registered yet.
   }
-  if (!matches.length) return;
   try {
+    // F works on every page. P still only acts on a supported site (see content.js).
     await chrome.scripting.registerContentScripts([
       {
-        id: "scrap-hotkeys-main",
-        matches,
+        id: "scrap-hotkeys-any-main",
+        matches: anyPage,
         js: ["content-main.js"],
         runAt: "document_start",
         allFrames: true,
@@ -665,8 +663,8 @@ async function setupHotkeys() {
         world: "MAIN",
       },
       {
-        id: "scrap-hotkeys",
-        matches,
+        id: "scrap-hotkeys-any",
+        matches: anyPage,
         js: ["content.js"],
         runAt: "document_start",
         allFrames: true,
@@ -677,7 +675,7 @@ async function setupHotkeys() {
     console.warn("MediaViewer: hotkey script", err);
   }
   // Pages already open need an explicit inject; registration only affects new loads.
-  await injectHotkeysIntoOpenTabs(matches);
+  await injectHotkeysIntoOpenTabs();
 }
 
 function rememberPendingOrigins(origins) {
@@ -759,6 +757,69 @@ async function collectPage(tabId) {
     return { ok: false, scrapable: true, error: "Couldn't read this page" };
   }
   return sendUrls(found);
+}
+
+const PAGE_MEDIA_CAP = 50;
+
+async function fileByteSize(url) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 4000);
+  try {
+    const res = await fetch(url, { method: "HEAD", signal: ctrl.signal });
+    const raw = res.headers.get("content-length");
+    const n = raw == null ? NaN : Number(raw);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function mapPool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      out[index] = await fn(items[index], index);
+    }
+  }
+  const workers = Math.min(limit, items.length);
+  await Promise.all(Array.from({ length: workers }, () => worker()));
+  return out;
+}
+
+async function listPageMedia(tabId) {
+  if (typeof tabId !== "number") return [];
+  let raw = [];
+  try {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["pageMedia.js"] });
+    const injected = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => (globalThis.PageMedia ? globalThis.PageMedia.collectFromDocument() : []),
+    });
+    raw = (injected && injected[0] && injected[0].result) || [];
+  } catch {
+    return [];
+  }
+  const capped = raw.slice(0, PAGE_MEDIA_CAP);
+  const sized = await mapPool(capped, 6, async (item) => ({
+    url: item.url,
+    order: item.order,
+    preview: item.preview || "",
+    kind: item.kind || "image",
+    bytes: await fileByteSize(item.url),
+  }));
+  return globalThis.PageMedia.sortBySize(sized).map((item) => ({
+    url: item.url,
+    bytes: item.bytes,
+    preview: item.preview || "",
+    kind: item.kind || "image",
+    label: globalThis.PageMedia.fileLabel(item.url),
+    sizeText: globalThis.PageMedia.formatBytes(item.bytes),
+  }));
 }
 
 async function saveRawFile(url) {
@@ -852,10 +913,9 @@ chrome.runtime.onStartup.addListener(() => refreshConfig());
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!(changeInfo.url || changeInfo.status === "complete")) return;
   await paintTab(tabId, tab.url);
-  if (changeInfo.status === "complete" && tab.url) {
+  if (changeInfo.status === "complete" && tab.url && /^https?:/i.test(tab.url)) {
     await loadConfig();
-    const site = ScrapShared.siteFor(sites, tab.url);
-    if (site) await injectHotkeysIntoTab(tabId);
+    await injectHotkeysIntoTab(tabId);
   }
   const current = await activeTab();
   if (current && current.id === tabId) await setupMenu();
@@ -866,8 +926,7 @@ chrome.tabs.onActivated.addListener(async ({ tabId }) => {
     const tab = await chrome.tabs.get(tabId);
     await paintTab(tabId, tab.url);
     await loadConfig();
-    const site = tab.url ? ScrapShared.siteFor(sites, tab.url) : null;
-    if (site) await injectHotkeysIntoTab(tabId);
+    if (tab.url && /^https?:/i.test(tab.url)) await injectHotkeysIntoTab(tabId);
   } catch {
     // Tab gone.
   }
@@ -963,12 +1022,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     hotkeyFile: async () => {
       await loadConfig();
       const page = message.pageUrl || (sender.tab && sender.tab.url) || "";
+      if (!ScrapShared.siteFor(sites, page)) {
+        const tabId = sender.tab && sender.tab.id;
+        if (typeof tabId !== "number") return { ok: false, error: "No tab" };
+        const files = await listPageMedia(tabId);
+        if (!files.length) return { ok: false, error: "No media files on this page" };
+        return saveRawFile(files[0].url);
+      }
       const target = ScrapShared.chooseFileHotkey(sites, page, message.hint || "");
       return sendUrls(target ? [target] : []);
     },
     hotkeyPage: async () => {
       await loadConfig();
       const page = (sender.tab && sender.tab.url) || "";
+      if (!ScrapShared.siteFor(sites, page)) return { ok: false, ignored: true };
       const one = ScrapShared.scrapableUrl(sites, page);
       if (one) return sendUrls([one]);
       const tabId = sender.tab && sender.tab.id;
@@ -1011,6 +1078,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       };
     },
     saveRawFile: () => saveRawFile(message.url),
+    listPageMedia: async () => {
+      const tabId = typeof message.tabId === "number" ? message.tabId : sender.tab && sender.tab.id;
+      return { ok: true, files: await listPageMedia(tabId) };
+    },
     runScrape: () => runScrape(message),
     refresh: async () => {
       await refreshConfig();
