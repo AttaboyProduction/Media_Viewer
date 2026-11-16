@@ -56,6 +56,8 @@ _DEFAULTS: dict = {
     "scrape_downloads_page_size": 18,
     # Skip a new download when its picture or video frames match an earlier file (identical band).
     "scrape_skip_identical": False,
+    # On: extension links wait in Queue to scrape until Run scrape. Off (default) starts them immediately.
+    "never_auto_run_scrape": False,
     # auto = Obscura when installed, otherwise Playwright Chromium.
     "scrape_browser": "auto",
     # Missing key uses the metered-connection default (see _normalize_settings), then it is saved.
@@ -210,6 +212,7 @@ def _normalize_settings(data: dict) -> dict:
     merged["media_detail_tags_collapsed"] = bool(merged.get("media_detail_tags_collapsed", True))
     merged["scrape_downloads_show_all"] = bool(merged.get("scrape_downloads_show_all", False))
     merged["scrape_skip_identical"] = bool(merged.get("scrape_skip_identical", False))
+    merged["never_auto_run_scrape"] = bool(merged.get("never_auto_run_scrape", False))
     scrape_dl_size = _clamp_int(merged.get("scrape_downloads_page_size", 18), 18, 90, 18)
     merged["scrape_downloads_page_size"] = (
         scrape_dl_size if scrape_dl_size in _SCRAPE_DOWNLOAD_PAGE_SIZES else 18

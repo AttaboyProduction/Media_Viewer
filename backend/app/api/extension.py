@@ -128,6 +128,13 @@ def post_extension_saved(payload: ExtensionUrlsIn) -> ExtensionSavedOut:
     return ExtensionSavedOut(saved=saved_post_urls(payload.urls))
 
 
+def never_auto_run_scrape() -> bool:
+    """True when extension links wait for Run scrape instead of starting immediately."""
+    from backend.app.services.app_settings import load_app_settings
+
+    return bool(load_app_settings().get("never_auto_run_scrape", False))
+
+
 @router.post(
     "/enqueue",
     response_model=ExtensionEnqueueOut,

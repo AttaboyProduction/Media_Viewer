@@ -72,6 +72,8 @@ export interface AppSettings {
   scrape_downloads_page_size: number
   /** Do not download a new post when it is identical to a file already in the library. */
   scrape_skip_identical: boolean
+  /** Extension links wait until Run scrape. Off starts them as soon as they arrive. */
+  never_auto_run_scrape: boolean
   /** auto = Obscura when installed, otherwise Playwright Chromium. */
   scrape_browser: 'auto' | 'obscura' | 'playwright'
   /** Installed scrape browsers. Default follows Windows metered-connection status. */
@@ -141,6 +143,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   scrape_downloads_show_all: false,
   scrape_downloads_page_size: 18,
   scrape_skip_identical: false,
+  never_auto_run_scrape: false,
   scrape_browser: 'auto',
   check_browser_updates_on_start: true,
   content_hide_rules: [],

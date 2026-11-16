@@ -148,6 +148,25 @@ def _idle_status() -> None:
     pipeline.scrape_status.job_id = 0
 
 
+def _extension_enqueue_routes(app):
+    """Mounted POST /api/extension/enqueue handlers.
+
+    This FastAPI keeps included routers as ``_IncludedRouter`` entries, so the
+    path lives on each effective route rather than on ``app.routes`` itself.
+    """
+    found = []
+    for route in app.routes:
+        if getattr(route, "path", None) == "/api/extension/enqueue":
+            found.append(route)
+        effective = getattr(route, "effective_candidates", None)
+        if not callable(effective):
+            continue
+        for ctx in effective():
+            if getattr(ctx, "path", None) == "/api/extension/enqueue":
+                found.append(ctx)
+    return found
+
+
 class ExtensionApiTests(unittest.TestCase):
     def setUp(self) -> None:
         catalog = {
@@ -164,6 +183,8 @@ class ExtensionApiTests(unittest.TestCase):
         }
         self._patch = patch.dict(sites.KNOWN_SITES, catalog, clear=True)
         self._patch.start()
+        self._auto = patch.object(extension_api, "never_auto_run_scrape", return_value=False)
+        self._auto.start()
         self._saved = patch.object(
             extension_api,
             "_pending_or_saved",
@@ -173,9 +194,29 @@ class ExtensionApiTests(unittest.TestCase):
         _idle_status()
 
     def tearDown(self) -> None:
+        self._auto.stop()
         self._saved.stop()
         self._patch.stop()
         _idle_status()
+
+    def test_never_auto_run_defaults_off(self) -> None:
+        # setUp replaces the helper; this case needs the real fallback.
+        self._auto.stop()
+        try:
+            with patch(
+                "backend.app.services.app_settings.load_app_settings",
+                return_value={},
+            ):
+                self.assertFalse(extension_api.never_auto_run_scrape())
+        finally:
+            self._auto.start()
+
+    def test_enqueue_route_points_at_post_extension_enqueue(self) -> None:
+        from backend.app.main import app
+
+        routes = _extension_enqueue_routes(app)
+        self.assertTrue(routes)
+        self.assertEqual(routes[0].endpoint.__name__, "post_extension_enqueue")
 
     def test_post_page_drops_query_and_starts_url_filter(self) -> None:
         captured: dict = {}
