@@ -133,6 +133,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
   const [excludeTags, setExcludeTags] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [skippedOpen, setSkippedOpen] = useState(false)
+  const [queueOpen, setQueueOpen] = useState(false)
   const [cancelledOpen, setCancelledOpen] = useState(false)
   const [localFolders, setLocalFolders] = useState<string[]>([])
   const [localFiles, setLocalFiles] = useState<string[]>([])
@@ -381,6 +382,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
 
   const cancelledUrls = status?.cancelled_urls ?? []
   const skippedItems = (status?.skipped_items ?? []).filter((item) => item.reason !== 'cancelled')
+  const queueUrls = status?.queue_urls ?? []
 
   return (
     <div className="panel">
@@ -848,7 +850,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
       </div>
 
       {error && <div className="error">{error}</div>}
-      {status?.ran_this_session && (
+      {status && (status.ran_this_session || skippedItems.length > 0 || queueUrls.length > 0) && (
         <div className="scrape-progress">
           <div className="progress-bar">
             <div className="progress-bar-fill" style={{ width: `${percent}%` }} />
@@ -881,7 +883,10 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
             <details
               className="scrape-skipped"
               open={cancelledOpen}
-              onToggle={(e) => setCancelledOpen((e.target as HTMLDetailsElement).open)}
+              onToggle={(e) => {
+                if (e.target !== e.currentTarget) return
+                setCancelledOpen((e.currentTarget as HTMLDetailsElement).open)
+              }}
             >
               <summary>
                 Cancelled ({cancelledUrls.length})
@@ -907,7 +912,10 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
             <details
               className="scrape-skipped"
               open={skippedOpen}
-              onToggle={(e) => setSkippedOpen((e.target as HTMLDetailsElement).open)}
+              onToggle={(e) => {
+                if (e.target !== e.currentTarget) return
+                setSkippedOpen((e.currentTarget as HTMLDetailsElement).open)
+              }}
             >
               <summary>
                 Skipped ({skippedItems.length})
@@ -925,11 +933,41 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                       )}
                       <span className="scrape-skipped-reason">{item.reason}</span>
                       {item.detail ? (
-                        <details className="scrape-skipped-error">
+                        <details
+                          className="scrape-skipped-error"
+                          onToggle={(e) => e.stopPropagation()}
+                        >
                           <summary>Error</summary>
                           <pre>{item.detail}</pre>
                         </details>
                       ) : null}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </details>
+          )}
+          {queueUrls.length > 0 && (
+            <details
+              className="scrape-skipped"
+              open={queueOpen}
+              onToggle={(e) => {
+                if (e.target !== e.currentTarget) return
+                setQueueOpen((e.currentTarget as HTMLDetailsElement).open)
+              }}
+            >
+              <summary>Queue to scrape ({queueUrls.length})</summary>
+              {queueOpen && (
+                <ul className="scrape-skipped-list">
+                  {queueUrls.map((url) => (
+                    <li key={url}>
+                      {url.startsWith('http') ? (
+                        <a href={url} target="_blank" rel="noreferrer">
+                          {url}
+                        </a>
+                      ) : (
+                        <span title={url}>{url}</span>
+                      )}
                     </li>
                   ))}
                 </ul>

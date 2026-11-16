@@ -56,6 +56,16 @@ def on_startup() -> None:
     from backend.app.services.windows_startup import sync_launch_on_startup
 
     sync_launch_on_startup(bool(load_app_settings().get("launch_on_startup")))
+    from backend.app.services.scrape_leftovers import restore_into_status
+
+    restore_into_status()
+
+
+@app.on_event("shutdown")
+def on_shutdown() -> None:
+    from backend.app.services.scrape_leftovers import persist_interrupted
+
+    persist_interrupted()
 
 
 @app.get("/api/health")

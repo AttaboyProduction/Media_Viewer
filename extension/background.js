@@ -172,6 +172,10 @@ async function settleQueuedPosts() {
   if (queuedPostUrls.size) await refreshSavedPosts([...queuedPostUrls]);
   await readOfflineQueue();
   const waiting = new Set(offlineQueue.map((url) => libraryKey(url) || url));
+  const status = await api("/scrape/status");
+  if (status.ok && status.data) {
+    for (const url of status.data.queue_urls || []) waiting.add(libraryKey(url) || url);
+  }
   let changed = false;
   for (const url of [...queuedPostUrls]) {
     if (savedPostUrls.has(url) || !waiting.has(url)) {
@@ -709,7 +713,7 @@ async function sendUrls(urls) {
   });
   if (res.ok && res.data) {
     await dropOffline(batch);
-    noteJobStarted(res.data.status);
+    if (res.data.started || res.data.appended) noteJobStarted(res.data.status);
     const out = { ok: true, scrapable: true, result: res.data };
     markQueued(queuedUrlsFrom(out, batch));
     return out;
@@ -766,7 +770,7 @@ async function saveRawFile(url) {
   });
   if (res.ok && res.data) {
     await dropOffline([url]);
-    noteJobStarted(res.data.status);
+    if (res.data.started || res.data.appended) noteJobStarted(res.data.status);
     const out = { ok: true, result: res.data };
     markQueued(queuedUrlsFrom(out, [url]));
     return out;

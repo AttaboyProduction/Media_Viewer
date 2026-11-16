@@ -28,6 +28,7 @@ from backend.scraper.job import compile_scrape_job
 from backend.scraper.pipeline import (
     _release_queue,
     abandon_running_job,
+    append_leftover_urls,
     begin_scrape_queue,
     run_job,
     scrape_lock,
@@ -67,6 +68,9 @@ def _session_response() -> SessionSettingsOut:
 
 
 def _status_out() -> ScrapeStatusOut:
+    from backend.app.services.scrape_leftovers import queue_urls
+
+    scrape_status.queue_urls = queue_urls()
     return ScrapeStatusOut(
         running=scrape_status.running,
         total=scrape_status.total,
@@ -83,6 +87,7 @@ def _status_out() -> ScrapeStatusOut:
             for item in scrape_status.skipped_items
         ],
         cancelled_urls=list(scrape_status.cancelled_urls),
+        queue_urls=list(scrape_status.queue_urls),
         hash_backfill_running=bool(backfill_status["running"]),
         hash_backfill_total=int(backfill_status["total"]),
         hash_backfill_done=int(backfill_status["done"]),
@@ -157,17 +162,70 @@ def patch_scrape_session(payload: SessionSettingsPatch) -> SessionSettingsOut:
     return _session_response()
 
 
+def _filters_have_work(payload: ScrapeRunRequest) -> bool:
+    """True when the form asked for a gallery, tags, dates, or URL list."""
+    for item in payload.filters:
+        value = (item.value or "").strip()
+        if item.type == "media_type" and value in {"", "all"}:
+            continue
+        if item.type == "date_range" and value.replace(".", "").strip() == "":
+            continue
+        if value:
+            return True
+    return any((tag or "").strip() for tag in payload.exclude_tags)
+
+
+def _with_leftovers(
+    payload: ScrapeRunRequest, *, continue_counts: bool
+) -> tuple[ScrapeRunRequest, bool, list[str], list[str]]:
+    """Attach stored unfinished URLs and the extension queue.
+
+    With an empty form, only those URLs run. A gallery limit must not turn two
+    retries into a new listing that pushes processed past total.
+    """
+    from backend.app.schemas import ScrapeFilterIn
+    from backend.app.services.scrape_leftovers import queue_urls, unfinished_items
+
+    retries = [item["url"] for item in unfinished_items()]
+    retry_keys = set(retries)
+    queued = [url for url in queue_urls() if url not in retry_keys]
+    if not retries and not queued:
+        return payload, continue_counts, [], []
+    keep = continue_counts or scrape_status.ran_this_session
+    if not _filters_have_work(payload):
+        ordered = list(dict.fromkeys(retries + queued))
+        payload = payload.model_copy(
+            update={
+                "filters": [ScrapeFilterIn(type="url", value="\n".join(ordered))],
+                "limit": 0,
+                "exclude_tags": [],
+            }
+        )
+        return payload, keep, retries, []
+    return payload, keep, retries, retries + queued
+
+
 def start_scrape_run(
-    payload: ScrapeRunRequest, before_start=None, *, continue_counts: bool = False
+    payload: ScrapeRunRequest,
+    before_start=None,
+    *,
+    continue_counts: bool = False,
+    include_leftovers: bool = False,
 ) -> ScrapeStatusOut:
     """Start a scrape job in the background (409 if one is running).
 
     ``before_start`` runs under the scrape lock once the job is known to start
     (e.g. the extension switching the session Source to the post's site).
     """
+    extra: list[str] = []
+    retries: list[str] = []
     with scrape_lock:
         if scrape_status.running:
             raise HTTPException(status_code=409, detail="Scrape already running")
+        if include_leftovers:
+            payload, continue_counts, retries, extra = _with_leftovers(
+                payload, continue_counts=continue_counts
+            )
         if before_start is not None:
             before_start()
         try:
@@ -180,7 +238,19 @@ def start_scrape_run(
         scrape_status.cancel = False
         scrape_status.message = "Queued"
         site = get_selected_site()
-        begin_scrape_queue(job, site["id"] if site else None, continue_counts=continue_counts)
+        begin_scrape_queue(
+            job,
+            site["id"] if site else None,
+            continue_counts=continue_counts,
+            retry_urls=set(retries),
+        )
+        if extra:
+            append_leftover_urls(extra, set(retries))
+        elif retries:
+            scrape_status.leftover_urls.update(retries)
+            scrape_status.leftover_urls.update(
+                url for url in scrape_status.pending_urls if url not in scrape_status.retry_urls
+            )
         thread = threading.Thread(target=_start_job, args=(payload, job_id), daemon=True)
         thread.start()
     return _status_out()
@@ -188,7 +258,7 @@ def start_scrape_run(
 
 @router.post("/run", response_model=ScrapeStatusOut, dependencies=[Depends(require_scrape_page)])
 def post_scrape_run(payload: ScrapeRunRequest) -> ScrapeStatusOut:
-    return start_scrape_run(payload)
+    return start_scrape_run(payload, include_leftovers=True)
 
 
 @router.post(

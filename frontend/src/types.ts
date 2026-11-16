@@ -152,6 +152,7 @@ export interface ScrapeStatus {
   current_url: string | null
   skipped_items: ScrapeSkippedItem[]
   cancelled_urls: string[]
+  queue_urls: string[]
   hash_backfill_running: boolean
   hash_backfill_total: number
   hash_backfill_done: number

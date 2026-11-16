@@ -462,6 +462,19 @@ export default function AppSettingsPage() {
               {!settings.hide_scrape_page && (
                 <>
                   <SettingsOption
+                    label="Never auto-run scrape"
+                    hint="Extension downloads wait in Queue to scrape until you press Run scrape. Turn this off to start downloading as soon as a link arrives."
+                  >
+                    <label className="settings-checkbox">
+                      <input
+                        type="checkbox"
+                        checked={settings.never_auto_run_scrape}
+                        onChange={(e) => save({ never_auto_run_scrape: e.target.checked })}
+                      />
+                      Never auto-run scrape
+                    </label>
+                  </SettingsOption>
+                  <SettingsOption
                     label="Skip identical files"
                     hint="A new post that matches a library file in the identical band is not downloaded. Its tags and URL are added to the kept file. Similar files are still downloaded."
                   >

@@ -233,6 +233,7 @@ class ScrapeStatusOut(BaseModel):
     current_url: str | None = None
     skipped_items: list[ScrapeSkippedItemOut] = Field(default_factory=list)
     cancelled_urls: list[str] = Field(default_factory=list)
+    queue_urls: list[str] = Field(default_factory=list)
     hash_backfill_running: bool = False
     hash_backfill_total: int = 0
     hash_backfill_done: int = 0
