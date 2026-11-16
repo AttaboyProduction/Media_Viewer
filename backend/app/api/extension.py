@@ -157,6 +157,18 @@ def post_extension_enqueue(payload: ExtensionUrlsIn) -> ExtensionEnqueueOut:
             already_saved=already_saved,
             rejected=rejected,
         )
+    from backend.app.services.scrape_leftovers import add_queue
+
+    add_queue(todo)
+    if never_auto_run_scrape():
+        return ExtensionEnqueueOut(
+            started=False,
+            site_id=site_id,
+            queued=todo,
+            already_saved=already_saved,
+            rejected=rejected,
+            status=_status_out(),
+        )
     added = append_scrape_urls(todo, site_id)
     if added is not None:
         return ExtensionEnqueueOut(
@@ -237,6 +249,11 @@ def post_extension_save_file(payload: ExtensionFileIn) -> ExtensionEnqueueOut:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise HTTPException(status_code=400, detail="Need an http(s) file URL")
+    if never_auto_run_scrape():
+        from backend.app.services.scrape_leftovers import add_queue
+
+        add_queue([url])
+        return ExtensionEnqueueOut(started=False, queued=[url], status=_status_out())
     mode = begin_remote_download(url)
     if mode == "busy":
         raise HTTPException(status_code=409, detail="Scrape already running")

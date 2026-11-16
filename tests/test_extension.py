@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
 from backend.app.api import extension as extension_api
+from backend.app.services import scrape_leftovers
 from backend.app.schemas import ExtensionFileIn, ExtensionScrapeIn, ExtensionUrlsIn, ScrapeStatusOut
 from backend.scraper import adapter_loader, pipeline, sites
 from backend.scraper.job import ScrapeJob
@@ -128,6 +131,17 @@ class ResolveExtensionUrlTests(unittest.TestCase):
                 self.assertIsNone(sites.resolve_extension_url(url))
 
 
+_LEFTOVER_DIR = tempfile.TemporaryDirectory()
+
+
+def setUpModule() -> None:
+    scrape_leftovers.leftovers_path = lambda: Path(_LEFTOVER_DIR.name) / "scrape_leftovers.json"
+
+
+def tearDownModule() -> None:
+    _LEFTOVER_DIR.cleanup()
+
+
 def _idle_status() -> None:
     pipeline.scrape_status.running = False
     pipeline.scrape_status.queue_open = False
@@ -145,7 +159,14 @@ def _idle_status() -> None:
     pipeline.scrape_status.errors = []
     pipeline.scrape_status.skipped_items = []
     pipeline.scrape_status.cancelled_urls = []
+    pipeline.scrape_status.queue_urls = []
+    pipeline.scrape_status.retry_urls = set()
+    pipeline.scrape_status.counted_urls = set()
+    pipeline.scrape_status.leftover_urls = set()
     pipeline.scrape_status.job_id = 0
+    path = scrape_leftovers.leftovers_path()
+    if path.is_file():
+        path.unlink()
 
 
 def _extension_enqueue_routes(app):
@@ -246,6 +267,7 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(out.rejected, ["javascript:alert(1)"])
         self.assertEqual(captured["run"].filters[0].value, "https://gallery.test/post/4776344")
         self.assertEqual(captured["run"].limit, 0)
+        self.assertEqual(scrape_leftovers.queue_urls(), ["https://gallery.test/post/4776344"])
 
     def test_cdn_page_is_queued_as_the_post(self) -> None:
         captured: dict = {}
@@ -351,6 +373,32 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(out.already_saved, ["https://gallery.test/post/1"])
         self.assertEqual(out.queued, [])
 
+    def test_never_auto_run_keeps_the_link_without_starting(self) -> None:
+        with (
+            patch.object(extension_api, "never_auto_run_scrape", return_value=True),
+            patch.object(extension_api, "start_scrape_run") as start,
+        ):
+            out = extension_api.post_extension_enqueue(
+                ExtensionUrlsIn(urls=["https://gallery.test/post/9"])
+            )
+        start.assert_not_called()
+        self.assertFalse(out.started)
+        self.assertFalse(out.appended)
+        self.assertEqual(out.queued, ["https://gallery.test/post/9"])
+        self.assertEqual(scrape_leftovers.queue_urls(), ["https://gallery.test/post/9"])
+
+    def test_never_auto_run_keeps_a_raw_file_without_starting(self) -> None:
+        with patch.object(extension_api, "never_auto_run_scrape", return_value=True):
+            with patch.object(pipeline, "begin_remote_download") as begin:
+                out = extension_api.post_extension_save_file(
+                    ExtensionFileIn(url="https://cdn.example/a.jpg")
+                )
+        begin.assert_not_called()
+        self.assertFalse(out.started)
+        self.assertFalse(out.appended)
+        self.assertEqual(out.queued, ["https://cdn.example/a.jpg"])
+        self.assertEqual(scrape_leftovers.queue_urls(), ["https://cdn.example/a.jpg"])
+
     def test_enqueue_after_done_asks_to_continue_counts(self) -> None:
         captured: dict = {}
 
@@ -389,6 +437,10 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertTrue(out.appended)
         self.assertFalse(out.started)
         self.assertEqual(out.queued, ["https://gallery.test/post/9"])
+        self.assertEqual(
+            scrape_leftovers.queue_urls(),
+            ["https://gallery.test/post/9", "https://gallery.test/post/1"],
+        )
         self.assertEqual(pipeline.scrape_status.total, 3)
         self.assertEqual(pipeline.scrape_status.pending_urls, ["https://gallery.test/post/9"])
 
