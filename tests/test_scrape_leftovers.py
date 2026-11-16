@@ -5,8 +5,10 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from backend.app.api.scrape import _with_leftovers
+from backend.app.api import scrape as scrape_api
 from backend.app.schemas import ScrapeRunRequest
 from backend.app.services import scrape_leftovers
 from backend.scraper import pipeline
@@ -101,11 +103,12 @@ class ScrapeLeftoverTests(unittest.TestCase):
         scrape_leftovers.remember_unfinished(first, "error", "a")
         scrape_leftovers.remember_unfinished(second, "error", "b")
 
-        payload, keep, retries, extra = _with_leftovers(
+        payload, keep, retries, extra, remote = _with_leftovers(
             ScrapeRunRequest(filters=[], limit=15), continue_counts=False
         )
         self.assertTrue(keep)
         self.assertEqual(extra, [])
+        self.assertEqual(remote, [])
         self.assertEqual(payload.limit, 0)
         self.assertIn(first, payload.filters[0].value)
 
@@ -144,6 +147,23 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertEqual(pipeline.scrape_status.total, 16)
         self.assertEqual(pipeline.scrape_status.processed, 15)
         self.assertEqual(pipeline.scrape_status.pending_urls, [done, fresh])
+
+    def test_raw_file_queue_drains_through_remote_download(self) -> None:
+        url = "https://cdn.example/a.jpg"
+        scrape_leftovers.add_queue([url])
+
+        with (
+            patch.object(scrape_api, "compile_scrape_job") as compile_job,
+            patch.object(pipeline, "begin_remote_download", return_value="started") as begin,
+        ):
+            status = scrape_api.start_scrape_run(
+                ScrapeRunRequest(filters=[], limit=0),
+                include_leftovers=True,
+            )
+
+        compile_job.assert_not_called()
+        begin.assert_called_once_with(url)
+        self.assertEqual(status.queue_urls, [url])
 
     def test_discovered_post_is_stored_in_queue_before_download(self) -> None:
         """Listing a post must hit Queue to scrape before the pending job drains."""

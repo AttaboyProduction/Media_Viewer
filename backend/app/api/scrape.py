@@ -110,10 +110,14 @@ def _recent_ids_newest_first(db: Session) -> list[int]:
     return pruned
 
 
-def _start_job(payload: ScrapeRunRequest, job_id: int) -> None:
+def _start_job(
+    payload: ScrapeRunRequest, job_id: int, remote_leftovers: list[str] | None = None
+) -> None:
     try:
         job = compile_scrape_job(payload)
         run_job(job)
+        if remote_leftovers:
+            _begin_remote_leftovers(remote_leftovers)
     except Exception as exc:
         scrape_status.errors.append(str(exc))
         scrape_status.message = f"Failed: {exc}"
@@ -177,7 +181,7 @@ def _filters_have_work(payload: ScrapeRunRequest) -> bool:
 
 def _with_leftovers(
     payload: ScrapeRunRequest, *, continue_counts: bool
-) -> tuple[ScrapeRunRequest, bool, list[str], list[str]]:
+) -> tuple[ScrapeRunRequest, bool, list[str], list[str], list[str]]:
     """Attach stored unfinished URLs and the extension queue.
 
     With an empty form, only those URLs run. A gallery limit must not turn two
@@ -185,24 +189,43 @@ def _with_leftovers(
     """
     from backend.app.schemas import ScrapeFilterIn
     from backend.app.services.scrape_leftovers import queue_urls, unfinished_items
+    from backend.scraper.gallery import extract_post_id
 
-    retries = [item["url"] for item in unfinished_items()]
-    retry_keys = set(retries)
-    queued = [url for url in queue_urls() if url not in retry_keys]
-    if not retries and not queued:
-        return payload, continue_counts, [], []
+    retry_urls = [item["url"] for item in unfinished_items()]
+    retry_keys = set(retry_urls)
+    queued_urls = [url for url in queue_urls() if url not in retry_keys]
+    if not retry_urls and not queued_urls:
+        return payload, continue_counts, [], [], []
+
+    retries = [url for url in retry_urls if extract_post_id(url)]
+    remote_retries = [url for url in retry_urls if not extract_post_id(url)]
+    queued = [url for url in queued_urls if extract_post_id(url)]
+    remote_queued = [url for url in queued_urls if not extract_post_id(url)]
+    remote_urls = list(dict.fromkeys(remote_retries + remote_queued))
     keep = continue_counts or scrape_status.ran_this_session
     if not _filters_have_work(payload):
         ordered = list(dict.fromkeys(retries + queued))
-        payload = payload.model_copy(
-            update={
-                "filters": [ScrapeFilterIn(type="url", value="\n".join(ordered))],
-                "limit": 0,
-                "exclude_tags": [],
-            }
-        )
-        return payload, keep, retries, []
-    return payload, keep, retries, retries + queued
+        if ordered:
+            payload = payload.model_copy(
+                update={
+                    "filters": [ScrapeFilterIn(type="url", value="\n".join(ordered))],
+                    "limit": 0,
+                    "exclude_tags": [],
+                }
+            )
+        return payload, keep, retries, [], remote_urls
+    return payload, keep, retries, retries + queued, remote_urls
+
+
+def _begin_remote_leftovers(urls: list[str]) -> None:
+    """Drain raw file leftovers through the same worker as /extension/save-file."""
+    from backend.app.services.scrape_leftovers import forget
+    from backend.scraper.pipeline import begin_remote_download
+
+    for url in urls:
+        mode = begin_remote_download(url)
+        if mode == "duplicate":
+            forget(url)
 
 
 def start_scrape_run(
@@ -219,40 +242,52 @@ def start_scrape_run(
     """
     extra: list[str] = []
     retries: list[str] = []
+    remote_leftovers: list[str] = []
+    remote_only = False
     with scrape_lock:
         if scrape_status.running:
             raise HTTPException(status_code=409, detail="Scrape already running")
         if include_leftovers:
-            payload, continue_counts, retries, extra = _with_leftovers(
+            payload, continue_counts, retries, extra, remote_leftovers = _with_leftovers(
                 payload, continue_counts=continue_counts
             )
+            remote_only = bool(remote_leftovers) and not _filters_have_work(payload)
         if before_start is not None:
             before_start()
-        try:
-            job = compile_scrape_job(payload)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        scrape_status.job_id += 1
-        job_id = scrape_status.job_id
-        scrape_status.running = True
-        scrape_status.cancel = False
-        scrape_status.message = "Queued"
-        site = get_selected_site()
-        begin_scrape_queue(
-            job,
-            site["id"] if site else None,
-            continue_counts=continue_counts,
-            retry_urls=set(retries),
-        )
-        if extra:
-            append_leftover_urls(extra, set(retries))
-        elif retries:
-            scrape_status.leftover_urls.update(retries)
-            scrape_status.leftover_urls.update(
-                url for url in scrape_status.pending_urls if url not in scrape_status.retry_urls
+        if remote_only:
+            pass
+        else:
+            try:
+                job = compile_scrape_job(payload)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            scrape_status.job_id += 1
+            job_id = scrape_status.job_id
+            scrape_status.running = True
+            scrape_status.cancel = False
+            scrape_status.message = "Queued"
+            site = get_selected_site()
+            begin_scrape_queue(
+                job,
+                site["id"] if site else None,
+                continue_counts=continue_counts,
+                retry_urls=set(retries),
             )
-        thread = threading.Thread(target=_start_job, args=(payload, job_id), daemon=True)
-        thread.start()
+            if extra:
+                append_leftover_urls(extra, set(retries))
+            elif retries:
+                scrape_status.leftover_urls.update(retries)
+                scrape_status.leftover_urls.update(
+                    url for url in scrape_status.pending_urls if url not in scrape_status.retry_urls
+                )
+            thread = threading.Thread(
+                target=_start_job,
+                args=(payload, job_id, remote_leftovers),
+                daemon=True,
+            )
+            thread.start()
+    if remote_only:
+        _begin_remote_leftovers(remote_leftovers)
     return _status_out()
 
 
