@@ -399,6 +399,32 @@ class ExtensionApiTests(unittest.TestCase):
         self.assertEqual(out.queued, ["https://cdn.example/a.jpg"])
         self.assertEqual(scrape_leftovers.queue_urls(), ["https://cdn.example/a.jpg"])
 
+    def test_save_file_queues_before_download_when_auto_run_is_on(self) -> None:
+        # setUp leaves never_auto_run_scrape false.
+        order: list[str] = []
+
+        def fake_add(urls: list[str]) -> list[str]:
+            order.append("queue")
+            return list(urls)
+
+        def fake_begin(url: str) -> str:
+            order.append("download")
+            return "started"
+
+        with (
+            patch("backend.app.services.scrape_leftovers.add_queue", side_effect=fake_add) as add,
+            patch.object(extension_api, "begin_remote_download", side_effect=fake_begin) as begin,
+        ):
+            out = extension_api.post_extension_save_file(
+                ExtensionFileIn(url="https://cdn.example/a.jpg")
+            )
+        self.assertFalse(extension_api.never_auto_run_scrape())
+        add.assert_called_once_with(["https://cdn.example/a.jpg"])
+        begin.assert_called_once_with("https://cdn.example/a.jpg")
+        self.assertEqual(order, ["queue", "download"])
+        self.assertTrue(out.started)
+        self.assertEqual(out.queued, ["https://cdn.example/a.jpg"])
+
     def test_enqueue_after_done_asks_to_continue_counts(self) -> None:
         captured: dict = {}
 

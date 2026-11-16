@@ -249,10 +249,10 @@ def post_extension_save_file(payload: ExtensionFileIn) -> ExtensionEnqueueOut:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise HTTPException(status_code=400, detail="Need an http(s) file URL")
-    if never_auto_run_scrape():
-        from backend.app.services.scrape_leftovers import add_queue
+    from backend.app.services.scrape_leftovers import add_queue
 
-        add_queue([url])
+    add_queue([url])
+    if never_auto_run_scrape():
         return ExtensionEnqueueOut(started=False, queued=[url], status=_status_out())
     mode = begin_remote_download(url)
     if mode == "busy":
