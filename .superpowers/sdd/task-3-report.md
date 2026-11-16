@@ -13,3 +13,8 @@ Verification:
 - `node extension/iconProgress.selftest.js` passed after implementation.
 - `node --check extension/background.js` passed.
 - Cursor lints reported no errors for the edited extension files.
+
+Important finding fix:
+- Rescheduled the idle poll as soon as app probes confirm MediaViewer is online, and made idle ticks probe health first when `online` is stale.
+- `node extension/iconProgress.selftest.js` passed.
+- `node --check extension/background.js` passed.

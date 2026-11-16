@@ -37,7 +37,9 @@ async function api(path, options = {}) {
     } catch {
       data = null;
     }
-    setOnline(true);
+    if (setOnline(path === "/health" ? response.ok : true) && online) {
+      scheduleIdlePoll();
+    }
     return { ok: response.ok, status: response.status, data };
   } catch {
     setOnline(false);
@@ -59,10 +61,11 @@ function applyChromeBadge() {
 function setOnline(value) {
   if (online === value) {
     applyChromeBadge();
-    return;
+    return false;
   }
   online = value;
   applyChromeBadge();
+  return true;
 }
 
 async function loadBitmap(path) {
@@ -333,17 +336,21 @@ async function flushOfflineQueue() {
   }
 }
 
-async function checkIdleForJob() {
-  await flushOfflineQueue();
-  if (watching) return;
-  const res = await api("/scrape/status");
-  if (res.ok && res.data) {
-    lastJob = res.data;
-    await applyTitle();
-    await paintAllTabs();
-  }
-  if (lastJob && ScrapIconProgress.isBusy(lastJob)) {
-    await startWatch();
+async function checkIdleForJob({ rescheduleIdle = true } = {}) {
+  try {
+    await flushOfflineQueue();
+    if (watching) return;
+    const res = await api("/scrape/status");
+    if (res.ok && res.data) {
+      lastJob = res.data;
+      await applyTitle();
+      await paintAllTabs();
+    }
+    if (lastJob && ScrapIconProgress.isBusy(lastJob)) {
+      await startWatch();
+    }
+  } finally {
+    if (rescheduleIdle) scheduleIdlePoll();
   }
 }
 
@@ -352,7 +359,11 @@ function scheduleIdlePoll() {
   const wait = online || offlineQueue.length ? ScrapIconProgress.BUSY_POLL_MS : ScrapIconProgress.IDLE_POLL_MS;
   idleTimer = setTimeout(async () => {
     try {
-      await checkIdleForJob();
+      if (!online) {
+        const health = await api("/health");
+        if (!health.ok) return;
+      }
+      await checkIdleForJob({ rescheduleIdle: false });
     } finally {
       scheduleIdlePoll();
     }
