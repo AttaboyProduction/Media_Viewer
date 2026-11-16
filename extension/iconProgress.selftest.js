@@ -25,6 +25,28 @@ assert(!isWatchDone({ running: true, total: 1, processed: 1 }), "running never d
 assert(progressRatio({ total: 10, processed: 5 }) === 0.5, "half ratio");
 assert(progressRatio({ total: 0, processed: 0 }) === null, "no bar without total");
 assert(tooltipFor({ running: true, total: 10, processed: 3, downloaded: 2, skipped: 1 }).includes("3/10"), "tooltip fraction");
+assert(
+  tooltipFor({
+    running: false,
+    total: 16,
+    processed: 16,
+    downloaded: 5,
+    skipped: 11,
+    ran_this_session: true,
+  }).includes("16/16"),
+  "finished session keeps fraction"
+);
+assert(
+  tooltipFor({
+    running: false,
+    total: 16,
+    processed: 16,
+    downloaded: 5,
+    skipped: 11,
+    ran_this_session: true,
+  }).includes("downloaded 5"),
+  "finished session keeps downloaded"
+);
 assert(tooltipFor({ running: false, total: 0, processed: 0 }) === DEFAULT_TITLE, "idle tooltip");
 const dot16 = busyDotGeometry(16);
 const dot32 = busyDotGeometry(32);

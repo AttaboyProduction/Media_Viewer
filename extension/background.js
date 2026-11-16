@@ -181,9 +181,10 @@ async function settleQueuedPosts() {
 
 async function iconImageData(url) {
   await loadQueuedPosts();
-  const jobBusy = watching && lastJob && ScrapIconProgress.isBusy(lastJob);
+  const jobBusy = !!(lastJob && ScrapIconProgress.isBusy(lastJob));
+  const showProgress = !!(lastJob && ScrapIconProgress.shouldShowProgress(lastJob));
   const busy = jobBusy;
-  const ratio = jobBusy ? ScrapIconProgress.progressRatio(lastJob) : null;
+  const ratio = showProgress ? ScrapIconProgress.progressRatio(lastJob) : null;
   const key = libraryKey(url);
   const saved = !!(key && (savedPostUrls.has(key) || queuedPostUrls.has(key)));
   if (!busy && ratio == null && !saved) return null;
@@ -197,10 +198,7 @@ async function iconImageData(url) {
 }
 
 async function applyTitle() {
-  const title =
-    watching && lastJob && ScrapIconProgress.isBusy(lastJob)
-      ? ScrapIconProgress.tooltipFor(lastJob)
-      : ScrapIconProgress.DEFAULT_TITLE;
+  const title = lastJob ? ScrapIconProgress.tooltipFor(lastJob) : ScrapIconProgress.DEFAULT_TITLE;
   try {
     await chrome.action.setTitle({ title });
   } catch {
@@ -218,7 +216,6 @@ async function startWatch() {
 
 async function stopWatch() {
   watching = false;
-  lastJob = null;
   if (watchTimer) {
     clearTimeout(watchTimer);
     watchTimer = 0;
@@ -340,15 +337,19 @@ async function checkIdleForJob() {
   await flushOfflineQueue();
   if (watching) return;
   const res = await api("/scrape/status");
-  if (res.ok && res.data && ScrapIconProgress.isBusy(res.data)) {
+  if (res.ok && res.data) {
     lastJob = res.data;
+    await applyTitle();
+    await paintAllTabs();
+  }
+  if (lastJob && ScrapIconProgress.isBusy(lastJob)) {
     await startWatch();
   }
 }
 
 function scheduleIdlePoll() {
   if (idleTimer) clearTimeout(idleTimer);
-  const wait = offlineQueue.length ? 5000 : ScrapIconProgress.IDLE_POLL_MS;
+  const wait = online || offlineQueue.length ? ScrapIconProgress.BUSY_POLL_MS : ScrapIconProgress.IDLE_POLL_MS;
   idleTimer = setTimeout(async () => {
     try {
       await checkIdleForJob();

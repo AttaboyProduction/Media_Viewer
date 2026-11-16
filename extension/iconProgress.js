@@ -34,11 +34,16 @@
     return Math.min(1, Math.max(0, processed / total));
   }
 
+  function shouldShowProgress(status) {
+    if (!status || typeof status !== "object") return false;
+    return num(status.total) > 0;
+  }
+
   function tooltipFor(status) {
     if (!status || typeof status !== "object") return DEFAULT_TITLE;
     const total = num(status.total);
     const processed = num(status.processed);
-    if (!isBusy(status) && (total <= 0 || processed >= total)) return DEFAULT_TITLE;
+    if (!shouldShowProgress(status)) return DEFAULT_TITLE;
     const parts = [`${DEFAULT_TITLE} · ${processed}/${total || "?"}`];
     parts.push(`downloaded ${num(status.downloaded)}`);
     parts.push(`skipped ${num(status.skipped)}`);
@@ -72,6 +77,7 @@
     isBusy,
     isWatchDone,
     progressRatio,
+    shouldShowProgress,
     tooltipFor,
     busyDotGeometry,
     savedDotGeometry,
