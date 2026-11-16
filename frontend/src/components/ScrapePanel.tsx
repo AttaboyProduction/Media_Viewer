@@ -875,7 +875,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
             )}
             {status.total > 0 && ` · ${status.processed}/${status.total}`}
             {` · ${isLocalSource ? 'added' : 'downloaded'} ${status.downloaded}`}
-            {` · skipped ${status.skipped}`}
+            {` · skipped ${skippedItems.length}`}
             {status.similar > 0 && ` · similar ${status.similar}`}
             {cancelledUrls.length > 0 && ` · cancelled ${cancelledUrls.length}`}
           </div>

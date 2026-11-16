@@ -179,10 +179,16 @@ def append_scrape_urls(urls: list[str], site_id: str) -> list[str] | None:
             or scrape_status.site_id != site_id
         ):
             return None
+        from backend.app.services.scrape_leftovers import identity
+
         added: list[str] = []
+        known = {identity(url) for url in scrape_status.accepted_urls}
+        known.update(identity(url) for url in scrape_status.pending_urls)
         for url in urls:
-            if url in scrape_status.accepted_urls:
+            key = identity(url)
+            if not key or key in known:
                 continue
+            known.add(key)
             scrape_status.accepted_urls.add(url)
             scrape_status.pending_urls.append(url)
             added.append(url)
@@ -193,22 +199,33 @@ def append_scrape_urls(urls: list[str], site_id: str) -> list[str] | None:
 
 def enqueue_discovered_urls(urls: list[str], *, site_id: str | None) -> list[str]:
     """Persist gallery finds into Queue to scrape before this job drains them."""
-    from backend.app.services.scrape_leftovers import add_queue
+    from backend.app.services.scrape_leftovers import add_queue, identity
 
     with scrape_lock:
-        known_urls = scrape_status.accepted_urls | set(scrape_status.pending_urls)
-    urls = [url for url in urls if url not in known_urls]
-    stored = add_queue(urls)
+        known = {identity(url) for url in scrape_status.accepted_urls}
+        known.update(identity(url) for url in scrape_status.pending_urls)
+    fresh: list[str] = []
+    for url in urls:
+        key = identity(url)
+        if not key or key in known:
+            continue
+        known.add(key)
+        fresh.append(url)
+    stored = add_queue(fresh)
     if not stored:
         return []
     if site_id:
         added = append_scrape_urls(stored, site_id)
         return added if added is not None else []
     with scrape_lock:
-        added: list[str] = []
+        added = []
+        known = {identity(url) for url in scrape_status.accepted_urls}
+        known.update(identity(url) for url in scrape_status.pending_urls)
         for url in stored:
-            if url in scrape_status.pending_urls:
+            key = identity(url)
+            if not key or key in known:
                 continue
+            known.add(key)
             scrape_status.accepted_urls.add(url)
             scrape_status.pending_urls.append(url)
             scrape_status.total += 1
@@ -299,14 +316,13 @@ def abandon_running_job() -> None:
 
 def _sync_open_urls(extra: list[str] | None = None) -> None:
     """Write the files this job has not finished, so a crash can retry them."""
-    from backend.app.services.scrape_leftovers import queue_urls, sync_open
+    from backend.app.services.scrape_leftovers import sync_open
 
     urls = list(scrape_status.pending_urls)
     if scrape_status.current_url:
         urls.append(scrape_status.current_url)
     urls.extend(extra or [])
-    sync_open(urls)
-    scrape_status.queue_urls = queue_urls()
+    scrape_status.queue_urls = sync_open(urls)
 
 
 def _is_retry(url: str) -> bool:
@@ -340,8 +356,11 @@ def _persist_outcome(url: str, *, downloaded: bool, reason: str = "", detail: st
     from backend.app.services.scrape_leftovers import note_outcome, queue_urls
 
     if url:
-        note_outcome(url, downloaded=downloaded, reason=reason, detail=detail)
-    scrape_status.queue_urls = queue_urls()
+        scrape_status.queue_urls = note_outcome(
+            url, downloaded=downloaded, reason=reason, detail=detail
+        )
+    else:
+        scrape_status.queue_urls = queue_urls()
 
 
 def _complete_download(url: str) -> None:
@@ -641,45 +660,63 @@ def begin_remote_download(url: str) -> str:
     and do not reset processed, downloaded, or skipped.
     """
     with scrape_lock:
-        if scrape_status.running and scrape_status.kind == "download" and scrape_status.queue_open:
-            if url in scrape_status.accepted_urls:
-                return "duplicate"
-            scrape_status.accepted_urls.add(url)
-            scrape_status.pending_urls.append(url)
-            scrape_status.total += 1
-            _sync_open_urls()
-            return "appended"
-        if scrape_status.running:
-            return "busy"
-        if url in scrape_status.accepted_urls:
+        return _claim_remote_download(url)
+
+
+def _file_already_accepted(url: str) -> bool:
+    from backend.app.services.scrape_leftovers import identity
+
+    key = identity(url)
+    if not key:
+        return url in scrape_status.accepted_urls
+    return any(identity(item) == key for item in scrape_status.accepted_urls)
+
+
+def _claim_remote_download(url: str) -> str:
+    """Same as ``begin_remote_download``. Caller already holds ``scrape_lock``."""
+    if scrape_status.running and scrape_status.kind == "download" and scrape_status.queue_open:
+        if _file_already_accepted(url):
             return "duplicate"
-        keep = scrape_status.ran_this_session
-        scrape_status.job_id += 1
-        job_id = scrape_status.job_id
-        scrape_status.running = True
-        scrape_status.cancel = False
-        scrape_status.kind = "download"
-        scrape_status.site_id = None
-        scrape_status.queue_open = True
-        scrape_status.pending_urls = [url]
-        scrape_status.message = "Queued"
-        scrape_status.current_url = url
-        scrape_status.ran_this_session = True
-        if keep:
-            scrape_status.accepted_urls.add(url)
-            scrape_status.total = max(scrape_status.total, scrape_status.processed) + 1
-        else:
-            scrape_status.accepted_urls = {url}
-            scrape_status.total = 1
-            scrape_status.processed = 0
-            scrape_status.downloaded = 0
-            scrape_status.skipped = 0
-            scrape_status.similar = 0
-            scrape_status.errors = []
-            scrape_status.skipped_items = []
+        scrape_status.accepted_urls.add(url)
+        scrape_status.pending_urls.append(url)
+        scrape_status.total += 1
         _sync_open_urls()
-        threading.Thread(target=_run_remote_downloads, args=(job_id,), daemon=True).start()
-        return "started"
+        return "appended"
+    if scrape_status.running:
+        return "busy"
+    keep = scrape_status.ran_this_session
+    already_counted = url in scrape_status.counted_urls
+    scrape_status.job_id += 1
+    job_id = scrape_status.job_id
+    scrape_status.running = True
+    scrape_status.cancel = False
+    scrape_status.kind = "download"
+    scrape_status.site_id = None
+    scrape_status.queue_open = True
+    scrape_status.pending_urls = [url]
+    scrape_status.message = "Queued"
+    scrape_status.current_url = url
+    scrape_status.ran_this_session = True
+    if keep:
+        scrape_status.accepted_urls.add(url)
+        if already_counted:
+            # This session already counted the file. Retrying it must not grow total.
+            scrape_status.retry_urls.add(url)
+            scrape_status.total = max(scrape_status.total, scrape_status.processed)
+        else:
+            scrape_status.total = max(scrape_status.total, scrape_status.processed) + 1
+    else:
+        scrape_status.accepted_urls = {url}
+        scrape_status.total = 1
+        scrape_status.processed = 0
+        scrape_status.downloaded = 0
+        scrape_status.skipped = 0
+        scrape_status.similar = 0
+        scrape_status.errors = []
+        scrape_status.skipped_items = []
+    _sync_open_urls()
+    threading.Thread(target=_run_remote_downloads, args=(job_id,), daemon=True).start()
+    return "started"
 
 
 def _run_remote_downloads(job_id: int) -> None:

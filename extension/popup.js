@@ -58,7 +58,10 @@ function render(status) {
   const job = status.job;
   if (job && (job.running || job.total > 0)) {
     const fraction = job.total > 0 ? `${job.processed}/${job.total}` : `${job.processed}`;
-    $("jobText").textContent = `Scrape: ${fraction} · downloaded ${job.downloaded} · skipped ${job.skipped}`;
+    const counts = ScrapIconProgress.outcomeCounts(job);
+    const cancelled = counts.cancelled > 0 ? ` · cancelled ${counts.cancelled}` : "";
+    $("jobText").textContent =
+      `Scrape: ${fraction} · downloaded ${job.downloaded} · skipped ${counts.skipped}${cancelled}`;
   } else {
     $("jobText").textContent = job && job.message ? `Last scrape: ${job.message}` : "No scrape running.";
   }

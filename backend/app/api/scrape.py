@@ -110,13 +110,11 @@ def _recent_ids_newest_first(db: Session) -> list[int]:
     return pruned
 
 
-def _start_job(
-    payload: ScrapeRunRequest, job_id: int, remote_leftovers: list[str] | None = None
-) -> None:
+def _start_job(job, job_id: int, remote_leftovers: list[str] | None = None) -> None:
     try:
-        job = compile_scrape_job(payload)
         run_job(job)
-        if remote_leftovers:
+        # Stop already counted the rest as skipped. Do not start a new download.
+        if remote_leftovers and not scrape_status.cancel:
             _begin_remote_leftovers(remote_leftovers)
     except Exception as exc:
         scrape_status.errors.append(str(exc))
@@ -188,12 +186,13 @@ def _with_leftovers(
     retries into a new listing that pushes processed past total.
     """
     from backend.app.schemas import ScrapeFilterIn
-    from backend.app.services.scrape_leftovers import queue_urls, unfinished_items
+    from backend.app.services.scrape_leftovers import identity, snapshot
     from backend.scraper.gallery import extract_post_id
 
-    retry_urls = [item["url"] for item in unfinished_items()]
-    retry_keys = set(retry_urls)
-    queued_urls = [url for url in queue_urls() if url not in retry_keys]
+    unfinished, queued_all = snapshot()
+    retry_urls = [item["url"] for item in unfinished]
+    retry_keys = {identity(url) for url in retry_urls}
+    queued_urls = [url for url in queued_all if identity(url) not in retry_keys]
     if not retry_urls and not queued_urls:
         return payload, continue_counts, [], [], []
 
@@ -217,15 +216,22 @@ def _with_leftovers(
     return payload, keep, retries, retries + queued, remote_urls
 
 
-def _begin_remote_leftovers(urls: list[str]) -> None:
-    """Drain raw file leftovers through the same worker as /extension/save-file."""
-    from backend.app.services.scrape_leftovers import forget
-    from backend.scraper.pipeline import begin_remote_download
+def _begin_remote_leftovers(urls: list[str], *, locked: bool = False) -> None:
+    """Drain raw file leftovers through the same worker as /extension/save-file.
 
+    ``locked`` means the caller already holds ``scrape_lock``, so this claims the
+    download directly. Taking the lock again would deadlock.
+    """
+    from backend.app.services.scrape_leftovers import forget
+    from backend.scraper.pipeline import _claim_remote_download, begin_remote_download
+
+    claim = _claim_remote_download if locked else begin_remote_download
     for url in urls:
-        mode = begin_remote_download(url)
+        if scrape_status.cancel:
+            return
+        mode = claim(url)
         if mode == "duplicate":
-            forget(url)
+            forget(url, keep_open=True)
 
 
 def start_scrape_run(
@@ -255,7 +261,9 @@ def start_scrape_run(
         if before_start is not None:
             before_start()
         if remote_only:
-            pass
+            # Claim before releasing the lock so another Run cannot start in between.
+            scrape_status.cancel = False
+            _begin_remote_leftovers(remote_leftovers, locked=True)
         else:
             try:
                 job = compile_scrape_job(payload)
@@ -282,12 +290,10 @@ def start_scrape_run(
                 )
             thread = threading.Thread(
                 target=_start_job,
-                args=(payload, job_id, remote_leftovers),
+                args=(job, job_id, remote_leftovers),
                 daemon=True,
             )
             thread.start()
-    if remote_only:
-        _begin_remote_leftovers(remote_leftovers)
     return _status_out()
 
 

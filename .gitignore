@@ -22,6 +22,9 @@ scripts/_*.py
 MediaViewer.exe
 *.update-old
 
+# Agent SDD scratch (briefs, review packages). Keep docs/superpowers for specs/plans.
+.superpowers/
+
 # Real site adapters stay local / private; only example/ is tracked.
 adapters/*
 !adapters/README.md

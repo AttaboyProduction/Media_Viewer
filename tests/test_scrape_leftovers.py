@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from backend.app.api.scrape import _with_leftovers
 from backend.app.api import scrape as scrape_api
+from backend.app.config import settings
 from backend.app.schemas import ScrapeRunRequest
 from backend.app.services import scrape_leftovers
 from backend.scraper import pipeline
@@ -36,6 +37,9 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self._path = Path(self._dir.name) / "scrape_leftovers.json"
         self._orig = scrape_leftovers.leftovers_path
         scrape_leftovers.leftovers_path = lambda: self._path
+        real = (settings.data_dir / "scrape_leftovers.json").resolve()
+        if self._path.resolve() == real:
+            raise AssertionError(f"tests must not use the app leftovers file: {real}")
         pipeline.scrape_status.running = False
         pipeline.scrape_status.ran_this_session = False
         pipeline.scrape_status.total = 0
@@ -51,6 +55,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
         pipeline.scrape_status.leftover_urls = set()
         pipeline.scrape_status.continue_counts = False
         pipeline.scrape_status.queue_open = False
+        pipeline.scrape_status.cancel = False
 
     def tearDown(self) -> None:
         scrape_leftovers.leftovers_path = self._orig
@@ -154,7 +159,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
 
         with (
             patch.object(scrape_api, "compile_scrape_job") as compile_job,
-            patch.object(pipeline, "begin_remote_download", return_value="started") as begin,
+            patch.object(pipeline, "_claim_remote_download", return_value="started") as begin,
         ):
             status = scrape_api.start_scrape_run(
                 ScrapeRunRequest(filters=[], limit=0),
@@ -228,3 +233,110 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertFalse(pipeline.scrape_status.cancel)
         self.assertTrue(pipeline.scrape_status.running)
         self.assertEqual(scrape_leftovers.unfinished_items()[0]["detail"], "again")
+
+    def test_stopped_scrape_does_not_start_raw_files(self) -> None:
+        url = "https://cdn.example/a.jpg"
+
+        def stop(_job) -> None:
+            pipeline.scrape_status.cancel = True
+
+        with (
+            patch.object(scrape_api, "run_job", side_effect=stop),
+            patch.object(pipeline, "begin_remote_download") as begin,
+        ):
+            scrape_api._start_job(_job([]), 1, [url])
+
+        begin.assert_not_called()
+
+    def test_raw_files_start_after_a_finished_scrape(self) -> None:
+        url = "https://cdn.example/a.jpg"
+        with (
+            patch.object(scrape_api, "run_job"),
+            patch.object(pipeline, "begin_remote_download", return_value="started") as begin,
+        ):
+            scrape_api._start_job(_job([]), 1, [url])
+        begin.assert_called_once_with(url)
+
+    def test_scrape_job_is_compiled_once(self) -> None:
+        job = _job(["https://gallery.test/post/1"])
+
+        class _Now:
+            def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+                self._target = target
+                self._args = args
+
+            def start(self) -> None:
+                if self._target is not None:
+                    self._target(*self._args)
+
+        with (
+            patch.object(scrape_api, "compile_scrape_job", return_value=job) as compile_job,
+            patch.object(scrape_api, "run_job"),
+            patch.object(scrape_api, "get_selected_site", return_value=None),
+            patch.object(scrape_api.threading, "Thread", _Now),
+        ):
+            scrape_api.start_scrape_run(ScrapeRunRequest(filters=[], limit=0))
+        compile_job.assert_called_once()
+
+    def test_discovered_spelling_of_an_accepted_post_is_not_queued(self) -> None:
+        url = "https://gallery.test/post/43"
+        with pipeline.scrape_lock:
+            pipeline.scrape_status.running = True
+            pipeline.scrape_status.kind = "scrape"
+            pipeline.scrape_status.queue_open = True
+            pipeline.scrape_status.site_id = "gallery"
+            pipeline.scrape_status.pending_urls = [url]
+            pipeline.scrape_status.accepted_urls = {url}
+            pipeline.scrape_status.total = 1
+        added = pipeline.enqueue_discovered_urls(
+            ["https://www.gallery.test/post/43?x=1"], site_id="gallery"
+        )
+        self.assertEqual(added, [])
+        self.assertEqual(scrape_leftovers.queue_urls(), [])
+        self.assertEqual(pipeline.scrape_status.total, 1)
+        self.assertEqual(pipeline.scrape_status.pending_urls, [url])
+
+    def test_append_ignores_a_different_spelling(self) -> None:
+        url = "https://gallery.test/post/9"
+        with pipeline.scrape_lock:
+            pipeline.scrape_status.running = True
+            pipeline.scrape_status.kind = "scrape"
+            pipeline.scrape_status.queue_open = True
+            pipeline.scrape_status.site_id = "gallery"
+            pipeline.scrape_status.accepted_urls = {url}
+            pipeline.scrape_status.pending_urls = [url]
+            pipeline.scrape_status.total = 1
+        added = pipeline.append_scrape_urls(["https://www.gallery.test/post/9"], "gallery")
+        self.assertEqual(added, [])
+        self.assertEqual(pipeline.scrape_status.total, 1)
+        self.assertEqual(pipeline.scrape_status.pending_urls, [url])
+
+    def test_failed_raw_file_retries_without_growing_total(self) -> None:
+        url = "https://cdn.example/a.jpg"
+        pipeline.scrape_status.ran_this_session = True
+        pipeline.scrape_status.total = 1
+        pipeline.scrape_status.processed = 1
+        pipeline.scrape_status.skipped = 1
+        pipeline.scrape_status.accepted_urls = {url}
+        pipeline.scrape_status.counted_urls = {url}
+        pipeline.scrape_status.skipped_items = [SkippedItem(url=url, reason="error", detail="x")]
+        scrape_leftovers.remember_unfinished(url, "error", "x")
+        with patch.object(pipeline.threading, "Thread"):
+            scrape_api.start_scrape_run(
+                ScrapeRunRequest(filters=[], limit=0), include_leftovers=True
+            )
+        self.assertEqual(pipeline.scrape_status.total, 1)
+        self.assertEqual(pipeline.scrape_status.processed, 1)
+        self.assertEqual(pipeline.scrape_status.pending_urls, [url])
+        self.assertIn(url, pipeline.scrape_status.retry_urls)
+        self.assertTrue(pipeline.scrape_status.running)
+
+    def test_queue_reread_when_the_file_is_removed_or_replaced(self) -> None:
+        url = "https://gallery.test/post/8"
+        scrape_leftovers.add_queue([url])
+        self.assertEqual(scrape_leftovers.queue_urls(), [url])
+        self._path.unlink()
+        self.assertEqual(scrape_leftovers.queue_urls(), [])
+        other = Path(self._dir.name) / "other.json"
+        scrape_leftovers.leftovers_path = lambda: other
+        self.assertEqual(scrape_leftovers.queue_urls(), [])

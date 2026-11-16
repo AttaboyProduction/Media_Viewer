@@ -3,6 +3,7 @@ const {
   isBusy,
   isWatchDone,
   progressRatio,
+  outcomeCounts,
   tooltipFor,
   busyDotGeometry,
   savedDotGeometry,
@@ -48,6 +49,23 @@ assert(
   "finished session keeps downloaded"
 );
 assert(tooltipFor({ running: false, total: 0, processed: 0 }) === DEFAULT_TITLE, "idle tooltip");
+const mixed = {
+  running: false,
+  total: 5,
+  processed: 5,
+  downloaded: 0,
+  skipped: 5,
+  cancelled_urls: ["a", "b", "c", "d"],
+  skipped_items: [
+    { url: "a", reason: "cancelled" },
+    { url: "b", reason: "cancelled" },
+    { url: "c", reason: "cancelled" },
+    { url: "d", reason: "cancelled" },
+    { url: "e", reason: "error" },
+  ],
+};
+assert(outcomeCounts(mixed).skipped === 1 && outcomeCounts(mixed).cancelled === 4, "cancelled is not inside skipped");
+assert(tooltipFor(mixed).includes("skipped 1") && tooltipFor(mixed).includes("cancelled 4"), "tooltip splits skipped and cancelled");
 const dot16 = busyDotGeometry(16);
 const dot32 = busyDotGeometry(32);
 assert(dot16.diameter === 10, "16px dot is twice the previous mark");

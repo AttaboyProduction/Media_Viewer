@@ -18,6 +18,11 @@ from backend.app.config import settings
 RETRY_REASONS = {"error", "cancelled", "unavailable", "interrupted"}
 
 _lock = threading.Lock()
+# One process owns this file. Keep the last copy so a scrape does not re-read it
+# on every queued URL.
+_cache: dict | None = None
+_cache_path: str | None = None
+_cache_stamp: tuple | None = None
 
 
 def leftovers_path():
@@ -40,14 +45,43 @@ def _empty() -> dict:
     return {"unfinished": [], "queue": [], "open": []}
 
 
-def _load() -> dict:
-    path = leftovers_path()
+def _copy(data: dict) -> dict:
+    return {
+        "unfinished": [dict(item) for item in data["unfinished"]],
+        "queue": list(data["queue"]),
+        "open": list(data["open"]),
+    }
+
+
+def _stamp(path) -> tuple | None:
     if not path.is_file():
-        return _empty()
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return _empty()
+        return None
+    stat = path.stat()
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _load() -> dict:
+    global _cache, _cache_path, _cache_stamp
+    path = leftovers_path()
+    key = str(path)
+    stamp = _stamp(path)
+    if _cache is not None and _cache_path == key and _cache_stamp == stamp:
+        return _copy(_cache)
+    if stamp is None:
+        data = _empty()
+    else:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raw = None
+        data = _parse(raw)
+    _cache = data
+    _cache_path = key
+    _cache_stamp = stamp
+    return _copy(data)
+
+
+def _parse(data: object) -> dict:
     if not isinstance(data, dict):
         return _empty()
     unfinished = []
@@ -70,12 +104,16 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
+    global _cache, _cache_path, _cache_stamp
     path = leftovers_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(data, indent=2)
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(payload, encoding="utf-8")
     tmp.replace(path)
+    _cache = _copy(data)
+    _cache_path = str(path)
+    _cache_stamp = _stamp(path)
 
 
 def _without(urls: list[str], url: str) -> list[str]:
@@ -83,6 +121,13 @@ def _without(urls: list[str], url: str) -> list[str]:
     if not key:
         return [item for item in urls if item != url]
     return [item for item in urls if identity(item) != key]
+
+
+def snapshot() -> tuple[list[dict], list[str]]:
+    """Unfinished rows and the queue, from one read."""
+    with _lock:
+        data = _load()
+        return list(data["unfinished"]), list(data["queue"])
 
 
 def unfinished_items() -> list[dict]:
@@ -115,10 +160,10 @@ def add_queue(urls: list[str]) -> list[str]:
     return added
 
 
-def remember_unfinished(url: str, reason: str, detail: str = "") -> None:
+def remember_unfinished(url: str, reason: str, detail: str = "") -> list[str]:
     key = identity(url)
     if not key:
-        return
+        return queue_urls()
     with _lock:
         data = _load()
         data["queue"] = _without(data["queue"], url)
@@ -127,33 +172,37 @@ def remember_unfinished(url: str, reason: str, detail: str = "") -> None:
         kept.append({"url": url, "reason": reason or "error", "detail": detail or ""})
         data["unfinished"] = kept
         _save(data)
+        return list(data["queue"])
 
 
-def forget(url: str) -> None:
-    """The page is done: downloaded, or skipped on purpose."""
+def forget(url: str, *, keep_open: bool = False) -> list[str]:
+    """The page is done: downloaded, or skipped on purpose.
+
+    ``keep_open`` drops the queue row but leaves the in-flight list alone, so a
+    second spelling of a file already downloading does not erase crash recovery.
+    """
     if not identity(url):
-        return
+        return queue_urls()
     with _lock:
         data = _load()
         data["queue"] = _without(data["queue"], url)
-        data["open"] = _without(data["open"], url)
+        if not keep_open:
+            data["open"] = _without(data["open"], url)
         data["unfinished"] = [
             item for item in data["unfinished"] if identity(item["url"]) != identity(url)
         ]
         _save(data)
+        return list(data["queue"])
 
 
-def note_outcome(url: str, *, downloaded: bool, reason: str = "", detail: str = "") -> None:
-    if not url:
-        return
+def note_outcome(url: str, *, downloaded: bool, reason: str = "", detail: str = "") -> list[str]:
     if downloaded or reason not in RETRY_REASONS:
-        forget(url)
-    else:
-        remember_unfinished(url, reason, detail)
+        return forget(url)
+    return remember_unfinished(url, reason, detail)
 
 
-def sync_open(urls: list[str]) -> None:
-    """Remember the files a running job has not finished yet."""
+def sync_open(urls: list[str]) -> list[str]:
+    """Remember the files a running job has not finished yet. Returns the queue."""
     cleaned: list[str] = []
     seen: set[str] = set()
     for url in urls:
@@ -166,6 +215,7 @@ def sync_open(urls: list[str]) -> None:
         data = _load()
         data["open"] = cleaned
         _save(data)
+        return list(data["queue"])
 
 
 def adopt_open_as_unfinished() -> None:

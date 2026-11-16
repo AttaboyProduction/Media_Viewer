@@ -39,14 +39,27 @@
     return num(status.total) > 0;
   }
 
+  function outcomeCounts(status) {
+    // Cancelled rows are also stored as skips. The line counts each list once.
+    const items = status && Array.isArray(status.skipped_items) ? status.skipped_items : null;
+    const cancelled = status && Array.isArray(status.cancelled_urls) ? status.cancelled_urls.length : 0;
+    if (items) {
+      const skipped = items.filter((item) => item && item.reason !== "cancelled").length;
+      return { skipped, cancelled };
+    }
+    return { skipped: Math.max(0, num(status && status.skipped) - cancelled), cancelled };
+  }
+
   function tooltipFor(status) {
     if (!status || typeof status !== "object") return DEFAULT_TITLE;
     const total = num(status.total);
     const processed = num(status.processed);
     if (!shouldShowProgress(status)) return DEFAULT_TITLE;
+    const counts = outcomeCounts(status);
     const parts = [`${DEFAULT_TITLE} · ${processed}/${total || "?"}`];
     parts.push(`downloaded ${num(status.downloaded)}`);
-    parts.push(`skipped ${num(status.skipped)}`);
+    parts.push(`skipped ${counts.skipped}`);
+    if (counts.cancelled > 0) parts.push(`cancelled ${counts.cancelled}`);
     return parts.join(" · ");
   }
 
@@ -78,6 +91,7 @@
     isWatchDone,
     progressRatio,
     shouldShowProgress,
+    outcomeCounts,
     tooltipFor,
     busyDotGeometry,
     savedDotGeometry,

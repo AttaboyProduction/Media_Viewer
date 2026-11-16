@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 from fastapi import HTTPException
 
 from backend.app.api import extension as extension_api
+from backend.app.config import settings
 from backend.app.services import scrape_leftovers
 from backend.app.schemas import ExtensionFileIn, ExtensionScrapeIn, ExtensionUrlsIn, ScrapeStatusOut
 from backend.scraper import adapter_loader, pipeline, sites
@@ -136,6 +137,15 @@ _LEFTOVER_DIR = tempfile.TemporaryDirectory()
 
 def setUpModule() -> None:
     scrape_leftovers.leftovers_path = lambda: Path(_LEFTOVER_DIR.name) / "scrape_leftovers.json"
+    _leftovers_must_be_temporary()
+
+
+def _leftovers_must_be_temporary() -> None:
+    """Cancel and queue tests must not read or delete the app's saved list."""
+    path = scrape_leftovers.leftovers_path().resolve()
+    real = (settings.data_dir / "scrape_leftovers.json").resolve()
+    if path == real:
+        raise AssertionError(f"tests must not use the app leftovers file: {path}")
 
 
 def tearDownModule() -> None:
@@ -164,6 +174,7 @@ def _idle_status() -> None:
     pipeline.scrape_status.counted_urls = set()
     pipeline.scrape_status.leftover_urls = set()
     pipeline.scrape_status.job_id = 0
+    _leftovers_must_be_temporary()
     path = scrape_leftovers.leftovers_path()
     if path.is_file():
         path.unlink()
