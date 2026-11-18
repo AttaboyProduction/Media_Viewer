@@ -22,6 +22,7 @@ import { useContentHide } from '../hooks/useContentHide'
 import { useKeyboardRating } from '../hooks/useKeyboardRating'
 import { DEFAULT_APP_SETTINGS } from '../types/appSettings'
 import { registerEscapeHandler } from '../utils/escapeStack'
+import { shouldSkipKeyboardShortcut } from '../utils/keyboardTarget'
 
 interface Props {
   mediaId: number
@@ -202,11 +203,6 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
   }, [onClose, expanded, urlAddOpen])
 
   useEffect(() => {
-    const isTypingTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false
-      const tag = target.tagName
-      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable
-    }
     const verticalScrollTarget = (): HTMLElement | null => {
       const mediaScroll = mediaScrollRef.current
       if (mediaScroll && mediaScroll.scrollHeight > mediaScroll.clientHeight + 1) {
@@ -218,8 +214,9 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
       }
       return null
     }
+    // Capture so ←/→/F/↑/↓ still work when the <video> (or its controls) has focus.
     const onKey = (e: KeyboardEvent) => {
-      if (isTypingTarget(e.target)) return
+      if (shouldSkipKeyboardShortcut(e)) return
       if (e.key === 'f' || e.key === 'F') {
         e.preventDefault()
         setExpanded((v) => !v)
@@ -249,8 +246,8 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
         onNavigate(list[i + 1])
       }
     }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
   }, [mediaIds, mediaId, onNavigate])
 
   const fitScale =

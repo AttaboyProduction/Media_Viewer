@@ -710,9 +710,11 @@ async function grantedPageMatches(extraMatches) {
 async function injectHotkeysIntoTab(tabId) {
   if (typeof tabId !== "number") return false;
   try {
+    // allFrames: video players often live in iframes; registration already uses allFrames.
+    const frameTarget = { tabId, allFrames: true };
     // Re-inject even if an older content.js set the guard — clear it first.
     await chrome.scripting.executeScript({
-      target: { tabId },
+      target: frameTarget,
       world: "MAIN",
       func: () => {
         try {
@@ -723,7 +725,7 @@ async function injectHotkeysIntoTab(tabId) {
       },
     });
     await chrome.scripting.executeScript({
-      target: { tabId },
+      target: frameTarget,
       func: () => {
         try {
           delete window.__scrapDownloadHotkeys;
@@ -732,9 +734,13 @@ async function injectHotkeysIntoTab(tabId) {
         }
       },
     });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["content-main.js"], world: "MAIN" });
     await chrome.scripting.executeScript({
-      target: { tabId },
+      target: frameTarget,
+      files: ["content-main.js"],
+      world: "MAIN",
+    });
+    await chrome.scripting.executeScript({
+      target: frameTarget,
       files: ["hotkeySettings.js", "content.js"],
     });
     return true;

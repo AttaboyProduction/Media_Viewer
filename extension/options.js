@@ -27,10 +27,11 @@ function render() {
   setKeyChip("pageAltKey", hotkeys.page.alt);
 
   const busy = Boolean(capturing);
-  $("captureFile").textContent = capturing === "file" ? "Press a key…" : "Capture";
-  $("captureFileAlt").textContent = capturing === "fileAlt" ? "Press a key…" : "Capture";
-  $("capturePage").textContent = capturing === "page" ? "Press a key…" : "Capture";
-  $("capturePageAlt").textContent = capturing === "pageAlt" ? "Press a key…" : "Capture";
+  const captureLabel = (slot) => (capturing === slot ? "Press key or click…" : "Capture");
+  $("captureFile").textContent = captureLabel("file");
+  $("captureFileAlt").textContent = captureLabel("fileAlt");
+  $("capturePage").textContent = captureLabel("page");
+  $("capturePageAlt").textContent = captureLabel("pageAlt");
 
   $("captureFile").disabled = busy && capturing !== "file";
   $("captureFileAlt").disabled = busy && capturing !== "fileAlt";
@@ -53,7 +54,9 @@ function startCapture(which) {
     page: "primary page",
     pageAlt: "second page",
   };
-  setStatus(`Press a key for the ${labels[which]} shortcut (Esc cancels).`);
+  setStatus(
+    `Press any key or mouse button for the ${labels[which]} shortcut (Esc cancels). Side buttons and uncommon keys work.`
+  );
   render();
 }
 
@@ -62,11 +65,13 @@ function cloneActions() {
     file: {
       code: hotkeys.file.code,
       key: hotkeys.file.key,
+      button: hotkeys.file.button,
       alt: hotkeys.file.alt ? { ...hotkeys.file.alt } : null,
     },
     page: {
       code: hotkeys.page.code,
       key: hotkeys.page.key,
+      button: hotkeys.page.button,
       alt: hotkeys.page.alt ? { ...hotkeys.page.alt } : null,
     },
   };
@@ -88,15 +93,94 @@ function stripBinding(action, binding) {
     key: action.key,
     alt: action.alt ? { ...action.alt } : null,
   };
+  if (typeof action.button === "number") next.button = action.button;
   if (next.alt && ScrapHotkeySettings.sameBinding(binding, next.alt)) next.alt = null;
   return next;
 }
 
-async function onKeyDown(event) {
+function applyCapturedBinding(which, binding) {
+  return (async () => {
+    const action = actionName(which);
+    const other = action === "file" ? "page" : "file";
+    const next = cloneActions();
+
+    // Same as this action's other slot → just use one copy.
+    if (isAltSlot(which)) {
+      if (ScrapHotkeySettings.sameBinding(binding, next[action])) {
+        next[action].alt = null;
+        await persist(next);
+        setStatus("Second binding matches primary — left empty.");
+        return;
+      }
+    } else if (next[action].alt && ScrapHotkeySettings.sameBinding(binding, next[action].alt)) {
+      next[action].alt = null;
+    }
+
+    // Steal from the other action if that binding was already used there.
+    for (const part of ScrapHotkeySettings.bindingsOf(next[other])) {
+      if (ScrapHotkeySettings.sameBinding(binding, part)) {
+        if (ScrapHotkeySettings.sameBinding(binding, next[other])) {
+          // Taking the other primary — swap primaries when setting a primary.
+          if (!isAltSlot(which)) {
+            const stolen = {
+              code: next[other].code,
+              key: next[other].key,
+            };
+            if (typeof next[other].button === "number") stolen.button = next[other].button;
+            next[other] = {
+              code: next[action].code,
+              key: next[action].key,
+              alt: stripBinding(next[other], binding).alt,
+            };
+            if (typeof next[action].button === "number") next[other].button = next[action].button;
+            next[action] = { ...stolen, alt: next[action].alt };
+            next[action] = stripBinding(next[action], next[other]);
+            await persist(next);
+            setStatus(
+              `Swapped with ${other}; saved ${action} as ${ScrapHotkeySettings.labelFor(binding)}.`
+            );
+            return;
+          }
+          // Restore capture so the user can try again.
+          capturing = which;
+          render();
+          setStatus(
+            `That binding is the ${other} primary shortcut. Pick another or change ${other} first.`,
+            true
+          );
+          return;
+        }
+        next[other] = stripBinding(next[other], binding);
+      }
+    }
+
+    if (isAltSlot(which)) {
+      next[action].alt = binding;
+    } else {
+      next[action] = {
+        code: binding.code,
+        key: binding.key,
+        alt: next[action].alt,
+      };
+      if (typeof binding.button === "number") next[action].button = binding.button;
+    }
+
+    await persist(next);
+    const slot = isAltSlot(which) ? "second" : "primary";
+    setStatus(`Saved ${action} ${slot} as ${ScrapHotkeySettings.labelFor(binding)}.`);
+  })();
+}
+
+function onCaptureInput(event) {
   if (!capturing) return;
+  // Ignore the click that pressed Capture (click fires after mousedown on the button).
+  if (event.type === "mousedown" || event.type === "auxclick") {
+    const t = event.target;
+    if (t && t.closest && t.closest("button")) return;
+  }
   event.preventDefault();
   event.stopPropagation();
-  if (event.key === "Escape") {
+  if (event.type === "keydown" && (event.key === "Escape" || event.code === "Escape")) {
     capturing = "";
     setStatus("Capture cancelled.");
     render();
@@ -104,65 +188,16 @@ async function onKeyDown(event) {
   }
   const binding = ScrapHotkeySettings.bindingFromEvent(event);
   if (!binding) {
-    setStatus("Use a normal key (not only Shift/Ctrl/Alt).", true);
+    if (event.type === "keydown") {
+      setStatus("Use a normal key or mouse button (not only Shift/Ctrl/Alt).", true);
+    }
     return;
   }
-
+  // Clear synchronously so mousedown + auxclick cannot double-save.
   const which = capturing;
-  const action = actionName(which);
-  const other = action === "file" ? "page" : "file";
-  const next = cloneActions();
-
-  // Same as this action's other slot → just use one copy.
-  if (isAltSlot(which)) {
-    if (ScrapHotkeySettings.sameBinding(binding, next[action])) {
-      next[action].alt = null;
-      capturing = "";
-      await persist(next);
-      setStatus("Second key matches primary — left empty.");
-      return;
-    }
-  } else if (next[action].alt && ScrapHotkeySettings.sameBinding(binding, next[action].alt)) {
-    next[action].alt = null;
-  }
-
-  // Steal from the other action if that key was already bound there.
-  for (const part of ScrapHotkeySettings.bindingsOf(next[other])) {
-    if (ScrapHotkeySettings.sameBinding(binding, part)) {
-      if (ScrapHotkeySettings.sameBinding(binding, next[other])) {
-        // Taking the other primary — swap primaries when setting a primary.
-        if (!isAltSlot(which)) {
-          const stolen = { code: next[other].code, key: next[other].key };
-          next[other] = {
-            code: next[action].code,
-            key: next[action].key,
-            alt: stripBinding(next[other], binding).alt,
-          };
-          next[action] = { code: stolen.code, key: stolen.key, alt: next[action].alt };
-          next[action] = stripBinding(next[action], next[other]);
-          capturing = "";
-          await persist(next);
-          setStatus(`Swapped with ${other}; saved ${action} as ${ScrapHotkeySettings.labelFor(binding)}.`);
-          return;
-        }
-        // Setting an alt to the other primary: move other primary aside is awkward — clear other primary by swapping with a dash? Better: reject.
-        setStatus(`That key is the ${other} primary shortcut. Pick another or change ${other} first.`, true);
-        return;
-      }
-      next[other] = stripBinding(next[other], binding);
-    }
-  }
-
-  if (isAltSlot(which)) {
-    next[action].alt = binding;
-  } else {
-    next[action] = { code: binding.code, key: binding.key, alt: next[action].alt };
-  }
-
   capturing = "";
-  await persist(next);
-  const slot = isAltSlot(which) ? "second" : "primary";
-  setStatus(`Saved ${action} ${slot} key as ${ScrapHotkeySettings.labelFor(binding)}.`);
+  render();
+  applyCapturedBinding(which, binding);
 }
 
 $("captureFile").addEventListener("click", () => startCapture("file"));
@@ -173,21 +208,32 @@ $("clearFileAlt").addEventListener("click", async () => {
   const next = cloneActions();
   next.file.alt = null;
   await persist(next);
-  setStatus("Cleared second file key.");
+  setStatus("Cleared second file binding.");
 });
 $("clearPageAlt").addEventListener("click", async () => {
   const next = cloneActions();
   next.page.alt = null;
   await persist(next);
-  setStatus("Cleared second page key.");
+  setStatus("Cleared second page binding.");
 });
 $("reset").addEventListener("click", async () => {
   capturing = "";
   await persist(ScrapHotkeySettings.DEFAULTS);
-  setStatus("Reset to Insert / Home (second keys empty).");
+  setStatus("Reset to Insert / Home (second bindings empty).");
 });
 
-window.addEventListener("keydown", onKeyDown, true);
+window.addEventListener("keydown", onCaptureInput, true);
+window.addEventListener("mousedown", onCaptureInput, true);
+window.addEventListener("auxclick", onCaptureInput, true);
+window.addEventListener(
+  "contextmenu",
+  (event) => {
+    if (!capturing) return;
+    event.preventDefault();
+    event.stopPropagation();
+  },
+  true
+);
 
 ScrapHotkeySettings.loadHotkeys().then((loaded) => {
   hotkeys = loaded;

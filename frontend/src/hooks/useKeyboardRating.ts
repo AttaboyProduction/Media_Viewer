@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import { shouldSkipKeyboardShortcut } from '../utils/keyboardTarget'
 
 export const KEYBOARD_RATING_WINDOW_MS = 2000
 
@@ -56,15 +57,10 @@ export function useKeyboardRating(
       }
     }
 
-    const isTypingTarget = (target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false
-      const tag = target.tagName
-      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable
-    }
-
+    // Capture so 1–5 still rate when a <video> (or its controls) has focus.
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey) return
-      if (isTypingTarget(e.target)) return
+      if (shouldSkipKeyboardShortcut(e)) return
       if (e.key < '1' || e.key > '5') return
       e.preventDefault()
       const digit = Number(e.key)
@@ -79,9 +75,9 @@ export function useKeyboardRating(
       }
     }
 
-    window.addEventListener('keydown', onKey)
+    window.addEventListener('keydown', onKey, true)
     return () => {
-      window.removeEventListener('keydown', onKey)
+      window.removeEventListener('keydown', onKey, true)
       clearWindow()
     }
   }, [enabled])

@@ -28,6 +28,14 @@
     root.dataset.scrapHotkeyPageAltKey = (hotkeys.page.alt && hotkeys.page.alt.key) || "";
   }
 
+  function partIsMouse(part) {
+    if (!part) return false;
+    if (typeof ScrapHotkeySettings !== "undefined" && ScrapHotkeySettings.isMousePart) {
+      return ScrapHotkeySettings.isMousePart(part);
+    }
+    return /^Mouse\d+$/i.test(part.code || part.key || "");
+  }
+
   function loadHotkeysFromStorage() {
     try {
       chrome.storage.local.get("hotkeys", (stored) => {
@@ -89,10 +97,47 @@
     return absUrl(el.href || el.currentSrc || el.src || el.poster || "");
   }
 
+  function isMediaNode(el) {
+    if (!el || !el.tagName) return false;
+    const tag = el.tagName.toLowerCase();
+    return tag === "video" || tag === "audio";
+  }
+
+  function pathHasMedia(event) {
+    if (!event) return isMediaNode(document.activeElement);
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+    for (let i = 0; i < path.length; i++) {
+      if (isMediaNode(path[i])) return true;
+    }
+    if (isMediaNode(event.target)) return true;
+    if (isMediaNode(document.activeElement)) return true;
+    return false;
+  }
+
+  function isHiddenFocusTrap(el) {
+    if (!el || !el.getBoundingClientRect) return false;
+    try {
+      const style = window.getComputedStyle(el);
+      if (!style) return false;
+      if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) {
+        return true;
+      }
+      const r = el.getBoundingClientRect();
+      if (r.width <= 1 || r.height <= 1) return true;
+      if (r.bottom < 0 || r.right < 0 || r.top > window.innerHeight || r.left > window.innerWidth) {
+        return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+
   function isTypingTarget(el) {
     if (!el) return false;
     if (el.nodeType === 3) el = el.parentElement;
     if (!el || !el.tagName) return false;
+    if (isMediaNode(el)) return false;
     const tag = el.tagName.toLowerCase();
     if (tag === "textarea" || tag === "select") return true;
     if (tag === "input") {
@@ -111,9 +156,29 @@
     );
   }
 
+  function shouldSkipHotkey(event) {
+    if (pathHasMedia(event)) return false;
+    const node = event ? focusedNode(event) : document.activeElement;
+    const active = document.activeElement;
+    if (isTypingTarget(node) && !isHiddenFocusTrap(node)) return true;
+    if (isTypingTarget(active) && !isHiddenFocusTrap(active)) return true;
+    return false;
+  }
+
   function focusedNode(event) {
     const path = typeof event.composedPath === "function" ? event.composedPath() : [];
     return path[0] || event.target || document.activeElement;
+  }
+
+  function pageUrlForHotkey() {
+    try {
+      if (window.top && window.top.location && window.top.location.href) {
+        return absUrl(window.top.location.href);
+      }
+    } catch {
+      // Cross-origin iframe — fall back to this frame URL; background uses tab URL too.
+    }
+    return absUrl(location.href);
   }
 
   function flash(text) {
@@ -141,9 +206,18 @@
       return ScrapHotkeySettings.eventMatches(event, binding);
     }
     if (!binding || event.ctrlKey || event.altKey || event.metaKey || event.repeat) return false;
-    const parts = [{ code: binding.code, key: binding.key }];
+    const parts = [{ code: binding.code, key: binding.key, button: binding.button }];
     if (binding.alt) parts.push(binding.alt);
+    const isMouse = typeof event.button === "number" && (!event.type || event.type.indexOf("key") !== 0);
     for (const part of parts) {
+      if (partIsMouse(part)) {
+        if (!isMouse) continue;
+        const m = /^Mouse(\d+)$/i.exec(part.code || part.key || "");
+        const btn = typeof part.button === "number" ? part.button : m ? Number(m[1]) : -1;
+        if (event.button === btn) return true;
+        continue;
+      }
+      if (isMouse) continue;
       if (part.code && event.code === part.code) return true;
       const key =
         typeof event.key === "string" && event.key.length === 1 ? event.key.toLowerCase() : event.key;
@@ -171,7 +245,7 @@
         const hinted = hoverUrl || urlFromNode(node) || urlFromNode(document.activeElement);
         chrome.runtime.sendMessage({
           type: "hotkeyFile",
-          pageUrl: absUrl(location.href),
+          pageUrl: pageUrlForHotkey(),
           hint: hinted && hinted.indexOf("blob:") === 0 ? "" : hinted,
         }, (result) => {
           if (chrome.runtime.lastError) {
@@ -207,10 +281,13 @@
   }
 
   function onHotkey(event) {
-    if (event.type !== "keydown") return;
-    const node = focusedNode(event);
+    const isMouse =
+      (event.type === "mousedown" || event.type === "auxclick") && typeof event.button === "number";
+    if (event.type !== "keydown" && !isMouse) return;
     // In a text field the letter must type; skip the extension for that press.
-    if (isTypingTarget(node) || isTypingTarget(document.activeElement)) return;
+    // Video/audio focus (and hidden player traps) still fire shortcuts.
+    // Mouse shortcuts still run over media (skip typing check for pure mouse).
+    if (!isMouse && shouldSkipHotkey(event)) return;
     const pressedFile = matchesBinding(event, hotkeys.file);
     const pressedPage = matchesBinding(event, hotkeys.page);
     if (!pressedFile && !pressedPage) return;
@@ -220,16 +297,39 @@
     ) {
       return;
     }
+    // Mouse + browser nav keys cancel defaults; normal keys still type / keep their job.
+    const navKey =
+      event.code === "BrowserBack" ||
+      event.code === "BrowserForward" ||
+      event.key === "BrowserBack" ||
+      event.key === "BrowserForward";
+    if (isMouse || navKey) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
     queueHotkey(pressedFile ? "f" : "p", event);
   }
 
   window.addEventListener("message", (event) => {
-    if (event.source !== window) return;
     const data = event.data;
     if (!data || data.source !== "scrap-download-hotkey") return;
-    if (isTypingTarget(document.activeElement)) return;
+    if (data.key !== "f" && data.key !== "p") return;
+    // MAIN world posts from this window; iframe players may post to top.
+    if (shouldSkipHotkey(null)) return;
     queueHotkey(data.key, null);
   });
 
   window.addEventListener("keydown", onHotkey, true);
+  window.addEventListener("mousedown", onHotkey, true);
+  window.addEventListener("auxclick", onHotkey, true);
+  window.addEventListener(
+    "contextmenu",
+    (event) => {
+      if (matchesBinding(event, hotkeys.file) || matchesBinding(event, hotkeys.page)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    },
+    true
+  );
 })();
