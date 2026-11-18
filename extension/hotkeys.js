@@ -9,7 +9,18 @@ const origins = (params.get("origins") || "")
 const msg = document.getElementById("msg");
 const allow = document.getElementById("allow");
 
-allow.textContent = `Allow F / P on ${siteName}`;
+allow.textContent = `Allow shortcuts on ${siteName}`;
+
+chrome.storage.local.get("hotkeys", (stored) => {
+  const hotkeys = (stored && stored.hotkeys) || {};
+  const file = (hotkeys.file && hotkeys.file.key) || "Insert";
+  const page = (hotkeys.page && hotkeys.page.key) || "Home";
+  const fileLabel = file.length === 1 ? file.toUpperCase() : file;
+  const pageLabel = page.length === 1 ? page.toUpperCase() : page;
+  allow.textContent = `Allow ${fileLabel} / ${pageLabel} on ${siteName}`;
+  msg.textContent =
+    `Shortcut keys: ${fileLabel} = one file, ${pageLabel} = whole page. Chrome will ask to read this site so those keys can find posts.`;
+});
 
 allow.addEventListener("click", async () => {
   allow.disabled = true;

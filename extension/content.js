@@ -1,12 +1,69 @@
 // Hotkeys on supported gallery pages (registered / injected from the service worker).
-// F = download the image/link under the cursor, or this post page.
-// P = download every supported post/picture on the page.
+// Insert (default) = download the image/link under the cursor, or this post page.
+// Home (default) = download every supported post/picture on the page.
 (function () {
   if (window.__scrapDownloadHotkeys) return;
   window.__scrapDownloadHotkeys = true;
 
   let hoverUrl = "";
   let lastHotkeyAt = 0;
+  let hotkeys =
+    typeof ScrapHotkeySettings !== "undefined"
+      ? ScrapHotkeySettings.normalizeHotkeys(null)
+      : {
+          file: { code: "Insert", key: "Insert", alt: null },
+          page: { code: "Home", key: "Home", alt: null },
+        };
+
+  function applyHotkeyDataset() {
+    const root = document.documentElement;
+    if (!root) return;
+    root.dataset.scrapHotkeyFileCode = hotkeys.file.code || "";
+    root.dataset.scrapHotkeyFileKey = hotkeys.file.key || "";
+    root.dataset.scrapHotkeyFileAltCode = (hotkeys.file.alt && hotkeys.file.alt.code) || "";
+    root.dataset.scrapHotkeyFileAltKey = (hotkeys.file.alt && hotkeys.file.alt.key) || "";
+    root.dataset.scrapHotkeyPageCode = hotkeys.page.code || "";
+    root.dataset.scrapHotkeyPageKey = hotkeys.page.key || "";
+    root.dataset.scrapHotkeyPageAltCode = (hotkeys.page.alt && hotkeys.page.alt.code) || "";
+    root.dataset.scrapHotkeyPageAltKey = (hotkeys.page.alt && hotkeys.page.alt.key) || "";
+  }
+
+  function loadHotkeysFromStorage() {
+    try {
+      chrome.storage.local.get("hotkeys", (stored) => {
+        const raw = stored && stored.hotkeys;
+        if (typeof ScrapHotkeySettings !== "undefined") {
+          hotkeys = ScrapHotkeySettings.normalizeHotkeys(raw);
+        } else if (raw && typeof raw === "object") {
+          hotkeys = {
+            file: {
+              code: (raw.file && raw.file.code) || "Insert",
+              key: (raw.file && raw.file.key) || "Insert",
+              alt: raw.file && raw.file.alt ? raw.file.alt : null,
+            },
+            page: {
+              code: (raw.page && raw.page.code) || "Home",
+              key: (raw.page && raw.page.key) || "Home",
+              alt: raw.page && raw.page.alt ? raw.page.alt : null,
+            },
+          };
+        }
+        applyHotkeyDataset();
+      });
+    } catch {
+      applyHotkeyDataset();
+    }
+  }
+
+  loadHotkeysFromStorage();
+  try {
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local" || !changes.hotkeys) return;
+      loadHotkeysFromStorage();
+    });
+  } catch {
+    // Storage API unavailable.
+  }
 
   chrome.runtime.sendMessage({ type: "describePage", url: location.href }, (desc) => {
     if (desc && desc.onSite && document.documentElement) {
@@ -70,11 +127,20 @@
     }, 1600);
   }
 
-  function isHotkey(event, code, letter) {
-    if (event.ctrlKey || event.altKey || event.metaKey || event.repeat) return false;
-    if (event.code === code) return true;
-    const key = typeof event.key === "string" && event.key.length === 1 ? event.key.toLowerCase() : event.key;
-    return key === letter;
+  function matchesBinding(event, binding) {
+    if (typeof ScrapHotkeySettings !== "undefined" && ScrapHotkeySettings.eventMatches) {
+      return ScrapHotkeySettings.eventMatches(event, binding);
+    }
+    if (!binding || event.ctrlKey || event.altKey || event.metaKey || event.repeat) return false;
+    const parts = [{ code: binding.code, key: binding.key }];
+    if (binding.alt) parts.push(binding.alt);
+    for (const part of parts) {
+      if (part.code && event.code === part.code) return true;
+      const key =
+        typeof event.key === "string" && event.key.length === 1 ? event.key.toLowerCase() : event.key;
+      if (part.key && key === part.key) return true;
+    }
+    return false;
   }
 
   document.addEventListener(
@@ -135,16 +201,19 @@
   function onHotkey(event) {
     const node = focusedNode(event);
     if (isTypingTarget(node)) return;
-    const pressedF = isHotkey(event, "KeyF", "f");
-    const pressedP = isHotkey(event, "KeyP", "p");
-    if (!pressedF && !pressedP) return;
-    if (pressedP && (!document.documentElement || document.documentElement.dataset.scrapHotkeys !== "site")) {
+    const pressedFile = matchesBinding(event, hotkeys.file);
+    const pressedPage = matchesBinding(event, hotkeys.page);
+    if (!pressedFile && !pressedPage) return;
+    if (
+      pressedPage &&
+      (!document.documentElement || document.documentElement.dataset.scrapHotkeys !== "site")
+    ) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
     if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
-    queueHotkey(pressedF ? "f" : "p", event);
+    queueHotkey(pressedFile ? "f" : "p", event);
   }
 
   window.addEventListener("message", (event) => {

@@ -1,0 +1,103 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>MediaViewer settings</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font: 13px/1.4 system-ui, "Segoe UI", sans-serif;
+        color: #e8e8ea;
+        background: #18181b;
+        max-width: 520px;
+      }
+      h1 { font-size: 16px; margin: 0 0 8px; }
+      p { margin: 0 0 12px; color: #a1a1aa; }
+      .action {
+        border: 1px solid #3f3f46;
+        border-radius: 6px;
+        padding: 10px 12px;
+        margin: 12px 0;
+        background: #101013;
+      }
+      .action-title { font-weight: 600; margin-bottom: 8px; }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 6px 0;
+        flex-wrap: wrap;
+      }
+      .slot { flex: 0 0 4.5rem; color: #a1a1aa; font-size: 12px; }
+      .key {
+        min-width: 3.2em;
+        text-align: center;
+        font-weight: 600;
+        padding: 4px 8px;
+        border: 1px solid #3f3f46;
+        border-radius: 4px;
+        background: #18181b;
+      }
+      .key.empty { color: #71717a; font-weight: 500; }
+      button {
+        font: inherit;
+        color: #fff;
+        background: #2b2b31;
+        border: 1px solid #3f3f46;
+        border-radius: 5px;
+        padding: 5px 9px;
+        cursor: pointer;
+      }
+      button:hover { background: #36363d; }
+      button.primary { background: #1565c0; border-color: #1565c0; }
+      button:disabled { opacity: 0.45; cursor: default; }
+      #status { margin-top: 12px; min-height: 1.2em; color: #a1a1aa; }
+      #status.err { color: #ef9a9a; }
+    </style>
+  </head>
+  <body>
+    <h1>Shortcut keys</h1>
+    <p>
+      Each action has a primary key and an optional second key (empty by default).
+      Capture waits for the next keypress (Esc cancels).
+    </p>
+
+    <div class="action">
+      <div class="action-title" id="fileLabel">Download file / largest</div>
+      <div class="row">
+        <span class="slot">Primary</span>
+        <span class="key" id="fileKey">Insert</span>
+        <button type="button" id="captureFile">Capture</button>
+      </div>
+      <div class="row">
+        <span class="slot">Second</span>
+        <span class="key empty" id="fileAltKey">—</span>
+        <button type="button" id="captureFileAlt">Capture</button>
+        <button type="button" id="clearFileAlt">Clear</button>
+      </div>
+    </div>
+
+    <div class="action">
+      <div class="action-title" id="pageLabel">Download page / all posts</div>
+      <div class="row">
+        <span class="slot">Primary</span>
+        <span class="key" id="pageKey">Home</span>
+        <button type="button" id="capturePage">Capture</button>
+      </div>
+      <div class="row">
+        <span class="slot">Second</span>
+        <span class="key empty" id="pageAltKey">—</span>
+        <button type="button" id="capturePageAlt">Capture</button>
+        <button type="button" id="clearPageAlt">Clear</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <button type="button" id="reset" class="primary">Reset to Insert / Home</button>
+    </div>
+    <div id="status"></div>
+    <script src="hotkeySettings.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

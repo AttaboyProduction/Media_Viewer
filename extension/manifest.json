@@ -1,12 +1,16 @@
 {
   "manifest_version": 3,
   "name": "MediaViewer",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Send the current page to your local MediaViewer app.",
   "permissions": ["storage", "contextMenus", "tabs", "scripting", "activeTab", "alarms"],
   "host_permissions": ["http://127.0.0.1:8000/*", "http://*/*", "https://*/*"],
   "background": {
     "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
   },
   "action": {
     "default_title": "MediaViewer",

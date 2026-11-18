@@ -1,5 +1,11 @@
 // node extension/hotkeyTarget.selftest.js
-const { compileSites, chooseFileHotkey, scrapableUrl } = require("./shared.js");
+const {
+  compileSites,
+  chooseFileHotkey,
+  scrapableUrl,
+  pageIdentity,
+  pageKeysMatch,
+} = require("./shared.js");
 
 const sites = compileSites([
   {
@@ -9,6 +15,14 @@ const sites = compileSites([
     url_patterns: [
       "^https?://(?:[\\w-]+\\.)?rule34\\.xyz/post/(\\d+)",
       "^https?://rule34xyz\\.b-cdn\\.net/posts/\\d+/(\\d+)/",
+    ],
+  },
+  {
+    id: "rule34_xxx",
+    name: "rule34.xxx",
+    page_matches: ["https://rule34.xxx/*"],
+    url_patterns: [
+      "^https?://rule34\\.xxx/index\\.php\\?page=post&s=view&id=(\\d+)",
     ],
   },
 ]);
@@ -28,5 +42,18 @@ assert(
   chooseFileHotkey(sites, "https://rule34.xyz/", other) === other,
   "F on a listing thumbnail queues that post"
 );
+
+const xxx = "https://rule34.xxx/index.php?page=post&s=view&id=18055730";
+assert(
+  scrapableUrl(sites, xxx) === pageIdentity(xxx),
+  "query-string post keeps id in the scrapable URL"
+);
+assert(
+  chooseFileHotkey(sites, xxx, "https://cdn.rule34.xxx/images/18055730.jpg") === pageIdentity(xxx),
+  "F on a query-string post queues that page even when hint is a file"
+);
+assert(pageKeysMatch(xxx, xxx + "#frag"), "page key ignores hash");
+assert(pageKeysMatch(xxx, xxx), "exact page key matches");
+assert(!pageKeysMatch(xxx, "https://rule34.xxx/index.php?page=post&s=view&id=1"), "different ids do not match");
 
 console.log("hotkeyTarget.selftest: ok");

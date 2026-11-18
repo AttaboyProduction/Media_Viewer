@@ -54,6 +54,9 @@ class ScrapeStatus:
     job_id: int = 0
     kind: str = ""  # "scrape" | "import" | ""
     site_id: str | None = None
+    # Panel the live counters / lists belong to (see services/scrape_panels.py).
+    source_key: str = ""
+    source_label: str = ""
     queue_open: bool = False
     pending_urls: list[str] = field(default_factory=list)
     accepted_urls: set[str] = field(default_factory=set)
@@ -211,7 +214,7 @@ def enqueue_discovered_urls(urls: list[str], *, site_id: str | None) -> list[str
             continue
         known.add(key)
         fresh.append(url)
-    stored = add_queue(fresh)
+    stored = add_queue(fresh, source=scrape_status.source_key or site_id or "")
     if not stored:
         return []
     if site_id:
@@ -259,26 +262,24 @@ def _cancelled() -> bool:
 
 
 def _record_cancelled(url: str) -> None:
-    """Mark one queued URL as cancelled for this job and for the session list."""
+    """Mark one queued URL as cancelled for this job and for the session list.
+
+    Cancelled work stays incomplete: do not bump ``processed`` or ``counted_urls``.
+    """
     _record_skip(url, "cancelled")
     if url not in scrape_status.cancelled_urls:
         scrape_status.cancelled_urls.append(url)
-    if url and url not in scrape_status.counted_urls:
-        scrape_status.counted_urls.add(url)
-        scrape_status.processed += 1
+    if url:
+        scrape_status.counted_urls.discard(url)
 
 
 def _skip_cancelled_remainder() -> None:
-    """Count every file still queued as skipped, and close the gap up to ``total``."""
+    """Move every file still queued onto Cancelled / Skipped without marking them done."""
     with scrape_lock:
         left = list(scrape_status.pending_urls)
         scrape_status.pending_urls = []
     for url in left:
         _record_cancelled(url)
-    gap = scrape_status.total - scrape_status.processed
-    if gap > 0:
-        scrape_status.skipped += gap
-        scrape_status.processed += gap
 
 
 def abandon_running_job() -> None:
@@ -286,7 +287,8 @@ def abandon_running_job() -> None:
 
     The worker thread may still be blocked on the network. Bumping ``job_id``
     detaches it so a late response cannot write into this job or the next one.
-    Files still queued, including the one in flight, count as skipped.
+    Files still queued, including the one in flight, go to Cancelled and stay
+    incomplete (``processed`` is not padded up to ``total``).
     """
     with scrape_lock:
         scrape_status.cancel = True
@@ -299,10 +301,6 @@ def abandon_running_job() -> None:
             scrape_status.current_url = None
             for url in left:
                 _record_cancelled(url)
-            gap = scrape_status.total - scrape_status.processed
-            if gap > 0:
-                scrape_status.skipped += gap
-                scrape_status.processed += gap
             scrape_status.message = "Cancelled"
             scrape_status.current_url = None
             scrape_status.running = False
@@ -357,7 +355,11 @@ def _persist_outcome(url: str, *, downloaded: bool, reason: str = "", detail: st
 
     if url:
         scrape_status.queue_urls = note_outcome(
-            url, downloaded=downloaded, reason=reason, detail=detail
+            url,
+            downloaded=downloaded,
+            reason=reason,
+            detail=detail,
+            source=scrape_status.source_key,
         )
     else:
         scrape_status.queue_urls = queue_urls()
@@ -400,7 +402,10 @@ def _record_skip(url: str, reason: str, detail: str = "") -> None:
 
 
 def _settle_errors_into_skipped() -> None:
-    """Move scrape errors into the skipped list. Caller holds ``scrape_lock``."""
+    """Move scrape errors into the skipped list. Caller holds ``scrape_lock``.
+
+    Does not pad ``processed`` up to ``total`` — incomplete work stays incomplete.
+    """
     for item in list(scrape_status.errors):
         url, _, detail = item.partition(": ")
         if not detail:
@@ -414,12 +419,6 @@ def _settle_errors_into_skipped() -> None:
             scrape_status.skipped_items.append(
                 SkippedItem(url=url, reason="error", detail=detail or item)
             )
-            if scrape_status.total > scrape_status.processed:
-                scrape_status.processed += 1
-    gap = scrape_status.total - scrape_status.processed
-    if gap > 0:
-        scrape_status.skipped += gap
-        scrape_status.processed += gap
     scrape_status.errors = []
 
 
@@ -684,6 +683,9 @@ def _claim_remote_download(url: str) -> str:
         return "appended"
     if scrape_status.running:
         return "busy"
+    from backend.app.services.scrape_panels import SOURCE_UNSUPPORTED, activate
+
+    activate(scrape_status, SOURCE_UNSUPPORTED)
     keep = scrape_status.ran_this_session
     already_counted = url in scrape_status.counted_urls
     scrape_status.job_id += 1
@@ -719,6 +721,17 @@ def _claim_remote_download(url: str) -> str:
     return "started"
 
 
+def _finish_remote_download(url: str, result) -> None:
+    """Record a finished raw download without touching the closed DB session."""
+    media_id = getattr(result, "media_id", None)
+    if isinstance(media_id, int) and media_id not in scrape_status.recent_media_ids:
+        scrape_status.recent_media_ids.append(media_id)
+    if result.skipped_reason:
+        _complete_skip(url, result.skipped_reason)
+    else:
+        _complete_download(url)
+
+
 def _run_remote_downloads(job_id: int) -> None:
     """Save queued picture URLs with no tags. Stop counts the rest as skipped."""
     try:
@@ -734,18 +747,15 @@ def _run_remote_downloads(job_id: int) -> None:
             scrape_status.message = "Downloading file"
             scrape_status.current_url = url
             try:
-                result = save_remote_file(url)
+                from backend.app.services.scrape_leftovers import page_url_for
+
+                result = save_remote_file(url, page_url_for(url))
             except Exception as exc:  # noqa: BLE001 — one bad file should not drop the rest
                 detail = str(exc)
                 scrape_status.errors.append(f"{url}: {detail}")
                 _complete_skip(url, "error", detail)
                 continue
-            if result.skipped_reason:
-                _complete_skip(url, result.skipped_reason)
-            else:
-                _complete_download(url)
-                if result.media is not None and result.media.id is not None:
-                    scrape_status.recent_media_ids.append(result.media.id)
+            _finish_remote_download(url, result)
         if scrape_status.job_id == job_id and _cancelled():
             _skip_cancelled_remainder()
             with scrape_lock:

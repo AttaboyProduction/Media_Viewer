@@ -73,7 +73,7 @@
     };
   }
 
-  // Same mark, flush with the top-left corner, for a post already in the library.
+  // Same mark, flush with the top-left corner: blue in library, red while queued.
   function savedDotGeometry(size) {
     const diameter = Math.max(10, Math.round(size / 2));
     return {
@@ -83,10 +83,44 @@
     };
   }
 
+  const DOT_SAVED = "#6aa8ff";
+  const DOT_QUEUED = "#c62828";
+
+  /** Pick the scrape panel for the open page (site id, or unsupported). */
+  function panelForPage(status, siteId) {
+    const sources = status && Array.isArray(status.sources) ? status.sources : [];
+    const key = siteId || "unsupported";
+    const match = sources.find((panel) => panel && panel.key === key);
+    if (match) return match;
+    if (status && !sources.length && (!siteId || status.source_key === key)) {
+      // Older servers without sources[] — fall back to the flat job counters.
+      return status;
+    }
+    return {
+      key,
+      label: key === "unsupported" ? "Unsupported" : key,
+      running: false,
+      total: 0,
+      processed: 0,
+      downloaded: 0,
+      skipped: 0,
+      similar: 0,
+      message: "",
+      current_url: null,
+      last_gallery_url: null,
+      errors: [],
+      skipped_items: [],
+      cancelled_urls: [],
+      queue_urls: [],
+    };
+  }
+
   const api = {
     BUSY_POLL_MS,
     IDLE_POLL_MS,
     DEFAULT_TITLE,
+    DOT_SAVED,
+    DOT_QUEUED,
     isBusy,
     isWatchDone,
     progressRatio,
@@ -95,6 +129,7 @@
     tooltipFor,
     busyDotGeometry,
     savedDotGeometry,
+    panelForPage,
   };
   if (typeof globalThis !== "undefined") globalThis.ScrapIconProgress = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

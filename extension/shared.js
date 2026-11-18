@@ -50,6 +50,41 @@
     }
   }
 
+  // Keep query (post id often lives there), drop hash. Used as the queue/dot page key.
+  function pageIdentity(url) {
+    if (!url || typeof url !== "string") return "";
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return "";
+      return parsed.origin + parsed.pathname + parsed.search;
+    } catch {
+      return "";
+    }
+  }
+
+  // True when key and page are the same post page (query kept). Avoids id=1 matching id=12.
+  function pageKeysMatch(key, pageUrl) {
+    const a = pageIdentity(key);
+    const b = pageIdentity(pageUrl);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    try {
+      const ua = new URL(a);
+      const ub = new URL(b);
+      const pathA = (ua.pathname.replace(/\/$/, "") || "/").toLowerCase();
+      const pathB = (ub.pathname.replace(/\/$/, "") || "/").toLowerCase();
+      if (ua.origin.toLowerCase() !== ub.origin.toLowerCase()) return false;
+      if (pathA !== pathB) {
+        // Left-prefix on the path only (e.g. /post/1 vs /post/1/extra), not on query values.
+        if (!pathA.startsWith(pathB + "/") && !pathB.startsWith(pathA + "/")) return false;
+      }
+      if (!ua.search || !ub.search) return true;
+      return ua.search === ub.search;
+    } catch {
+      return false;
+    }
+  }
+
   // The site whose page_matches cover this URL, or null. The homepage counts.
   function siteFor(sites, url) {
     const cleaned = cleanPageUrl(url);
@@ -57,17 +92,21 @@
     return sites.find((site) => site.page.some((re) => re.test(cleaned))) || null;
   }
 
-  // The cleaned URL when a post regex matches it, otherwise "".
+  // Post URL the scraper should use. Tries full URL (query kept) then path-only.
   function scrapableUrl(sites, url) {
+    const withQuery = pageIdentity(url);
     const cleaned = cleanPageUrl(url);
-    if (!cleaned) return "";
+    if (!withQuery && !cleaned) return "";
     for (const site of sites) {
-      if (site.posts.some((re) => re.test(cleaned))) return cleaned;
+      for (const re of site.posts) {
+        if (withQuery && re.test(withQuery)) return withQuery;
+        if (cleaned && re.test(cleaned)) return cleaned;
+      }
     }
     return "";
   }
 
-  function isPostPage(url) {
+  function isPathPostPage(url) {
     return /\/post\/\d+(?:\/|$)/.test(url || "");
   }
 
@@ -76,12 +115,23 @@
   function chooseFileHotkey(sites, pageUrl, hintUrl) {
     const pageHit = scrapableUrl(sites, pageUrl);
     const hintHit = scrapableUrl(sites, hintUrl);
-    if (isPostPage(hintHit) && hintHit !== pageHit) return hintHit;
-    if (isPostPage(pageHit)) return pageHit;
-    return hintHit || pageHit || "";
+    if (pageHit) {
+      if (hintHit && hintHit !== pageHit && isPathPostPage(hintHit)) return hintHit;
+      return pageHit;
+    }
+    return hintHit || "";
   }
 
-  const api = { compileSites, cleanPageUrl, siteFor, scrapableUrl, matchPatternToRegExp, chooseFileHotkey };
+  const api = {
+    compileSites,
+    cleanPageUrl,
+    pageIdentity,
+    pageKeysMatch,
+    siteFor,
+    scrapableUrl,
+    matchPatternToRegExp,
+    chooseFileHotkey,
+  };
   globalThis.ScrapShared = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })();

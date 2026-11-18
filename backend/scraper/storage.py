@@ -26,6 +26,7 @@ class StoredFile:
 class UpsertResult:
     media: MediaItem | None
     skipped_reason: str | None = None
+    media_id: int | None = None
 
 
 def get_or_create_tag_group(db: Session, key: str) -> TagGroup:
@@ -458,11 +459,11 @@ def _fit_source_url(url: str) -> str:
     return text if len(text) <= 512 else text[:512]
 
 
-def save_remote_file(url: str) -> UpsertResult:
-    """Download one http(s) file into the library. No tags. The file URL is the source URL.
+def save_remote_file(url: str, page_url: str | None = None) -> UpsertResult:
+    """Download one http(s) file into the library. No tags.
 
-    The same picture bytes already in the library are not saved again; the file URL
-    is attached to the existing row instead.
+    When ``page_url`` is set, that page is the primary source URL and the file
+    URL is kept as an extra. Otherwise the file URL is primary.
     """
     from backend.app.db.session import SessionLocal
 
@@ -486,10 +487,21 @@ def save_remote_file(url: str) -> UpsertResult:
         phash=phash,
         file_size=dest.stat().st_size,
     )
+    file_source = _fit_source_url(url)
+    primary = _fit_source_url(page_url) if page_url else file_source
     db = SessionLocal()
     try:
-        result = _upsert_remote_file(db, post_id, _fit_source_url(url), media_type, stored)
+        result = _upsert_remote_file(
+            db,
+            post_id,
+            primary,
+            media_type,
+            stored,
+            extra_url=file_source if page_url and file_source != primary else None,
+        )
+        media_id = result.media.id if result.media is not None else None
         db.commit()
+        result.media_id = media_id
         return result
     except Exception:
         db.rollback()
@@ -504,6 +516,8 @@ def _upsert_remote_file(
     url: str,
     media_type: str,
     stored: StoredFile,
+    *,
+    extra_url: str | None = None,
 ) -> UpsertResult:
     from backend.app.services.media_service import absolute_path_for_media
 
@@ -513,6 +527,8 @@ def _upsert_remote_file(
 
     if exact and (not by_post or exact.id != by_post.id):
         _add_source_url(db, exact, url)
+        if extra_url:
+            _add_source_url(db, exact, extra_url)
         kept = absolute_path_for_media(exact)
         if stored.path.exists() and stored.path.resolve() != kept.resolve():
             stored.path.unlink(missing_ok=True)
@@ -521,6 +537,8 @@ def _upsert_remote_file(
 
     if by_post is not None and by_post.content_hash == stored.content_hash:
         _add_source_url(db, by_post, url)
+        if extra_url:
+            _add_source_url(db, by_post, extra_url)
         return UpsertResult(media=by_post, skipped_reason="already_have")
 
     media = by_post
@@ -544,6 +562,8 @@ def _upsert_remote_file(
     media.content_hash = stored.content_hash
     media.phash = stored.phash
     media.file_size = stored.file_size
+    if extra_url:
+        _add_source_url(db, media, extra_url)
     _apply_visual_match(db, media, stored.phash)
     db.flush()
     return UpsertResult(media=media)

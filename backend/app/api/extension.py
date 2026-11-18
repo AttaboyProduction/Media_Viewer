@@ -71,10 +71,47 @@ def _existing_post_ids(post_ids: set[str]) -> set[str]:
         db.close()
 
 
+def _source_url_saved(urls: list[str]) -> list[str]:
+    """Inputs that match a library row's primary or extra source URL (page-key saves)."""
+    from backend.app.db.models import MediaItem, MediaSourceUrl
+    from backend.app.db.session import SessionLocal
+    from backend.scraper.sites import page_identity
+
+    wanted: dict[str, str] = {}
+    for raw in urls:
+        key = page_identity(raw) or (raw or "").strip()
+        if key:
+            wanted.setdefault(key, raw)
+            wanted.setdefault((raw or "").strip(), raw)
+    keys = [key for key in wanted if key]
+    if not keys:
+        return []
+    db = SessionLocal()
+    try:
+        hit_keys: set[str] = set()
+        for row in db.query(MediaItem.source_url).filter(MediaItem.source_url.in_(keys)).all():
+            if row[0]:
+                hit_keys.add(row[0])
+        for row in db.query(MediaSourceUrl.url).filter(MediaSourceUrl.url.in_(keys)).all():
+            if row[0]:
+                hit_keys.add(row[0])
+        out: list[str] = []
+        seen: set[str] = set()
+        for key in hit_keys:
+            raw = wanted.get(key) or wanted.get(page_identity(key) or "")
+            if raw and raw not in seen:
+                out.append(raw)
+                seen.add(raw)
+        return out
+    finally:
+        db.close()
+
+
 def saved_post_urls(urls: list[str]) -> list[str]:
     """Input URLs whose post id is already a library row.
 
     A CDN file URL counts as that post. A smaller video encode still counts as saved.
+    Page URLs used as the key for a direct file save also count (source URL match).
     """
     from backend.scraper.sites import resolve_extension_url
 
@@ -87,7 +124,13 @@ def saved_post_urls(urls: list[str]) -> list[str]:
         if post_id:
             pairs.append((raw, post_id))
     found = _existing_post_ids({post_id for _raw, post_id in pairs})
-    return [raw for raw, post_id in pairs if post_id in found]
+    out: list[str] = [raw for raw, post_id in pairs if post_id in found]
+    seen = set(out)
+    for raw in _source_url_saved(urls):
+        if raw not in seen:
+            out.append(raw)
+            seen.add(raw)
+    return out
 
 
 def _targets(urls: list[str]) -> tuple[dict[str, str], list[str]]:
@@ -159,7 +202,7 @@ def post_extension_enqueue(payload: ExtensionUrlsIn) -> ExtensionEnqueueOut:
         )
     from backend.app.services.scrape_leftovers import add_queue
 
-    add_queue(todo)
+    add_queue(todo, source=site_id)
     if never_auto_run_scrape():
         return ExtensionEnqueueOut(
             started=False,
@@ -249,9 +292,19 @@ def post_extension_save_file(payload: ExtensionFileIn) -> ExtensionEnqueueOut:
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise HTTPException(status_code=400, detail="Need an http(s) file URL")
+    page_url = (payload.page_url or "").strip() or None
+    if page_url:
+        page_parsed = urlparse(page_url)
+        if page_parsed.scheme not in ("http", "https") or not page_parsed.netloc:
+            raise HTTPException(status_code=400, detail="Need an http(s) page URL")
     from backend.app.services.scrape_leftovers import add_queue
 
-    add_queue([url])
+    from backend.app.services.scrape_panels import SOURCE_UNSUPPORTED
+
+    if page_url:
+        add_queue([url], {url: page_url}, source=SOURCE_UNSUPPORTED)
+    else:
+        add_queue([url], source=SOURCE_UNSUPPORTED)
     if never_auto_run_scrape():
         return ExtensionEnqueueOut(started=False, queued=[url], status=_status_out())
     mode = begin_remote_download(url)

@@ -87,6 +87,7 @@ class MediaTagsUpdate(BaseModel):
 class MediaUrlsUpdate(BaseModel):
     add: list[str] = Field(default_factory=list)
     remove: list[str] = Field(default_factory=list)
+    urls: list[str] | None = None
 
 
 class DiscardUpdate(BaseModel):
@@ -203,6 +204,9 @@ class ScrapeRunRequest(BaseModel):
     exclude_tags: list[str] = Field(default_factory=list)
     gallery_url: str | None = None
     tag_mode: Literal["and", "or"] = "and"
+    # Scrape panel that pressed Run. Must match the selected site, or be
+    # ``unsupported`` (retry that panel's raw-file lists only). Omitted = selected site.
+    source_key: str | None = None
 
 
 class LocalImportRunRequest(BaseModel):
@@ -218,6 +222,26 @@ class ScrapeSkippedItemOut(BaseModel):
     url: str
     reason: str
     detail: str = ""
+
+
+class ScrapeSourcePanelOut(BaseModel):
+    """One source's session numbers and lists (Local, a site, or Unsupported)."""
+
+    key: str
+    label: str
+    running: bool = False
+    total: int = 0
+    processed: int = 0
+    downloaded: int = 0
+    skipped: int = 0
+    similar: int = 0
+    message: str = ""
+    current_url: str | None = None
+    last_gallery_url: str | None = None
+    errors: list[str] = Field(default_factory=list)
+    skipped_items: list[ScrapeSkippedItemOut] = Field(default_factory=list)
+    cancelled_urls: list[str] = Field(default_factory=list)
+    queue_urls: list[str] = Field(default_factory=list)
 
 
 class ScrapeStatusOut(BaseModel):
@@ -239,6 +263,10 @@ class ScrapeStatusOut(BaseModel):
     hash_backfill_done: int = 0
     recent_media_ids: list[int] = Field(default_factory=list)
     ran_this_session: bool = False
+    # Source of the live (running or last) job, and every source with activity.
+    source_key: str = ""
+    source_label: str = ""
+    sources: list[ScrapeSourcePanelOut] = Field(default_factory=list)
 
 
 class ExtensionSiteOut(BaseModel):
@@ -291,6 +319,7 @@ class ExtensionScrapeIn(BaseModel):
 
 class ExtensionFileIn(BaseModel):
     url: str = Field(min_length=1, max_length=4000)
+    page_url: str | None = Field(default=None, max_length=4000)
 
 
 class DuplicateActionRequest(BaseModel):

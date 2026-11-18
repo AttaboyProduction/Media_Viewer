@@ -98,10 +98,15 @@ export function setRating(id: number, score: number) {
   })
 }
 
-export function updateMediaUrls(id: number, add: string[], remove: string[]) {
+export function updateMediaUrls(
+  id: number,
+  add: string[],
+  remove: string[],
+  urls?: string[],
+) {
   return request<MediaItem>(`/media/${id}/urls`, {
     method: 'PATCH',
-    body: JSON.stringify({ add, remove }),
+    body: JSON.stringify(urls ? { urls } : { add, remove }),
   })
 }
 
@@ -273,6 +278,12 @@ export function fetchScrapeStatus() {
 
 export function clearRecentScrapedMedia() {
   return request<ScrapeStatus>('/scrape/clear-recent', { method: 'POST' })
+}
+
+/** Clear one source panel's lists (`source`), or every panel when omitted. */
+export function clearScrapeQueues(source?: string) {
+  const query = source ? `?source=${encodeURIComponent(source)}` : ''
+  return request<ScrapeStatus>(`/scrape/clear-queues${query}`, { method: 'POST' })
 }
 
 export function fetchRecentScrapedMedia(

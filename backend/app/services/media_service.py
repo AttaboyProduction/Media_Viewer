@@ -323,7 +323,13 @@ def update_media_tags(
     return media
 
 
-def update_media_urls(db: Session, media_id: int, add: list[str], remove: list[str]) -> MediaItem:
+def update_media_urls(
+    db: Session,
+    media_id: int,
+    add: list[str],
+    remove: list[str],
+    urls: list[str] | None = None,
+) -> MediaItem:
     media = (
         db.query(MediaItem)
         .options(joinedload(MediaItem.source_url_rows))
@@ -333,14 +339,24 @@ def update_media_urls(db: Session, media_id: int, add: list[str], remove: list[s
     if not media:
         raise ValueError("Media not found")
 
-    current = list_media_source_urls(media)
-    remove_set = {(u or "").strip() for u in remove if (u or "").strip()}
-    add_list = [(u or "").strip() for u in add if (u or "").strip()]
+    if urls is not None:
+        remaining: list[str] = []
+        seen: set[str] = set()
+        for raw in urls:
+            text = (raw or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            remaining.append(text)
+    else:
+        current = list_media_source_urls(media)
+        remove_set = {(u or "").strip() for u in remove if (u or "").strip()}
+        add_list = [(u or "").strip() for u in add if (u or "").strip()]
 
-    remaining = [u for u in current if u not in remove_set]
-    for url in add_list:
-        if url not in remaining:
-            remaining.append(url)
+        remaining = [u for u in current if u not in remove_set]
+        for url in add_list:
+            if url not in remaining:
+                remaining.append(url)
 
     if not remaining:
         raise ValueError("At least one source URL is required")

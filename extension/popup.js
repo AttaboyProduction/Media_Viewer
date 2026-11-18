@@ -2,11 +2,33 @@ const $ = (id) => document.getElementById(id);
 let current = null;
 let page = null;
 let listedUrl = "";
+let hotkeys = ScrapHotkeySettings.normalizeHotkeys(null);
 
 const FLOPPY_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">' +
   '<path fill="currentColor" d="M4 4a2 2 0 0 1 2-2h9l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4zm2 0v16h12V8h-4V4H6zm2 10h8v4H8v-4z"/>' +
   "</svg>";
+
+function hotkeyLabels() {
+  return {
+    file: ScrapHotkeySettings.labelForAction(hotkeys.file),
+    page: ScrapHotkeySettings.labelForAction(hotkeys.page),
+  };
+}
+
+ScrapHotkeySettings.loadHotkeys().then((loaded) => {
+  hotkeys = loaded;
+  if (current) renderPage();
+});
+try {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local" || !changes.hotkeys) return;
+    hotkeys = ScrapHotkeySettings.normalizeHotkeys(changes.hotkeys.newValue);
+    if (current) renderPage();
+  });
+} catch {
+  // Ignore.
+}
 
 function send(message) {
   const payload = typeof message === "string" ? { type: message } : message;
@@ -55,21 +77,26 @@ function render(status) {
       ? "App is running."
       : "Scraping is off (Settings → Hide Scrape page).";
 
-  $("sitesDot").className = `dot ${status.sites.length ? "ok" : ""}`;
-  $("sitesText").textContent = status.sites.length
-    ? `Sites: ${status.sites.join(", ")}`
-    : "No supported sites — install a site adapter with an extension block.";
+  const onSite = !!(page && page.onSite);
+  $("sitesDot").className = `dot ${onSite ? "ok" : "warn"}`;
+  $("sitesText").textContent = onSite ? "Site supported" : "Site not supported";
 
   renderQueue(status.queue || []);
   const job = status.job;
-  if (job && (job.running || job.total > 0)) {
-    const fraction = job.total > 0 ? `${job.processed}/${job.total}` : `${job.processed}`;
+  const label = job && job.label ? String(job.label) : "";
+  const prefix = label ? `${label}: ` : "Scrape: ";
+  if (job && (job.running || job.total > 0 || (job.queue_urls && job.queue_urls.length))) {
+    const fraction = job.total > 0 ? `${job.processed}/${job.total}` : `${job.processed || 0}`;
     const counts = ScrapIconProgress.outcomeCounts(job);
     const cancelled = counts.cancelled > 0 ? ` · cancelled ${counts.cancelled}` : "";
+    const queued =
+      job.queue_urls && job.queue_urls.length ? ` · queue ${job.queue_urls.length}` : "";
     $("jobText").textContent =
-      `Scrape: ${fraction} · downloaded ${job.downloaded} · skipped ${counts.skipped}${cancelled}`;
+      `${prefix}${fraction} · downloaded ${job.downloaded || 0} · skipped ${counts.skipped}${cancelled}${queued}`;
+  } else if (job && job.message) {
+    $("jobText").textContent = `${prefix}${job.message}`;
   } else {
-    $("jobText").textContent = job && job.message ? `Last scrape: ${job.message}` : "No scrape running.";
+    $("jobText").textContent = "No scrape running.";
   }
   renderPage();
 }
@@ -106,12 +133,16 @@ function renderPage() {
   const onSite = !!(page && page.onSite);
   actions.hidden = !onSite;
   filters.hidden = true;
-  hotkey.textContent = onSite ? "Shortcut keys: F = one file, P = whole page" : "";
+  document.body.classList.remove("gallery-filters");
+  const keys = hotkeyLabels();
+  hotkey.textContent = onSite
+    ? `Shortcut keys: ${keys.file} = one file, ${keys.page} = whole page`
+    : "";
   $("downloadFile").hidden = !(onSite && page.scrapable);
   $("downloadPage").hidden = !(onSite && !page.scrapable);
   if (!onSite) {
-    text.textContent = holdNotice || "This site isn't supported. F saves the largest file.";
-    hotkey.textContent = "Shortcut key: F = largest file";
+    text.textContent = holdNotice || `This site isn't supported. ${keys.file} saves the largest file.`;
+    hotkey.textContent = `Shortcut key: ${keys.file} = largest file`;
     $("pageFiles").hidden = false;
     return;
   }
@@ -130,6 +161,7 @@ function renderPage() {
     return;
   }
   filters.hidden = false;
+  document.body.classList.add("gallery-filters");
   text.textContent = holdNotice || (page.siteName ? `${page.siteName} — filters apply to this site.` : "Filters apply to this site.");
 }
 
@@ -199,9 +231,15 @@ $("runFilters").addEventListener("click", async () => {
   $("runFilters").disabled = false;
 });
 
-$("refresh").addEventListener("click", async () => {
+$("syncSites").addEventListener("click", async () => {
+  $("syncSites").disabled = true;
   listedUrl = "";
+  await send("refresh");
   await refreshAll();
+  $("syncSites").disabled = false;
+});
+$("extensionSettings").addEventListener("click", () => {
+  chrome.runtime.openOptionsPage();
 });
 $("viewer").addEventListener("click", () =>
   chrome.tabs.create({ url: (current && current.viewerUrl) || "http://127.0.0.1:8000/" })
@@ -241,7 +279,14 @@ function renderPageFiles(files) {
     button.innerHTML = FLOPPY_SVG;
     button.addEventListener("click", async () => {
       button.disabled = true;
-      await note(await send({ type: "saveRawFile", url: item.url }));
+      const tab = await activeTab();
+      await note(
+        await send({
+          type: "saveRawFile",
+          url: item.url,
+          pageUrl: (tab && tab.url) || "",
+        })
+      );
       button.disabled = false;
     });
     li.append(thumb, label, button);

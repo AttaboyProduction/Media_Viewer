@@ -7,6 +7,9 @@ const {
   tooltipFor,
   busyDotGeometry,
   savedDotGeometry,
+  panelForPage,
+  DOT_SAVED,
+  DOT_QUEUED,
   BUSY_POLL_MS,
   DEFAULT_TITLE,
 } = require("./iconProgress.js");
@@ -76,5 +79,15 @@ const saved32 = savedDotGeometry(32);
 assert(saved32.diameter === dot32.diameter, "saved dot matches the busy dot");
 assert(saved32.x === 8 && saved32.y === 8, "blue dot is nudged toward the top-left");
 assert(saved32.x < 16 && saved32.y < 16, "saved dot sits in the top-left quadrant");
+assert(DOT_SAVED === "#6aa8ff" && DOT_QUEUED === "#c62828", "corner colors: blue saved, red queued");
+const multi = {
+  sources: [
+    { key: "example", label: "Example", total: 4, processed: 1, downloaded: 1, skipped: 0, running: true },
+    { key: "unsupported", label: "Unsupported", total: 2, processed: 2, downloaded: 1, skipped: 1, running: false },
+  ],
+};
+assert(panelForPage(multi, "example").processed === 1, "supported page uses site panel");
+assert(panelForPage(multi, "").key === "unsupported", "off-site page uses unsupported panel");
+assert(panelForPage(multi, "missing").key === "missing", "unknown site returns empty panel for that key");
 
 console.log("iconProgress.selftest: ok");

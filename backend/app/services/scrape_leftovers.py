@@ -42,7 +42,7 @@ def identity(url: str) -> str:
 
 
 def _empty() -> dict:
-    return {"unfinished": [], "queue": [], "open": []}
+    return {"unfinished": [], "queue": [], "open": [], "page_urls": {}, "sources": {}}
 
 
 def _copy(data: dict) -> dict:
@@ -50,7 +50,28 @@ def _copy(data: dict) -> dict:
         "unfinished": [dict(item) for item in data["unfinished"]],
         "queue": list(data["queue"]),
         "open": list(data["open"]),
+        "page_urls": dict(data.get("page_urls") or {}),
+        "sources": dict(data.get("sources") or {}),
     }
+
+
+SOURCE_UNSUPPORTED = "unsupported"
+
+
+def derive_source(url: str) -> str:
+    """Site id when an installed adapter recognizes the URL, else ``unsupported``."""
+    try:
+        from backend.scraper.sites import extension_scrape_target
+
+        hit = extension_scrape_target(url)
+    except Exception:  # noqa: BLE001
+        hit = None
+    return hit[0] if hit else SOURCE_UNSUPPORTED
+
+
+def _source_of(data: dict, url: str, stored: str = "") -> str:
+    """Panel a URL belongs to: stored on enqueue / skip, else guessed from the URL."""
+    return stored or data["sources"].get(identity(url), "") or derive_source(url)
 
 
 def _stamp(path) -> tuple | None:
@@ -96,11 +117,30 @@ def _parse(data: object) -> dict:
                 "url": url.strip(),
                 "reason": str(item.get("reason") or "error"),
                 "detail": str(item.get("detail") or ""),
+                "source": str(item.get("source") or ""),
             }
         )
     queue = [url.strip() for url in data.get("queue") or [] if isinstance(url, str) and url.strip()]
     open_urls = [url.strip() for url in data.get("open") or [] if isinstance(url, str) and url.strip()]
-    return {"unfinished": unfinished, "queue": queue, "open": open_urls}
+    page_urls: dict[str, str] = {}
+    raw_pages = data.get("page_urls") or {}
+    if isinstance(raw_pages, dict):
+        for key, value in raw_pages.items():
+            if isinstance(key, str) and isinstance(value, str) and key.strip() and value.strip():
+                page_urls[key.strip()] = value.strip()
+    sources: dict[str, str] = {}
+    raw_sources = data.get("sources") or {}
+    if isinstance(raw_sources, dict):
+        for key, value in raw_sources.items():
+            if isinstance(key, str) and isinstance(value, str) and key.strip() and value.strip():
+                sources[key.strip()] = value.strip()
+    return {
+        "unfinished": unfinished,
+        "queue": queue,
+        "open": open_urls,
+        "page_urls": page_urls,
+        "sources": sources,
+    }
 
 
 def _save(data: dict) -> None:
@@ -123,53 +163,136 @@ def _without(urls: list[str], url: str) -> list[str]:
     return [item for item in urls if identity(item) != key]
 
 
-def snapshot() -> tuple[list[dict], list[str]]:
-    """Unfinished rows and the queue, from one read."""
+def _resolved_unfinished(data: dict, source: str | None = None) -> list[dict]:
+    """Unfinished rows with ``source`` filled in; ``source`` keeps one panel only."""
+    out: list[dict] = []
+    for item in data["unfinished"]:
+        row = dict(item)
+        row["source"] = _source_of(data, row["url"], row.get("source", ""))
+        if source is None or row["source"] == source:
+            out.append(row)
+    return out
+
+
+def _queue_for(data: dict, source: str | None = None) -> list[str]:
+    if source is None:
+        return list(data["queue"])
+    return [url for url in data["queue"] if _source_of(data, url) == source]
+
+
+def snapshot(source: str | None = None) -> tuple[list[dict], list[str]]:
+    """Unfinished rows and the queue, from one read. ``source`` keeps one panel."""
     with _lock:
         data = _load()
-        return list(data["unfinished"]), list(data["queue"])
+        return _resolved_unfinished(data, source), _queue_for(data, source)
 
 
-def unfinished_items() -> list[dict]:
+def unfinished_items(source: str | None = None) -> list[dict]:
     with _lock:
-        return list(_load()["unfinished"])
+        return _resolved_unfinished(_load(), source)
 
 
-def queue_urls() -> list[str]:
+def queue_urls(source: str | None = None) -> list[str]:
     with _lock:
-        return list(_load()["queue"])
+        return _queue_for(_load(), source)
 
 
-def add_queue(urls: list[str]) -> list[str]:
-    """Append extension URLs. A URL added again leaves the unfinished list."""
+def queue_by_source() -> dict[str, list[str]]:
+    """Queue to scrape split by panel. Sources with nothing queued are left out."""
+    with _lock:
+        data = _load()
+        out: dict[str, list[str]] = {}
+        for url in data["queue"]:
+            out.setdefault(_source_of(data, url), []).append(url)
+        return out
+
+
+def add_queue(
+    urls: list[str],
+    page_urls: dict[str, str] | None = None,
+    source: str = "",
+) -> list[str]:
+    """Append extension URLs to one source queue.
+
+    A URL may only live in one place: if it is already in Queue to scrape (same or
+    another source), unfinished/Skipped, or open, it is moved here (to the end of
+    this source's queue). ``source`` is the panel (site id, ``unsupported``).
+    """
     added: list[str] = []
+    pages = page_urls or {}
     with _lock:
         data = _load()
-        seen = {identity(url) for url in data["queue"]}
         for url in urls:
             key = identity(url)
-            if not key or key in seen:
+            if not key:
                 continue
-            seen.add(key)
-            data["queue"].append(url)
+            # Drop from every leftovers list first — then append once under ``source``.
+            data["queue"] = [item for item in data["queue"] if identity(item) != key]
+            data["open"] = _without(data["open"], url)
+            kept_source = data["sources"].get(key, "")
+            for item in data["unfinished"]:
+                if identity(item["url"]) == key and not kept_source:
+                    kept_source = item.get("source", "")
             data["unfinished"] = [
                 item for item in data["unfinished"] if identity(item["url"]) != key
             ]
+            data["queue"].append(url)
+            if source or kept_source:
+                data["sources"][key] = source or kept_source
+            page = (pages.get(url) or "").strip()
+            if page:
+                data["page_urls"][key] = page
             added.append(url)
         _save(data)
+    if added:
+        _drop_from_live_status(added)
     return added
 
 
-def remember_unfinished(url: str, reason: str, detail: str = "") -> list[str]:
+def _drop_from_live_status(urls: list[str]) -> None:
+    """Pull re-queued URLs out of in-memory pending / Skipped / Cancelled lists."""
+    try:
+        from backend.app.services import scrape_panels
+        from backend.scraper.pipeline import scrape_lock, scrape_status
+    except Exception:  # noqa: BLE001 — leftovers must work without a live job
+        return
+    with scrape_lock:
+        for url in urls:
+            scrape_panels.drop_url(scrape_status, url)
+
+
+def page_url_for(file_url: str) -> str | None:
+    key = identity(file_url)
+    if not key:
+        return None
+    with _lock:
+        value = _load()["page_urls"].get(key)
+        return value if isinstance(value, str) and value.strip() else None
+
+
+def remember_unfinished(url: str, reason: str, detail: str = "", source: str = "") -> list[str]:
+    """Keep a tried-but-not-downloaded URL. ``source`` is the fallback panel; the one
+    stored when the URL was queued or first skipped wins."""
     key = identity(url)
     if not key:
         return queue_urls()
     with _lock:
         data = _load()
+        stored = data["sources"].get(key, "")
+        for item in data["unfinished"]:
+            if identity(item["url"]) == key and not stored:
+                stored = item.get("source", "")
         data["queue"] = _without(data["queue"], url)
         data["open"] = _without(data["open"], url)
         kept = [item for item in data["unfinished"] if identity(item["url"]) != key]
-        kept.append({"url": url, "reason": reason or "error", "detail": detail or ""})
+        kept.append(
+            {
+                "url": url,
+                "reason": reason or "error",
+                "detail": detail or "",
+                "source": stored or source,
+            }
+        )
         data["unfinished"] = kept
         _save(data)
         return list(data["queue"])
@@ -181,7 +304,8 @@ def forget(url: str, *, keep_open: bool = False) -> list[str]:
     ``keep_open`` drops the queue row but leaves the in-flight list alone, so a
     second spelling of a file already downloading does not erase crash recovery.
     """
-    if not identity(url):
+    key = identity(url)
+    if not key:
         return queue_urls()
     with _lock:
         data = _load()
@@ -189,16 +313,25 @@ def forget(url: str, *, keep_open: bool = False) -> list[str]:
         if not keep_open:
             data["open"] = _without(data["open"], url)
         data["unfinished"] = [
-            item for item in data["unfinished"] if identity(item["url"]) != identity(url)
+            item for item in data["unfinished"] if identity(item["url"]) != key
         ]
+        data["page_urls"].pop(key, None)
+        data["sources"].pop(key, None)
         _save(data)
         return list(data["queue"])
 
 
-def note_outcome(url: str, *, downloaded: bool, reason: str = "", detail: str = "") -> list[str]:
+def note_outcome(
+    url: str,
+    *,
+    downloaded: bool,
+    reason: str = "",
+    detail: str = "",
+    source: str = "",
+) -> list[str]:
     if downloaded or reason not in RETRY_REASONS:
         return forget(url)
-    return remember_unfinished(url, reason, detail)
+    return remember_unfinished(url, reason, detail, source)
 
 
 def sync_open(urls: list[str]) -> list[str]:
@@ -242,6 +375,30 @@ def adopt_open_as_unfinished() -> None:
         _save(data)
 
 
+def clear_queues(source: str | None = None) -> None:
+    """Forget the queue, unfinished (Skipped / Cancelled), open list, and page links.
+
+    With ``source`` only that panel's rows go; the in-flight (open) list is left alone.
+    """
+    with _lock:
+        if source is None:
+            _save(_empty())
+            return
+        data = _load()
+        gone = _queue_for(data, source) + [
+            item["url"] for item in _resolved_unfinished(data, source)
+        ]
+        gone_keys = {identity(url) for url in gone}
+        data["queue"] = [url for url in data["queue"] if identity(url) not in gone_keys]
+        data["unfinished"] = [
+            item for item in data["unfinished"] if identity(item["url"]) not in gone_keys
+        ]
+        for key in gone_keys:
+            data["page_urls"].pop(key, None)
+            data["sources"].pop(key, None)
+        _save(data)
+
+
 def persist_interrupted() -> None:
     """Keep whatever a stopping process had not finished."""
     from backend.scraper.pipeline import scrape_lock, scrape_status
@@ -253,25 +410,28 @@ def persist_interrupted() -> None:
         urls.extend(scrape_status.pending_urls)
         scrape_status.pending_urls = []
         scrape_status.current_url = None
+    source = scrape_status.source_key
     for url in urls:
-        remember_unfinished(url, "interrupted", "App closed before this file finished")
+        remember_unfinished(
+            url, "interrupted", "App closed before this file finished", source
+        )
     sync_open([])
 
 
 def restore_into_status() -> None:
-    """Show stored leftovers on the Scrape page after a restart."""
-    from backend.scraper.pipeline import SkippedItem, scrape_status
+    """Show stored leftovers on the Scrape page after a restart, one panel per source.
+
+    Incomplete rows and Queue to scrape URLs raise ``total`` but leave ``processed``
+    at 0 so nothing looks finished until it actually completes again.
+    """
+    from backend.app.services import scrape_panels
+    from backend.scraper.pipeline import scrape_status
 
     adopt_open_as_unfinished()
     items = unfinished_items()
-    scrape_status.skipped_items = [
-        SkippedItem(url=item["url"], reason=item["reason"], detail=item["detail"])
-        for item in items
-    ]
-    scrape_status.skipped = len(items)
-    scrape_status.cancelled_urls = [
-        item["url"] for item in items if item["reason"] == "cancelled"
-    ]
+    scrape_panels.restore(scrape_status, items)
+    queues = queue_by_source()
     scrape_status.queue_urls = queue_urls()
+    scrape_panels.note_queued_totals(scrape_status, queues)
     if items or scrape_status.queue_urls:
         scrape_status.ran_this_session = True

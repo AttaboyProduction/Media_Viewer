@@ -1123,16 +1123,73 @@ tr.drop-guide-after td {
 
 .source-url-row {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem 0.5rem;
+  align-items: flex-start;
+  gap: 0.5rem;
   margin-bottom: 0.35rem;
   font-size: 0.82rem;
+}
+
+.source-url-main {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.source-url-main .source-url {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.source-url-main .source-primary {
+  flex: none;
+  white-space: nowrap;
+}
+
+.source-url-row > .source-url-add {
+  flex: 1 1 auto;
+}
+
+.source-url-extra {
+  list-style: none;
+  margin: 0.15rem 0 0.35rem;
+}
+
+.source-url-extra > details > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.source-url-list-nested {
+  margin: 0.4rem 0 0;
+}
+
+/* Make primary, Edit, Remove (danger). */
+.source-url-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin-left: auto;
+}
+
+.source-url-actions .btn-small {
+  flex: none;
+  min-width: 4.6rem;
 }
 
 .source-primary {
   color: var(--text-muted);
   font-size: 0.75rem;
+}
+
+.source-url-actions .btn-small.url-make-primary {
+  min-width: 6.6rem;
 }
 
 .source-url-add {
@@ -1822,6 +1879,46 @@ tr.selected {
   gap: 0.75rem;
   margin-bottom: 1rem;
   align-items: center;
+}
+
+/* Sibling panels under the Source/filter form (not nested inside it). */
+.scrape-source-panels {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+  /* Same gap under the group as between Downloaded previously and Similar files (.panel). */
+  margin-bottom: 1rem;
+}
+
+.scrape-source-panel {
+  margin-bottom: 0;
+}
+
+.scrape-source-panel-active {
+  border-color: var(--accent, var(--border));
+}
+
+.scrape-source-panel-title {
+  margin: 0 0 0.6rem;
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.scrape-source-panel .scrape-actions {
+  margin-bottom: 0;
+}
+
+.scrape-source-panel .scrape-progress {
+  margin-top: 0.75rem;
+}
+
+.scrape-source-panel-label {
+  color: var(--text-primary, inherit);
+}
+
+.scrape-source-panel-idle {
+  margin: 0.6rem 0 0;
 }
 
 .scrape-skipped {

@@ -52,6 +52,8 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
   const [relatedOpen, setRelatedOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [urlAddOpen, setUrlAddOpen] = useState(false)
+  const [editingUrl, setEditingUrl] = useState<string | null>(null)
+  const [editUrlValue, setEditUrlValue] = useState('')
   const [zoom, setZoom] = useState(1)
   const [naturalSize, setNaturalSize] = useState({ w: 0, h: 0 })
   const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 })
@@ -105,12 +107,14 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
     },
   })
   const urlsMutation = useMutation({
-    mutationFn: (payload: { add: string[]; remove: string[] }) =>
-      updateMediaUrls(mediaId, payload.add, payload.remove),
+    mutationFn: (payload: { add?: string[]; remove?: string[]; urls?: string[] }) =>
+      updateMediaUrls(mediaId, payload.add ?? [], payload.remove ?? [], payload.urls),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['media'] })
       setNewUrl('')
       setUrlAddOpen(false)
+      setEditingUrl(null)
+      setEditUrlValue('')
     },
   })
   const deleteMutation = useMutation({
@@ -313,6 +317,30 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
     urlsMutation.mutate({ add: [trimmed], remove: [] })
   }
 
+  const replaceUrls = (next: string[]) => {
+    urlsMutation.mutate({ urls: next })
+  }
+
+  const saveEditedUrl = (oldUrl: string) => {
+    const trimmed = editUrlValue.trim()
+    if (!trimmed || trimmed === oldUrl) {
+      setEditingUrl(null)
+      setEditUrlValue('')
+      return
+    }
+    replaceUrls(sourceUrls.map((u) => (u === oldUrl ? trimmed : u)))
+  }
+
+  const makePrimaryUrl = (url: string) => {
+    if (url === media?.source_url) return
+    replaceUrls([url, ...sourceUrls.filter((u) => u !== url)])
+  }
+
+  const removeSourceUrl = (url: string) => {
+    if (sourceUrls.length <= 1) return
+    replaceUrls(sourceUrls.filter((u) => u !== url))
+  }
+
   const mediaStyle =
     expanded && displayW != null && displayH != null
       ? { width: displayW, height: displayH, maxWidth: 'none', maxHeight: 'none' }
@@ -486,24 +514,121 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
           ) : isLinked ? null : (
             <>
               <ul className="source-url-list">
-                {sourceUrls.map((url) => (
-                  <li key={url} className="source-url-row">
-                    <a href={url} target="_blank" rel="noreferrer" className="source-url">
-                      {url}
-                    </a>
-                    {url === media.source_url && <span className="source-primary">primary</span>}
-                    {url !== media.source_url && (
-                      <button
-                        type="button"
-                        className="btn btn-small"
-                        disabled={busy}
-                        onClick={() => urlsMutation.mutate({ add: [], remove: [url] })}
-                      >
-                        Remove
-                      </button>
-                    )}
-                  </li>
-                ))}
+                {(() => {
+                  const primaryUrl = media.source_url
+                  const extraUrls = sourceUrls.filter((url) => url !== primaryUrl)
+                  const renderUrlRow = (url: string) =>
+                    editingUrl === url ? (
+                      <div className="source-url-add">
+                        <input
+                          type="url"
+                          value={editUrlValue}
+                          onChange={(e) => setEditUrlValue(e.target.value)}
+                          disabled={busy}
+                          autoFocus
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              saveEditedUrl(url)
+                            }
+                            if (e.key === 'Escape') {
+                              e.preventDefault()
+                              setEditingUrl(null)
+                              setEditUrlValue('')
+                            }
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className="btn btn-small"
+                          disabled={busy}
+                          onClick={() => saveEditedUrl(url)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-small"
+                          disabled={busy}
+                          onClick={() => {
+                            setEditingUrl(null)
+                            setEditUrlValue('')
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        <span className="source-url-main">
+                          <a href={url} target="_blank" rel="noreferrer" className="source-url">
+                            {url}
+                          </a>
+                          {url === primaryUrl ? (
+                            <span className="source-primary">primary</span>
+                          ) : null}
+                        </span>
+                        <span className="source-url-actions">
+                          <button
+                            type="button"
+                            className="btn btn-small url-make-primary"
+                            disabled={busy || url === primaryUrl}
+                            aria-hidden={url === primaryUrl}
+                            tabIndex={url === primaryUrl ? -1 : 0}
+                            style={{ visibility: url === primaryUrl ? 'hidden' : 'visible' }}
+                            onClick={() => makePrimaryUrl(url)}
+                          >
+                            Make primary
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-small"
+                            disabled={busy}
+                            onClick={() => {
+                              setEditingUrl(url)
+                              setEditUrlValue(url)
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-small btn-danger"
+                            disabled={busy || sourceUrls.length <= 1}
+                            aria-hidden={sourceUrls.length <= 1}
+                            tabIndex={sourceUrls.length <= 1 ? -1 : 0}
+                            style={{ visibility: sourceUrls.length <= 1 ? 'hidden' : 'visible' }}
+                            onClick={() => removeSourceUrl(url)}
+                          >
+                            Remove
+                          </button>
+                        </span>
+                      </>
+                    )
+                  return (
+                    <>
+                      <li key={primaryUrl} className="source-url-row">
+                        {renderUrlRow(primaryUrl)}
+                      </li>
+                      {extraUrls.length > 0 ? (
+                        <li className="source-url-extra">
+                          <details>
+                            <summary>
+                              {extraUrls.length} more URL{extraUrls.length === 1 ? '' : 's'}
+                            </summary>
+                            <ul className="source-url-list source-url-list-nested">
+                              {extraUrls.map((url) => (
+                                <li key={url} className="source-url-row">
+                                  {renderUrlRow(url)}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        </li>
+                      ) : null}
+                    </>
+                  )
+                })()}
               </ul>
               {!urlAddOpen ? (
                 <button

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   cancelScrape,
+  clearScrapeQueues,
   fetchAdapters,
   fetchAppSettings,
   fetchScrapeSession,
@@ -16,10 +17,12 @@ import {
   runScrape,
   patchAppSettings,
 } from '../api/client'
+import { useConfirm } from '../context/ConfirmContext'
 import { useApplyAppDefaults } from '../hooks/useAppDefaults'
 import { DEFAULT_APP_SETTINGS } from '../types/appSettings'
-import type { ScrapeFilter, ScrapeFilterType } from '../types'
+import type { ScrapeFilter, ScrapeFilterType, ScrapeSourcePanel as ScrapeSourcePanelData } from '../types'
 import ExcludeTagsPicker from './ExcludeTagsPicker'
+import ScrapeSourcePanel from './ScrapeSourcePanel'
 import { SearchableTagSingleSelect } from './TagChipSelect'
 
 interface FilterRow {
@@ -105,36 +108,44 @@ function UrlFilterField({
   )
 }
 
-function statusMessageParts(
-  message: string,
-  currentUrl: string | null | undefined,
-): { before: string; url: string | null; after: string } {
-  const url = currentUrl?.trim() || null
-  if (url && message.includes(url)) {
-    const idx = message.indexOf(url)
-    return {
-      before: message.slice(0, idx),
-      url,
-      after: message.slice(idx + url.length),
-    }
+function emptyPanel(key: string, label: string): ScrapeSourcePanelData {
+  return {
+    key,
+    label,
+    running: false,
+    total: 0,
+    processed: 0,
+    downloaded: 0,
+    skipped: 0,
+    similar: 0,
+    message: '',
+    current_url: null,
+    last_gallery_url: null,
+    errors: [],
+    skipped_items: [],
+    cancelled_urls: [],
+    queue_urls: [],
   }
-  if (url) {
-    return { before: message ? `${message} ` : '', url, after: '' }
-  }
-  return { before: message, url: null, after: '' }
+}
+
+/** Local first, Unsupported last, installed sites by name in between. */
+function panelRank(key: string): number {
+  return key === 'local' ? 0 : key === 'unsupported' ? 2 : 1
+}
+
+function comparePanels(a: ScrapeSourcePanelData, b: ScrapeSourcePanelData): number {
+  return panelRank(a.key) - panelRank(b.key) || a.label.localeCompare(b.label)
 }
 
 export default function ScrapePanel({ onFinished }: { onFinished: () => void }) {
   const queryClient = useQueryClient()
+  const { confirm } = useConfirm()
   const [rows, setRows] = useState<FilterRow[]>([newRow('tag')])
   const [tagMode, setTagMode] = useState<'and' | 'or'>('and')
   const [sort, setSort] = useState<'date_desc' | 'date_asc'>('date_desc')
   const [limit, setLimit] = useState(10)
   const [excludeTags, setExcludeTags] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [skippedOpen, setSkippedOpen] = useState(false)
-  const [queueOpen, setQueueOpen] = useState(false)
-  const [cancelledOpen, setCancelledOpen] = useState(false)
   const [localFolders, setLocalFolders] = useState<string[]>([])
   const [localFiles, setLocalFiles] = useState<string[]>([])
   const [localRecursive, setLocalRecursive] = useState(true)
@@ -323,10 +334,31 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     queryClient.setQueryData(['scrape-status'], next)
   }
 
-  const start = async () => {
+  /** Source the shared form is set to: its panel's Run uses these filters. */
+  const formSourceKey: string | null = isLocalSource ? 'local' : (session?.selected_site_id ?? null)
+
+  const start = async (panelKey: string) => {
     setError(null)
-    setSkippedOpen(false)
-    setCancelledOpen(false)
+    if (panelKey === 'unsupported') {
+      // Raw-file panel: no filters, only that panel's queued / skipped URLs.
+      try {
+        const next = await runScrape({
+          filters: [],
+          sort,
+          limit: 0,
+          exclude_tags: [],
+          source_key: 'unsupported',
+        })
+        queryClient.setQueryData(['scrape-status'], next)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to start scrape')
+      }
+      return
+    }
+    if (panelKey !== formSourceKey) {
+      setError('Choose this source in the Source field above to run it.')
+      return
+    }
     if (isLocalSource) {
       if (!localPaths.length) {
         setError('Add at least one folder or file before running.')
@@ -354,6 +386,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
           .map((tag) => tag.trim())
           .filter(Boolean),
         tag_mode: tagMode,
+        source_key: panelKey,
       })
       queryClient.setQueryData(['scrape-status'], next)
     } catch (err) {
@@ -366,25 +399,76 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     queryClient.setQueryData(['scrape-status'], next)
   }
 
-  const percent =
-    status && status.total > 0
-      ? Math.min(100, Math.round((status.processed / status.total) * 100))
-      : 0
+  const clearQueues = async (panel: ScrapeSourcePanelData) => {
+    const ok = await confirm({
+      title: `Clear ${panel.label} queues?`,
+      message: `Remove everything from ${panel.label}'s Queue to scrape, Skipped, and Cancelled? Downloaded files, the Downloaded previously list, and other sources stay.`,
+      confirmLabel: 'Clear queues',
+      danger: true,
+    })
+    if (!ok) return
+    setError(null)
+    try {
+      const next = await clearScrapeQueues(panel.key)
+      queryClient.setQueryData(['scrape-status'], next)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to clear queues')
+    }
+  }
 
-  const canRun = isLocalSource
-    ? localPaths.length > 0 && !status?.running
-    : Boolean(session?.selected_site_id && session.selected_scraper_id) && !status?.running
   const canSyncFolders = isLocalSource && localFolders.length > 0 && !status?.running
 
-  const msgParts = status
-    ? statusMessageParts(status.message || (status.running ? 'Running...' : 'Idle'), status.current_url)
+  const runningLabel = status?.running
+    ? status.source_label ||
+      status.sources.find((item) => item.running)?.label ||
+      'current'
     : null
 
-  const cancelledUrls = status?.cancelled_urls ?? []
-  const skippedItems = (status?.skipped_items ?? []).filter((item) => item.reason !== 'cancelled')
-  const queueUrls = status?.queue_urls ?? []
+  // One panel per source with activity this session, plus the form's source so Run is always there.
+  const panels = useMemo(() => {
+    const list = [...(status?.sources ?? [])]
+    if (formSourceKey && selectedSource && !list.some((item) => item.key === formSourceKey)) {
+      list.push(emptyPanel(formSourceKey, selectedSource.name))
+    }
+    return list.sort(comparePanels)
+  }, [status?.sources, formSourceKey, selectedSource])
+
+  const panelRunGate = (
+    panel: ScrapeSourcePanelData,
+    isFormSource: boolean,
+  ): { canRun: boolean; title: string } => {
+    if (status?.running) {
+      return { canRun: false, title: `Wait for the running ${runningLabel} job, or press Stop` }
+    }
+    if (panel.key === 'unsupported') {
+      const waiting = panel.queue_urls.length + panel.skipped_items.length
+      return waiting > 0
+        ? { canRun: true, title: 'Retry the queued and skipped files' }
+        : { canRun: false, title: 'Nothing is queued or skipped for Unsupported' }
+    }
+    if (!isFormSource) {
+      return { canRun: false, title: `Choose ${panel.label} as the Source above to run it` }
+    }
+    if (isLocalSource) {
+      return localPaths.length > 0
+        ? { canRun: true, title: 'Import the chosen folders and files' }
+        : { canRun: false, title: 'Add a folder or file first' }
+    }
+    return session?.selected_site_id && session.selected_scraper_id
+      ? { canRun: true, title: `Run ${panel.label} with the filters above` }
+      : { canRun: false, title: 'Choose a site and scraper first' }
+  }
+
+  const visiblePanels = panels.filter((panel) => {
+    if (panel.key === formSourceKey) return true
+    if (panel.running) return true
+    if (panel.total > 0 && panel.processed < panel.total) return true
+    if (panel.queue_urls.length > 0) return true
+    return false
+  })
 
   return (
+    <>
     <div className="panel">
       <div className="scrape-panel-header">
         <h2>Scrape</h2>
@@ -565,8 +649,6 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
               }
               onClick={async () => {
                 setError(null)
-                setSkippedOpen(false)
-                setCancelledOpen(false)
                 try {
                   await startLocalImport(localFolders, localRecursive)
                 } catch (err) {
@@ -835,154 +917,32 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
         </>
       )}
 
-      <div className="scrape-actions">
-        <button type="button" className="btn btn-primary" onClick={start} disabled={!canRun}>
-          {isLocalSource ? 'Run import' : 'Run scrape'}
-        </button>
-        <button
-          type="button"
-          className="btn btn-danger"
-          onClick={stop}
-          disabled={!status?.running && !(status?.errors?.length)}
-        >
-          Stop
-        </button>
-      </div>
-
       {error && <div className="error">{error}</div>}
-      {status && (status.ran_this_session || skippedItems.length > 0 || queueUrls.length > 0) && (
-        <div className="scrape-progress">
-          <div className="progress-bar">
-            <div className="progress-bar-fill" style={{ width: `${percent}%` }} />
-          </div>
-          <div className="scrape-progress-meta">
-            {selectedSource ? `${selectedSource.name} · ` : ''}
-            {!isLocalSource && selectedScraper ? `${selectedScraper.name} · ` : ''}
-            {msgParts && (
-              <>
-                {msgParts.before}
-                {msgParts.url ? (
-                  isLocalSource ? (
-                    <span title={msgParts.url}>{msgParts.url}</span>
-                  ) : (
-                    <a href={msgParts.url} target="_blank" rel="noreferrer">
-                      {msgParts.url}
-                    </a>
-                  )
-                ) : null}
-                {msgParts.after}
-              </>
-            )}
-            {status.total > 0 && ` · ${status.processed}/${status.total}`}
-            {` · ${isLocalSource ? 'added' : 'downloaded'} ${status.downloaded}`}
-            {` · skipped ${skippedItems.length}`}
-            {status.similar > 0 && ` · similar ${status.similar}`}
-            {cancelledUrls.length > 0 && ` · cancelled ${cancelledUrls.length}`}
-          </div>
-          {cancelledUrls.length > 0 && (
-            <details
-              className="scrape-skipped"
-              open={cancelledOpen}
-              onToggle={(e) => {
-                if (e.target !== e.currentTarget) return
-                setCancelledOpen((e.currentTarget as HTMLDetailsElement).open)
-              }}
-            >
-              <summary>
-                Cancelled ({cancelledUrls.length})
-              </summary>
-              {cancelledOpen && (
-                <ul className="scrape-skipped-list">
-                  {cancelledUrls.map((url) => (
-                    <li key={url}>
-                      {url.startsWith('http') ? (
-                        <a href={url} target="_blank" rel="noreferrer">
-                          {url}
-                        </a>
-                      ) : (
-                        <span title={url}>{url}</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </details>
-          )}
-          {skippedItems.length > 0 && (
-            <details
-              className="scrape-skipped"
-              open={skippedOpen}
-              onToggle={(e) => {
-                if (e.target !== e.currentTarget) return
-                setSkippedOpen((e.currentTarget as HTMLDetailsElement).open)
-              }}
-            >
-              <summary>
-                Skipped ({skippedItems.length})
-              </summary>
-              {skippedOpen && (
-                <ul className="scrape-skipped-list">
-                  {skippedItems.map((item) => (
-                    <li key={`${item.url}:${item.reason}:${item.detail || ''}`}>
-                      {item.url.startsWith('http') ? (
-                        <a href={item.url} target="_blank" rel="noreferrer">
-                          {item.url}
-                        </a>
-                      ) : (
-                        <span title={item.url}>{item.url}</span>
-                      )}
-                      <span className="scrape-skipped-reason">{item.reason}</span>
-                      {item.detail ? (
-                        <details
-                          className="scrape-skipped-error"
-                          onToggle={(e) => e.stopPropagation()}
-                        >
-                          <summary>Error</summary>
-                          <pre>{item.detail}</pre>
-                        </details>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </details>
-          )}
-          {queueUrls.length > 0 && (
-            <details
-              className="scrape-skipped"
-              open={queueOpen}
-              onToggle={(e) => {
-                if (e.target !== e.currentTarget) return
-                setQueueOpen((e.currentTarget as HTMLDetailsElement).open)
-              }}
-            >
-              <summary>Queue to scrape ({queueUrls.length})</summary>
-              {queueOpen && (
-                <ul className="scrape-skipped-list">
-                  {queueUrls.map((url) => (
-                    <li key={url}>
-                      {url.startsWith('http') ? (
-                        <a href={url} target="_blank" rel="noreferrer">
-                          {url}
-                        </a>
-                      ) : (
-                        <span title={url}>{url}</span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </details>
-          )}
-          {status.errors.length > 0 && (
-            <div className="error">
-              {status.errors.slice(-5).map((item) => (
-                <div key={item}>{item}</div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
+
+      {visiblePanels.length > 0 ? (
+        <div className="scrape-source-panels">
+          {visiblePanels.map((panel) => {
+            const isFormSource = panel.key === formSourceKey
+            const gate = panelRunGate(panel, isFormSource)
+            return (
+              <ScrapeSourcePanel
+                key={panel.key}
+                panel={panel}
+                isFormSource={isFormSource}
+                scraperName={selectedScraper?.name}
+                runningLabel={runningLabel}
+                canRun={gate.canRun}
+                runTitle={gate.title}
+                runLabel={panel.key === 'local' ? 'Run import' : 'Run scrape'}
+                onRun={() => void start(panel.key)}
+                onStop={stop}
+                onClear={() => void clearQueues(panel)}
+              />
+            )
+          })}
+        </div>
+      ) : null}
+    </>
   )
 }

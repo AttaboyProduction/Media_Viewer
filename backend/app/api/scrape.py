@@ -18,6 +18,7 @@ from backend.app.schemas.session_settings import (
     SessionSettingsPatch,
     session_settings_out,
 )
+from backend.app.services import scrape_leftovers, scrape_panels
 from backend.app.services.hash_backfill import backfill_status
 from backend.app.services.media_service import (
     build_media_summaries,
@@ -68,10 +69,14 @@ def _session_response() -> SessionSettingsOut:
 
 
 def _status_out() -> ScrapeStatusOut:
-    from backend.app.services.scrape_leftovers import queue_urls
+    from backend.app.services import scrape_panels
+    from backend.app.services.scrape_leftovers import queue_by_source, queue_urls
 
     scrape_status.queue_urls = queue_urls()
     return ScrapeStatusOut(
+        source_key=scrape_status.source_key,
+        source_label=scrape_status.source_label,
+        sources=scrape_panels.panels(scrape_status, queue_by_source()),
         running=scrape_status.running,
         total=scrape_status.total,
         processed=scrape_status.processed,
@@ -178,18 +183,19 @@ def _filters_have_work(payload: ScrapeRunRequest) -> bool:
 
 
 def _with_leftovers(
-    payload: ScrapeRunRequest, *, continue_counts: bool
+    payload: ScrapeRunRequest, *, continue_counts: bool, source: str | None = None
 ) -> tuple[ScrapeRunRequest, bool, list[str], list[str], list[str]]:
     """Attach stored unfinished URLs and the extension queue.
 
     With an empty form, only those URLs run. A gallery limit must not turn two
-    retries into a new listing that pushes processed past total.
+    retries into a new listing that pushes processed past total. ``source`` keeps
+    only that panel's rows (``None`` = every panel).
     """
     from backend.app.schemas import ScrapeFilterIn
     from backend.app.services.scrape_leftovers import identity, snapshot
     from backend.scraper.gallery import extract_post_id
 
-    unfinished, queued_all = snapshot()
+    unfinished, queued_all = snapshot(source)
     retry_urls = [item["url"] for item in unfinished]
     retry_keys = {identity(url) for url in retry_urls}
     queued_urls = [url for url in queued_all if identity(url) not in retry_keys]
@@ -250,16 +256,36 @@ def start_scrape_run(
     retries: list[str] = []
     remote_leftovers: list[str] = []
     remote_only = False
+    panel_key = (payload.source_key or "").strip() or None
     with scrape_lock:
         if scrape_status.running:
             raise HTTPException(status_code=409, detail="Scrape already running")
-        if include_leftovers:
-            payload, continue_counts, retries, extra, remote_leftovers = _with_leftovers(
-                payload, continue_counts=continue_counts
-            )
-            remote_only = bool(remote_leftovers) and not _filters_have_work(payload)
         if before_start is not None:
             before_start()
+        site = get_selected_site()
+        if panel_key == scrape_panels.SOURCE_UNSUPPORTED:
+            # Raw-file panel: no gallery, only that panel's stored URLs.
+            unfinished, queued = scrape_leftovers.snapshot(panel_key)
+            remote_leftovers = list(
+                dict.fromkeys([item["url"] for item in unfinished] + queued)
+            )
+            if not remote_leftovers:
+                raise HTTPException(
+                    status_code=400, detail="Nothing is queued or skipped for Unsupported."
+                )
+            remote_only = True
+        elif panel_key is not None and (site is None or site["id"] != panel_key):
+            raise HTTPException(
+                status_code=400,
+                detail="That panel's source is not the selected Source.",
+            )
+        elif include_leftovers:
+            payload, continue_counts, retries, extra, remote_leftovers = _with_leftovers(
+                payload,
+                continue_counts=continue_counts,
+                source=site["id"] if site else None,
+            )
+            remote_only = bool(remote_leftovers) and not _filters_have_work(payload)
         if remote_only:
             # Claim before releasing the lock so another Run cannot start in between.
             scrape_status.cancel = False
@@ -269,12 +295,14 @@ def start_scrape_run(
                 job = compile_scrape_job(payload)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=str(exc)) from exc
+            if site:
+                # Park the previous source's numbers before this job touches them.
+                scrape_panels.activate(scrape_status, site["id"], site.get("name", ""))
             scrape_status.job_id += 1
             job_id = scrape_status.job_id
             scrape_status.running = True
             scrape_status.cancel = False
             scrape_status.message = "Queued"
-            site = get_selected_site()
             begin_scrape_queue(
                 job,
                 site["id"] if site else None,
@@ -345,6 +373,7 @@ def post_import_run(payload: LocalImportRunRequest) -> ScrapeStatusOut:
     with scrape_lock:
         if scrape_status.running:
             raise HTTPException(status_code=409, detail="Scrape already running")
+        scrape_panels.activate(scrape_status, scrape_panels.SOURCE_LOCAL)
         scrape_status.job_id += 1
         job_id = scrape_status.job_id
         scrape_status.kind = "import"
@@ -378,6 +407,24 @@ def get_scrape_status() -> ScrapeStatusOut:
 @router.post("/clear-recent", response_model=ScrapeStatusOut)
 def post_clear_recent() -> ScrapeStatusOut:
     scrape_status.recent_media_ids = []
+    return _status_out()
+
+
+@router.post("/clear-queues", response_model=ScrapeStatusOut)
+def post_clear_queues(source: str | None = None) -> ScrapeStatusOut:
+    """Empty Queue to scrape, Skipped, and Cancelled. Session downloads stay.
+
+    ``source`` (a panel key) clears only that source's lists; omitted clears every panel.
+    """
+    key = (source or "").strip() or None
+    with scrape_lock:
+        if scrape_status.running and (key is None or key == scrape_status.source_key):
+            raise HTTPException(
+                status_code=409,
+                detail="A scrape or import is running. Stop it before clearing the queues.",
+            )
+        scrape_leftovers.clear_queues(key)
+        scrape_panels.clear_panel(scrape_status, key)
     return _status_out()
 
 

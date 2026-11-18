@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.api.media import list_duplicates, list_media, post_bulk_action, post_bulk_tags
 from backend.app.schemas import MediaBulkActionRequest, MediaBulkTagsRequest
+from backend.app.services.media_service import list_media_source_urls, update_media_urls
 from backend.app.db.models import (
     Base,
     MediaItem,
@@ -515,6 +516,24 @@ class BulkTagsTests(MediaListTestCase):
     def test_rejects_empty_tag_list(self):
         with self.assertRaises(ValueError):
             MediaBulkTagsRequest(ids=[1], add=[])
+
+
+class MediaUrlsEditTests(MediaListTestCase):
+    def test_ordered_urls_replace_sets_primary(self):
+        media = self._add_media("edit-urls", extra_urls=["https://example.test/extra"])
+        updated = update_media_urls(
+            self.db,
+            media.id,
+            [],
+            [],
+            urls=["https://example.test/new-primary", "https://example.test/post/edit-urls"],
+        )
+        self.db.flush()
+        self.assertEqual(updated.source_url, "https://example.test/new-primary")
+        self.assertEqual(
+            list_media_source_urls(updated),
+            ["https://example.test/new-primary", "https://example.test/post/edit-urls"],
+        )
 
 
 if __name__ == "__main__":

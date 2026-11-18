@@ -1,4 +1,4 @@
-importScripts("shared.js", "hotkeyPermission.js", "iconProgress.js", "pageMedia.js");
+importScripts("shared.js", "hotkeyPermission.js", "hotkeySettings.js", "iconProgress.js", "pageMedia.js");
 
 const API = "http://127.0.0.1:8000/api";
 const VIEWER_URL = "http://127.0.0.1:8000/";
@@ -6,6 +6,8 @@ const MENU_PAGE = "scrap-download-page";
 const MENU_FILE = "scrap-download-file";
 const MENU_RAW = "scrap-download-raw";
 const ALARM_IDLE = "scrap-idle-watch";
+const ALARM_SITES = "scrap-sites-sync";
+const SITE_UNSUPPORTED = "Site is not supported";
 const ICONS = {
   on: { 16: "icons/green16.png", 32: "icons/green32.png", 48: "icons/green48.png" },
   off: { 16: "icons/red16.png", 32: "icons/red32.png", 48: "icons/red48.png" },
@@ -77,7 +79,19 @@ async function loadBitmap(path) {
 }
 
 function libraryKey(url) {
-  return ScrapShared.scrapableUrl(sites, url);
+  return ScrapShared.scrapableUrl(sites, url) || ScrapShared.pageIdentity(url);
+}
+
+function pageKey(url) {
+  return ScrapShared.pageIdentity(url) || libraryKey(url);
+}
+
+function setHasPage(set, pageUrl) {
+  if (!pageUrl || !set || !set.size) return false;
+  for (const key of set) {
+    if (ScrapShared.pageKeysMatch(key, pageUrl)) return true;
+  }
+  return false;
 }
 
 function fillDot(ctx, dot, color, size) {
@@ -93,7 +107,7 @@ function fillDot(ctx, dot, color, size) {
   ctx.fill();
 }
 
-function drawIconOverlays(bitmap, { ratio, busy, saved }) {
+function drawIconOverlays(bitmap, { ratio, busy, corner }) {
   const size = bitmap.width;
   const canvas = new OffscreenCanvas(size, size);
   const ctx = canvas.getContext("2d");
@@ -106,13 +120,18 @@ function drawIconOverlays(bitmap, { ratio, busy, saved }) {
     ctx.fillStyle = "#43a047";
     ctx.fillRect(0, y, Math.round(size * ratio), h);
   }
-  if (saved) fillDot(ctx, ScrapIconProgress.savedDotGeometry(size), "#6aa8ff", size);
-  if (busy) fillDot(ctx, ScrapIconProgress.busyDotGeometry(size), "#c62828", size);
+  // Top-left: red while in any queue, blue once fully in the library.
+  if (corner === "queued") {
+    fillDot(ctx, ScrapIconProgress.savedDotGeometry(size), ScrapIconProgress.DOT_QUEUED, size);
+  } else if (corner === "saved") {
+    fillDot(ctx, ScrapIconProgress.savedDotGeometry(size), ScrapIconProgress.DOT_SAVED, size);
+  }
+  if (busy) fillDot(ctx, ScrapIconProgress.busyDotGeometry(size), ScrapIconProgress.DOT_QUEUED, size);
   return ctx.getImageData(0, 0, size, size);
 }
 
 async function refreshSavedPosts(urls) {
-  const unique = [...new Set(urls.filter(Boolean))];
+  const unique = [...new Set(urls.filter(Boolean).map((url) => pageKey(url) || url))];
   if (!unique.length) return;
   const res = await api("/extension/saved", {
     method: "POST",
@@ -121,7 +140,8 @@ async function refreshSavedPosts(urls) {
   if (!res.ok || !res.data || !Array.isArray(res.data.saved)) return;
   const saved = new Set(res.data.saved);
   for (const url of unique) {
-    if (saved.has(url)) savedPostUrls.add(url);
+    const hit = [...saved].some((item) => ScrapShared.pageKeysMatch(item, url)) || saved.has(url);
+    if (hit) savedPostUrls.add(url);
     else savedPostUrls.delete(url);
   }
 }
@@ -146,10 +166,18 @@ function persistQueuedPosts() {
   chrome.storage.local.set({ queuedPosts: [...queuedPostUrls] }).catch(() => {});
 }
 
-function markQueued(urls) {
+function markQueued(urls, pageUrl) {
+  const list = (urls || []).filter(Boolean);
+  if (!list.length) return;
   let changed = false;
-  for (const url of urls) {
-    const key = libraryKey(url) || url;
+  const keys = [];
+  const page = pageKey(pageUrl);
+  if (page) keys.push(page);
+  for (const url of list) {
+    const key = libraryKey(url) || pageKey(url);
+    if (key) keys.push(key);
+  }
+  for (const key of keys) {
     if (!key || queuedPostUrls.has(key)) continue;
     queuedPostUrls.add(key);
     changed = true;
@@ -167,18 +195,49 @@ function queuedUrlsFrom(result, fallback) {
   return [];
 }
 
+function addWaitingUrls(waiting, urls) {
+  for (const url of urls || []) {
+    const key = libraryKey(url) || url;
+    if (key) waiting.add(key);
+  }
+}
+
+function waitingHasPage(waiting, pageUrl) {
+  if (!pageUrl || !waiting || !waiting.size) return false;
+  for (const key of waiting) {
+    if (ScrapShared.pageKeysMatch(key, pageUrl)) return true;
+  }
+  return false;
+}
+
 async function settleQueuedPosts() {
   await loadQueuedPosts();
   if (queuedPostUrls.size) await refreshSavedPosts([...queuedPostUrls]);
   await readOfflineQueue();
-  const waiting = new Set(offlineQueue.map((url) => libraryKey(url) || url));
+  const waiting = new Set();
+  addWaitingUrls(waiting, offlineQueue);
+  for (const url of offlineQueue) {
+    const page = pageKey(url);
+    if (page) waiting.add(page);
+  }
   const status = await api("/scrape/status");
   if (status.ok && status.data) {
-    for (const url of status.data.queue_urls || []) waiting.add(libraryKey(url) || url);
+    addWaitingUrls(waiting, status.data.queue_urls);
+    if (status.data.current_url) {
+      waiting.add(libraryKey(status.data.current_url) || pageKey(status.data.current_url));
+    }
+    for (const panel of status.data.sources || []) {
+      addWaitingUrls(waiting, panel.queue_urls);
+      if (panel.current_url) {
+        waiting.add(libraryKey(panel.current_url) || pageKey(panel.current_url));
+      }
+    }
   }
   let changed = false;
   for (const url of [...queuedPostUrls]) {
-    if (savedPostUrls.has(url) || !waiting.has(url)) {
+    // Stay red until the file is fully in the library, or it left every queue
+    // without downloading (cleared / cancelled / failed).
+    if (setHasPage(savedPostUrls, url) || !waitingHasPage(waiting, url)) {
       queuedPostUrls.delete(url);
       changed = true;
     }
@@ -192,14 +251,15 @@ async function iconImageData(url) {
   const showProgress = !!(lastJob && ScrapIconProgress.shouldShowProgress(lastJob));
   const busy = jobBusy;
   const ratio = showProgress ? ScrapIconProgress.progressRatio(lastJob) : null;
-  const key = libraryKey(url);
-  const saved = !!(key && (savedPostUrls.has(key) || queuedPostUrls.has(key)));
-  if (!busy && ratio == null && !saved) return null;
+  const queued = setHasPage(queuedPostUrls, url);
+  const inLibrary = setHasPage(savedPostUrls, url);
+  const corner = queued ? "queued" : inLibrary ? "saved" : null;
+  if (!busy && ratio == null && !corner) return null;
   const paths = iconFor(url);
   const imageData = {};
   for (const size of [16, 32, 48]) {
     const path = paths[size] || ICONS.off[size];
-    imageData[size] = drawIconOverlays(await loadBitmap(path), { ratio, busy, saved });
+    imageData[size] = drawIconOverlays(await loadBitmap(path), { ratio, busy, corner });
   }
   return imageData;
 }
@@ -284,10 +344,14 @@ function readOfflineQueue() {
   });
 }
 
-function rememberOffline(urls) {
+function rememberOffline(urls, pageByUrl) {
   return new Promise((resolve) => {
-    chrome.storage.local.get({ offlineQueue: [] }, (stored) => {
+    chrome.storage.local.get({ offlineQueue: [], offlinePageUrls: {} }, (stored) => {
       const current = Array.isArray(stored.offlineQueue) ? stored.offlineQueue : [];
+      const pages =
+        stored.offlinePageUrls && typeof stored.offlinePageUrls === "object"
+          ? { ...stored.offlinePageUrls }
+          : {};
       const seen = new Set(current.map((url) => queueIdentity(url)));
       const next = current.slice();
       for (const url of urls) {
@@ -295,9 +359,11 @@ function rememberOffline(urls) {
         if (!key || seen.has(key)) continue;
         seen.add(key);
         next.push(url);
+        const pageUrl = pageByUrl && pageByUrl[url];
+        if (pageUrl) pages[key] = pageUrl;
       }
       offlineQueue = next;
-      chrome.storage.local.set({ offlineQueue: next }, () => resolve(next));
+      chrome.storage.local.set({ offlineQueue: next, offlinePageUrls: pages }, () => resolve(next));
     });
   });
 }
@@ -305,11 +371,16 @@ function rememberOffline(urls) {
 function dropOffline(urls) {
   const drop = new Set(urls.map((url) => queueIdentity(url)).filter(Boolean));
   return new Promise((resolve) => {
-    chrome.storage.local.get({ offlineQueue: [] }, (stored) => {
+    chrome.storage.local.get({ offlineQueue: [], offlinePageUrls: {} }, (stored) => {
       const current = Array.isArray(stored.offlineQueue) ? stored.offlineQueue : [];
+      const pages =
+        stored.offlinePageUrls && typeof stored.offlinePageUrls === "object"
+          ? { ...stored.offlinePageUrls }
+          : {};
       const next = current.filter((url) => !drop.has(queueIdentity(url)));
+      for (const key of drop) delete pages[key];
       offlineQueue = next;
-      chrome.storage.local.set({ offlineQueue: next }, () => resolve(next));
+      chrome.storage.local.set({ offlineQueue: next, offlinePageUrls: pages }, () => resolve(next));
     });
   });
 }
@@ -326,14 +397,38 @@ async function flushOfflineQueue() {
   if (!offlineQueue.length) return;
   flushingQueue = true;
   try {
+    const stored = await chrome.storage.local.get({ offlinePageUrls: {} });
+    const pages =
+      stored.offlinePageUrls && typeof stored.offlinePageUrls === "object"
+        ? stored.offlinePageUrls
+        : {};
     const batch = offlineQueue.slice(0, 500);
-    const res = await api("/extension/enqueue", {
-      method: "POST",
-      body: JSON.stringify({ urls: batch }),
-    });
-    if (res.ok) {
-      await dropOffline(batch);
-      if (res.data && res.data.status) noteJobStarted(res.data.status);
+    const raw = [];
+    const gallery = [];
+    for (const url of batch) {
+      const key = queueIdentity(url);
+      if (key && pages[key]) raw.push({ url, page_url: pages[key] });
+      else gallery.push(url);
+    }
+    if (gallery.length) {
+      const res = await api("/extension/enqueue", {
+        method: "POST",
+        body: JSON.stringify({ urls: gallery }),
+      });
+      if (res.ok) {
+        await dropOffline(gallery);
+        if (res.data && res.data.status) noteJobStarted(res.data.status);
+      }
+    }
+    for (const item of raw) {
+      const res = await api("/extension/save-file", {
+        method: "POST",
+        body: JSON.stringify({ url: item.url, page_url: item.page_url }),
+      });
+      if (res.ok) {
+        await dropOffline([item.url]);
+        if (res.data && res.data.status) noteJobStarted(res.data.status);
+      }
     }
   } finally {
     flushingQueue = false;
@@ -391,11 +486,30 @@ function iconFor(url) {
   return ScrapShared.siteFor(sites, url) ? ICONS.on : ICONS.off;
 }
 
+async function ensureSitesForUrl(url) {
+  await loadConfig();
+  if (url && !ScrapShared.siteFor(sites, url)) {
+    await pullConfig();
+  }
+}
+
+async function requireSupportedPage(pageUrl) {
+  await pullConfig();
+  const site = pageUrl ? ScrapShared.siteFor(sites, pageUrl) : null;
+  if (!site) {
+    const tab = await activeTab();
+    if (tab && tab.id) await paintTab(tab.id, pageUrl || tab.url, { refresh: false });
+    return { ok: false, error: SITE_UNSUPPORTED };
+  }
+  return { ok: true, site };
+}
+
 async function paintTab(tabId, url, options = {}) {
   if (typeof tabId !== "number") return;
   try {
     if (options.refresh !== false) {
-      const key = libraryKey(url);
+      await ensureSitesForUrl(url);
+      const key = pageKey(url);
       if (key) await refreshSavedPosts([key]);
     }
     const imageData = await iconImageData(url);
@@ -413,7 +527,7 @@ async function paintAllTabs() {
   } catch {
     tabs = [];
   }
-  await refreshSavedPosts(tabs.map((tab) => libraryKey(tab.url)));
+  await refreshSavedPosts(tabs.map((tab) => pageKey(tab.url)));
   await Promise.all(tabs.map((tab) => paintTab(tab.id, tab.url, { refresh: false })));
   try {
     const imageData = await iconImageData("");
@@ -619,7 +733,10 @@ async function injectHotkeysIntoTab(tabId) {
       },
     });
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content-main.js"], world: "MAIN" });
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["hotkeySettings.js", "content.js"],
+    });
     return true;
   } catch {
     return false;
@@ -665,7 +782,7 @@ async function setupHotkeys() {
       {
         id: "scrap-hotkeys-any",
         matches: anyPage,
-        js: ["content.js"],
+        js: ["hotkeySettings.js", "content.js"],
         runAt: "document_start",
         allFrames: true,
         persistAcrossSessions: true,
@@ -692,8 +809,31 @@ async function refreshConfig() {
   await flushOfflineQueue();
 }
 
-async function sendUrls(urls) {
+async function pickLargestUrl(urls) {
+  const list = [...new Set((urls || []).filter(Boolean))];
+  if (!list.length) return "";
+  if (list.length === 1) return list[0];
+  const sized = await mapPool(list, 6, async (url) => ({
+    url,
+    bytes: await fileByteSize(url),
+  }));
+  const sorted = globalThis.PageMedia
+    ? globalThis.PageMedia.sortBySize(sized)
+    : sized.slice().sort((a, b) => (b.bytes || 0) - (a.bytes || 0));
+  return (sorted[0] && sorted[0].url) || list[0];
+}
+
+async function sendUrls(urls, pageUrl) {
   await loadConfig();
+  let checkUrl = pageUrl || (Array.isArray(urls) && urls[0]) || "";
+  if (!ScrapShared.siteFor(sites, checkUrl)) {
+    const tab = await activeTab();
+    if (tab && tab.url) checkUrl = tab.url;
+  }
+  if (ScrapShared.siteFor(sites, checkUrl) || urls.some((u) => ScrapShared.scrapableUrl(sites, u))) {
+    const gate = await requireSupportedPage(checkUrl);
+    if (!gate.ok) return { ok: false, scrapable: false, error: gate.error };
+  }
   const cleaned = [];
   const seen = new Set();
   for (const url of urls) {
@@ -702,9 +842,22 @@ async function sendUrls(urls) {
     seen.add(hit);
     cleaned.push(hit);
   }
-  if (!cleaned.length) return { ok: false, scrapable: false, error: "No supported posts there" };
+  const page = pageKey(pageUrl || checkUrl);
+  // No scrapable post URL — download the largest media file and key dots by the page.
+  if (!cleaned.length) {
+    const pageId = ScrapShared.pageIdentity(pageUrl || checkUrl);
+    const fileCandidates = [];
+    for (const url of urls || []) {
+      const id = ScrapShared.pageIdentity(url);
+      if (!id || (pageId && id === pageId)) continue;
+      fileCandidates.push(url);
+    }
+    if (!fileCandidates.length) return { ok: false, scrapable: false, error: SITE_UNSUPPORTED };
+    const best = await pickLargestUrl(fileCandidates);
+    return saveRawFile(best, pageUrl || checkUrl);
+  }
   const batch = cleaned.slice(0, 500);
-  await rememberOffline(batch);
+  await rememberOffline(batch, page ? Object.fromEntries(batch.map((url) => [url, pageUrl || checkUrl])) : null);
   const res = await api("/extension/enqueue", {
     method: "POST",
     body: JSON.stringify({ urls: batch }),
@@ -713,11 +866,11 @@ async function sendUrls(urls) {
     await dropOffline(batch);
     if (res.data.started || res.data.appended) noteJobStarted(res.data.status);
     const out = { ok: true, scrapable: true, result: res.data };
-    markQueued(queuedUrlsFrom(out, batch));
+    markQueued(queuedUrlsFrom(out, batch), pageUrl || checkUrl);
     return out;
   }
   if (heldOffline(res)) {
-    markQueued(batch);
+    markQueued(batch, pageUrl || checkUrl);
     return { ok: true, scrapable: true, offline: true, result: { queued: batch } };
   }
   return { ok: false, scrapable: true, error: detailOf(res), result: { queued: batch } };
@@ -756,7 +909,14 @@ async function collectPage(tabId) {
   } catch {
     return { ok: false, scrapable: true, error: "Couldn't read this page" };
   }
-  return sendUrls(found);
+  let pageUrl = "";
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    pageUrl = (tab && tab.url) || "";
+  } catch {
+    pageUrl = "";
+  }
+  return sendUrls(found, pageUrl);
 }
 
 const PAGE_MEDIA_CAP = 50;
@@ -822,22 +982,30 @@ async function listPageMedia(tabId) {
   }));
 }
 
-async function saveRawFile(url) {
+async function saveRawFile(url, pageUrl) {
   if (!url) return { ok: false, error: "No picture URL" };
-  await rememberOffline([url]);
+  let page = (pageUrl || "").trim();
+  if (!page) {
+    const tab = await activeTab();
+    page = (tab && tab.url) || "";
+  }
+  const pageByUrl = page ? { [url]: page } : null;
+  await rememberOffline([url], pageByUrl);
+  const body = { url };
+  if (page) body.page_url = page;
   const res = await api("/extension/save-file", {
     method: "POST",
-    body: JSON.stringify({ url }),
+    body: JSON.stringify(body),
   });
   if (res.ok && res.data) {
     await dropOffline([url]);
     if (res.data.started || res.data.appended) noteJobStarted(res.data.status);
     const out = { ok: true, result: res.data };
-    markQueued(queuedUrlsFrom(out, [url]));
+    markQueued(queuedUrlsFrom(out, [url]), page);
     return out;
   }
   if (heldOffline(res)) {
-    markQueued([url]);
+    markQueued([url], page);
     return { ok: true, offline: true, result: { queued: [url] } };
   }
   return { ok: false, error: detailOf(res), result: { queued: [url] } };
@@ -880,11 +1048,16 @@ async function getStatus(pageUrl) {
   const pageOrigin = ScrapHotkeyPermission.originPatternFromUrl(pageUrl || "");
   const hotkeyOrigins = site && pageOrigin ? [pageOrigin] : [];
   const hotkeys = site ? await hotkeysAllowedForSite(site, pageUrl) : false;
+  // Popup status line follows this page's source panel (site id or Unsupported).
+  const job =
+    scrape.ok && scrape.data
+      ? ScrapIconProgress.panelForPage(scrape.data, site ? site.id : "")
+      : null;
   return {
     online: health.ok,
     scrapeEnabled,
     sites: sites.map((s) => s.name),
-    job: scrape.ok ? scrape.data : null,
+    job,
     queue: offlineQueue.slice(),
     viewerUrl: VIEWER_URL,
     // True only for the active tab's site — hides the Allow button after that site is granted.
@@ -939,20 +1112,25 @@ chrome.windows.onFocusChanged.addListener((windowId) => {
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   await loadConfig();
+  const page = info.pageUrl || (tab && tab.url) || "";
   if (info.menuItemId === MENU_PAGE) {
+    const gate = await requireSupportedPage(page);
+    if (!gate.ok) return;
     const tabId = (tab && tab.id) || info.tabId;
     if (typeof tabId === "number") await collectPage(tabId);
     return;
   }
   if (info.menuItemId === MENU_FILE) {
+    const gate = await requireSupportedPage(page);
+    if (!gate.ok) return;
     const target = ScrapShared.scrapableUrl(sites, info.srcUrl) || ScrapShared.scrapableUrl(sites, info.linkUrl);
-    if (target) await sendUrls([target]);
+    if (target) await sendUrls([target], page);
     return;
   }
   if (info.menuItemId === MENU_RAW) {
-    const page = info.pageUrl || (tab && tab.url) || "";
+    await pullConfig();
     if (ScrapShared.siteFor(sites, page)) return;
-    await saveRawFile(info.srcUrl);
+    await saveRawFile(info.srcUrl, page);
   }
 });
 
@@ -1007,7 +1185,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handlers = {
     getStatus: () => getStatus(message.url),
     describePage: async () => {
-      await pullConfig();
+      await ensureSitesForUrl(message.url);
       return describe(message.url);
     },
     downloadFile: async () => {
@@ -1016,28 +1194,57 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const tab = await activeTab();
         url = (tab && tab.url) || "";
       }
-      return sendUrls([url]);
+      const gate = await requireSupportedPage(url);
+      if (!gate.ok) return gate;
+      return sendUrls([url], url);
     },
-    downloadPage: () => collectPage(message.tabId),
+    downloadPage: async () => {
+      const tab = await activeTab();
+      const page = (tab && tab.url) || "";
+      const gate = await requireSupportedPage(page);
+      if (!gate.ok) return gate;
+      return collectPage(message.tabId);
+    },
     hotkeyFile: async () => {
       await loadConfig();
       const page = message.pageUrl || (sender.tab && sender.tab.url) || "";
-      if (!ScrapShared.siteFor(sites, page)) {
-        const tabId = sender.tab && sender.tab.id;
+      const tabId = sender.tab && sender.tab.id;
+      async function downloadLargestOnPage() {
         if (typeof tabId !== "number") return { ok: false, error: "No tab" };
         const files = await listPageMedia(tabId);
         if (!files.length) return { ok: false, error: "No media files on this page" };
-        return saveRawFile(files[0].url);
+        // listPageMedia is already largest-first; key dots by the page URL.
+        return saveRawFile(files[0].url, page);
       }
+      if (!ScrapShared.siteFor(sites, page)) {
+        await pullConfig();
+        if (ScrapShared.siteFor(sites, page)) {
+          const gate = await requireSupportedPage(page);
+          if (!gate.ok) return gate;
+          const target = ScrapShared.chooseFileHotkey(sites, page, message.hint || "");
+          if (target) return sendUrls([target], page);
+          return downloadLargestOnPage();
+        }
+        return downloadLargestOnPage();
+      }
+      const gate = await requireSupportedPage(page);
+      if (!gate.ok) return gate;
       const target = ScrapShared.chooseFileHotkey(sites, page, message.hint || "");
-      return sendUrls(target ? [target] : []);
+      if (target) return sendUrls([target], page);
+      // Supported site but no post URL (e.g. id only in the query) — save largest file.
+      return downloadLargestOnPage();
     },
     hotkeyPage: async () => {
       await loadConfig();
       const page = (sender.tab && sender.tab.url) || "";
-      if (!ScrapShared.siteFor(sites, page)) return { ok: false, ignored: true };
+      if (!ScrapShared.siteFor(sites, page)) {
+        await pullConfig();
+        if (!ScrapShared.siteFor(sites, page)) return { ok: false, ignored: true };
+      }
+      const gate = await requireSupportedPage(page);
+      if (!gate.ok) return gate;
       const one = ScrapShared.scrapableUrl(sites, page);
-      if (one) return sendUrls([one]);
+      if (one) return sendUrls([one], page);
       const tabId = sender.tab && sender.tab.id;
       if (typeof tabId !== "number") return { ok: false, error: "No tab" };
       return collectPage(tabId);
@@ -1077,7 +1284,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         siteId: message.siteId || "",
       };
     },
-    saveRawFile: () => saveRawFile(message.url),
+    saveRawFile: async () => {
+      let pageUrl = message.pageUrl || "";
+      if (!pageUrl) {
+        const tab = await activeTab();
+        pageUrl = (tab && tab.url) || "";
+      }
+      return saveRawFile(message.url, pageUrl);
+    },
     listPageMedia: async () => {
       const tabId = typeof message.tabId === "number" ? message.tabId : sender.tab && sender.tab.id;
       return { ok: true, files: await listPageMedia(tabId) };
@@ -1099,10 +1313,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_IDLE) checkIdleForJob().catch(() => {});
+  if (alarm.name === ALARM_SITES) {
+    pullConfig()
+      .then(async (ok) => {
+        if (ok) {
+          await setupMenu();
+          await setupHotkeys();
+        }
+      })
+      .catch(() => {});
+  }
 });
 
 try {
   chrome.alarms.create(ALARM_IDLE, { periodInMinutes: 1 });
+  chrome.alarms.create(ALARM_SITES, { periodInMinutes: 5 });
 } catch {
   // alarms permission missing on a stale load.
 }

@@ -20,6 +20,10 @@ If this workspace is not a Git repository, ask whether to initialize Git and cre
 - Preserve the user's workflow choice.
 - Do not include unrelated changes in a commit without explicit approval.
 
+## Version bumps
+
+Do not change tracked `VERSION` or the extension `manifest.json` version while implementing. Bump them only as part of the commit that ships the change. For the app, change only the third number (patch) unless the user asks for a different bump.
+
 ## When to commit
 
 - **Only commit when the user explicitly asks** to commit (or to create a commit as part of a clear request).

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <style>
       body {
-        width: 320px;
+        width: 340px;
         box-sizing: border-box;
         margin: 0;
         padding: 12px;
@@ -13,8 +13,14 @@
         color: #e8e8ea;
         background: #18181b;
       }
+      /* Only the supported gallery / Download this page filters need extra height. */
+      body.gallery-filters {
+        min-height: 560px;
+      }
       h1 { font-size: 14px; margin: 0 0 8px; }
       .row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+      .sites-row { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+      .sites-row #sitesText { flex: 1; min-width: 0; }
       .dot { width: 9px; height: 9px; border-radius: 50%; background: #757575; flex: none; }
       .dot.ok { background: #43a047; }
       .dot.warn { background: #f9a825; }
@@ -111,12 +117,30 @@
         align-items: center;
         justify-content: center;
       }
+      button.icon-sync {
+        flex: none;
+        width: 18px;
+        height: 18px;
+        padding: 1px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+      }
+      button.icon-sync svg { display: block; }
     </style>
   </head>
   <body>
     <h1>MediaViewer</h1>
     <div class="row"><span id="appDot" class="dot"></span><span id="appText">Checking app…</span></div>
-    <div class="row"><span id="sitesDot" class="dot"></span><span id="sitesText"></span></div>
+    <div class="sites-row">
+      <span id="sitesDot" class="dot"></span>
+      <span id="sitesText"></span>
+      <button id="syncSites" class="icon-sync" type="button" title="Sync sites" aria-label="Sync sites">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
+          <path fill="currentColor" d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/>
+        </svg>
+      </button>
+    </div>
     <div class="stack" id="actions" hidden>
       <button id="downloadFile" class="primary" type="button">Download this file</button>
       <button id="downloadPage" type="button">Download this page</button>
@@ -187,9 +211,10 @@
       <div id="jobText" class="muted">No scrape running.</div>
     </div>
     <div class="actions">
-      <button id="refresh" type="button">Reload sites</button>
+      <button id="extensionSettings" type="button">Extension settings</button>
       <button id="viewer" type="button">Open viewer</button>
     </div>
+    <script src="hotkeySettings.js"></script>
     <script src="iconProgress.js"></script>
     <script src="popup.js"></script>
   </body>

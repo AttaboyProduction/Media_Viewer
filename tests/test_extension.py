@@ -11,7 +11,7 @@ from fastapi import HTTPException
 
 from backend.app.api import extension as extension_api
 from backend.app.config import settings
-from backend.app.services import scrape_leftovers
+from backend.app.services import scrape_leftovers, scrape_panels
 from backend.app.schemas import ExtensionFileIn, ExtensionScrapeIn, ExtensionUrlsIn, ScrapeStatusOut
 from backend.scraper import adapter_loader, pipeline, sites
 from backend.scraper.job import ScrapeJob
@@ -174,6 +174,8 @@ def _idle_status() -> None:
     pipeline.scrape_status.counted_urls = set()
     pipeline.scrape_status.leftover_urls = set()
     pipeline.scrape_status.job_id = 0
+    pipeline.scrape_status.last_gallery_url = None
+    scrape_panels.reset(pipeline.scrape_status)
     _leftovers_must_be_temporary()
     path = scrape_leftovers.leftovers_path()
     if path.is_file():
@@ -414,7 +416,7 @@ class ExtensionApiTests(unittest.TestCase):
         # setUp leaves never_auto_run_scrape false.
         order: list[str] = []
 
-        def fake_add(urls: list[str]) -> list[str]:
+        def fake_add(urls: list[str], page_urls=None, source: str = "") -> list[str]:
             order.append("queue")
             return list(urls)
 
@@ -430,7 +432,7 @@ class ExtensionApiTests(unittest.TestCase):
                 ExtensionFileIn(url="https://cdn.example/a.jpg")
             )
         self.assertFalse(extension_api.never_auto_run_scrape())
-        add.assert_called_once_with(["https://cdn.example/a.jpg"])
+        add.assert_called_once_with(["https://cdn.example/a.jpg"], source="unsupported")
         begin.assert_called_once_with("https://cdn.example/a.jpg")
         self.assertEqual(order, ["queue", "download"])
         self.assertTrue(out.started)
@@ -551,6 +553,22 @@ class ExtensionApiTests(unittest.TestCase):
                 extension_api.post_extension_scrape(ExtensionScrapeIn(site_id="missing"))
         self.assertEqual(ctx.exception.status_code, 400)
         start.assert_not_called()
+
+    def test_save_file_stores_page_url_for_primary_source(self) -> None:
+        with patch.object(extension_api, "never_auto_run_scrape", return_value=True):
+            with patch.object(pipeline, "begin_remote_download") as begin:
+                out = extension_api.post_extension_save_file(
+                    ExtensionFileIn(
+                        url="https://cdn.example/a.jpg",
+                        page_url="https://blog.example/post/1",
+                    )
+                )
+        begin.assert_not_called()
+        self.assertEqual(out.queued, ["https://cdn.example/a.jpg"])
+        self.assertEqual(
+            scrape_leftovers.page_url_for("https://cdn.example/a.jpg"),
+            "https://blog.example/post/1",
+        )
 
     def test_save_file_rejects_a_non_http_url(self) -> None:
         with self.assertRaises(HTTPException) as ctx:
@@ -691,7 +709,9 @@ class CancelRemainderTests(unittest.TestCase):
             ignore_download_limit=True,
         )
         pipeline._finish_queue(4, None, None, job, {})
-        self.assertEqual(pipeline.scrape_status.processed, 3)
+        # Cancelled URLs stay incomplete — processed is only the finished download.
+        self.assertEqual(pipeline.scrape_status.processed, 1)
+        self.assertEqual(pipeline.scrape_status.total, 3)
         self.assertEqual(pipeline.scrape_status.skipped, 2)
         self.assertEqual(pipeline.scrape_status.downloaded, 1)
         self.assertEqual(pipeline.scrape_status.message, "Cancelled")
@@ -718,8 +738,9 @@ class CancelRemainderTests(unittest.TestCase):
         self.assertFalse(pipeline.scrape_status.running)
         self.assertFalse(pipeline.scrape_status.queue_open)
         self.assertEqual(pipeline.scrape_status.message, "Cancelled")
-        self.assertEqual(pipeline.scrape_status.processed, 10)
-        self.assertEqual(pipeline.scrape_status.skipped, 2)
+        self.assertEqual(pipeline.scrape_status.processed, 8)
+        self.assertEqual(pipeline.scrape_status.total, 10)
+        self.assertEqual(pipeline.scrape_status.skipped, 1)
         self.assertEqual(pipeline.scrape_status.job_id, 5)
         self.assertEqual(pipeline.scrape_status.pending_urls, [])
         self.assertEqual(pipeline.scrape_status.cancelled_urls, ["https://gallery.test/post/9"])
@@ -736,17 +757,18 @@ class CancelRemainderTests(unittest.TestCase):
         )
         pipeline._finish_queue(4, None, None, job, {})
         self.assertFalse(pipeline.scrape_status.running)
-        self.assertEqual(pipeline.scrape_status.processed, 10)
+        self.assertEqual(pipeline.scrape_status.processed, 8)
         self.assertEqual(pipeline.scrape_status.pending_urls, [])
 
-    def test_stop_counts_a_limit_that_was_not_reached(self) -> None:
+    def test_stop_does_not_pad_an_unreached_limit(self) -> None:
         pipeline.scrape_status.total = 10
         pipeline.scrape_status.processed = 3
         pipeline.scrape_status.skipped = 1
         pipeline.scrape_status.pending_urls = []
         pipeline._skip_cancelled_remainder()
-        self.assertEqual(pipeline.scrape_status.skipped, 8)
-        self.assertEqual(pipeline.scrape_status.processed, 10)
+        self.assertEqual(pipeline.scrape_status.skipped, 1)
+        self.assertEqual(pipeline.scrape_status.processed, 3)
+        self.assertEqual(pipeline.scrape_status.total, 10)
 
     def test_classify_remote_picture(self) -> None:
         from backend.scraper.storage import classify_remote_media

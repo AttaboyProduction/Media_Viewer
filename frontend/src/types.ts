@@ -81,6 +81,8 @@ export interface ScrapeRunRequest {
   limit: number
   exclude_tags: string[]
   tag_mode?: 'and' | 'or'
+  /** Panel that pressed Run: the selected site id, or `unsupported` to retry raw files. */
+  source_key?: string
 }
 
 export interface ScrapeSite {
@@ -139,6 +141,25 @@ export interface ScrapeSkippedItem {
   detail?: string
 }
 
+/** One source's session numbers and lists: `local`, an installed site id, or `unsupported`. */
+export interface ScrapeSourcePanel {
+  key: string
+  label: string
+  running: boolean
+  total: number
+  processed: number
+  downloaded: number
+  skipped: number
+  similar: number
+  message: string
+  current_url: string | null
+  last_gallery_url: string | null
+  errors: string[]
+  skipped_items: ScrapeSkippedItem[]
+  cancelled_urls: string[]
+  queue_urls: string[]
+}
+
 export interface ScrapeStatus {
   running: boolean
   total: number
@@ -158,6 +179,9 @@ export interface ScrapeStatus {
   hash_backfill_done: number
   recent_media_ids: number[]
   ran_this_session: boolean
+  source_key: string
+  source_label: string
+  sources: ScrapeSourcePanel[]
 }
 
 export interface DuplicateGroup {

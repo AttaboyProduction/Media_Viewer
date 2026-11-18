@@ -326,7 +326,9 @@ def patch_media_urls(
     db: Session = Depends(get_db),
 ) -> MediaSummary:
     try:
-        media = update_media_urls(db, media_id, payload.add, payload.remove)
+        media = update_media_urls(
+            db, media_id, payload.add, payload.remove, urls=payload.urls
+        )
         db.commit()
         return build_media_summary(db, media)
     except ValueError as exc:
