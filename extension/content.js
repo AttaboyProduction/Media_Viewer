@@ -90,6 +90,8 @@
   }
 
   function isTypingTarget(el) {
+    if (!el) return false;
+    if (el.nodeType === 3) el = el.parentElement;
     if (!el || !el.tagName) return false;
     const tag = el.tagName.toLowerCase();
     if (tag === "textarea" || tag === "select") return true;
@@ -99,7 +101,14 @@
       return notText.indexOf(type) === -1;
     }
     if (el.isContentEditable) return true;
-    return Boolean(el.closest && el.closest("textarea, select, [contenteditable='true']"));
+    const role = (el.getAttribute && (el.getAttribute("role") || "")).toLowerCase();
+    if (role === "textbox" || role === "searchbox" || role === "combobox") return true;
+    return Boolean(
+      el.closest &&
+        el.closest(
+          "textarea, select, [contenteditable='true'], [contenteditable=''], [role='textbox'], [role='searchbox']"
+        )
+    );
   }
 
   function focusedNode(event) {
@@ -152,8 +161,7 @@
     true
   );
 
-  // Capture phase + stopImmediatePropagation so page shortcuts (and Find-like
-  // handlers that listen for bare F/P) do not swallow the key first.
+  // Do not preventDefault — the key keeps its normal job (e.g. typing "f" in a box).
   function queueHotkey(which, event) {
       const now = Date.now();
       if (now - lastHotkeyAt < 400) return;
@@ -199,8 +207,10 @@
   }
 
   function onHotkey(event) {
+    if (event.type !== "keydown") return;
     const node = focusedNode(event);
-    if (isTypingTarget(node)) return;
+    // In a text field the letter must type; skip the extension for that press.
+    if (isTypingTarget(node) || isTypingTarget(document.activeElement)) return;
     const pressedFile = matchesBinding(event, hotkeys.file);
     const pressedPage = matchesBinding(event, hotkeys.page);
     if (!pressedFile && !pressedPage) return;
@@ -210,9 +220,6 @@
     ) {
       return;
     }
-    event.preventDefault();
-    event.stopPropagation();
-    if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
     queueHotkey(pressedFile ? "f" : "p", event);
   }
 
@@ -225,5 +232,4 @@
   });
 
   window.addEventListener("keydown", onHotkey, true);
-  window.addEventListener("keyup", onHotkey, true);
 })();

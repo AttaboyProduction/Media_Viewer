@@ -1,5 +1,6 @@
 // Page world, so shortcuts still arrive when a video player is focused.
 // The isolated content script does the actual queue.
+// Never preventDefault — the key keeps its normal function (typing, page shortcuts).
 (function () {
   if (window.__scrapDownloadHotkeysMain) return;
   window.__scrapDownloadHotkeysMain = true;
@@ -13,10 +14,34 @@
     return false;
   }
 
+  function isTypingTarget(el) {
+    if (!el) return false;
+    if (el.nodeType === 3) el = el.parentElement;
+    if (!el || !el.tagName) return false;
+    const tag = el.tagName.toLowerCase();
+    if (tag === "textarea" || tag === "select") return true;
+    if (tag === "input") {
+      const type = (el.type || "text").toLowerCase();
+      if (["button", "checkbox", "radio", "range", "file", "submit", "reset", "color"].indexOf(type) === -1) {
+        return true;
+      }
+    }
+    if (el.isContentEditable) return true;
+    const role = (el.getAttribute && (el.getAttribute("role") || "")).toLowerCase();
+    if (role === "textbox" || role === "searchbox" || role === "combobox") return true;
+    return Boolean(
+      el.closest &&
+        el.closest(
+          "textarea, select, [contenteditable='true'], [contenteditable=''], [role='textbox'], [role='searchbox']"
+        )
+    );
+  }
+
   window.addEventListener(
     "keydown",
     (event) => {
       if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
+      if (isTypingTarget(event.target) || isTypingTarget(document.activeElement)) return;
       const root = document.documentElement;
       const fileCode = (root && root.dataset.scrapHotkeyFileCode) || "Insert";
       const fileKey = (root && root.dataset.scrapHotkeyFileKey) || "Insert";
@@ -34,17 +59,7 @@
       if (which === "p") {
         if (!root || root.dataset.scrapHotkeys !== "site") return;
       }
-      const tag = event.target && event.target.tagName ? event.target.tagName.toLowerCase() : "";
-      if (tag === "textarea" || tag === "select") return;
-      if (tag === "input") {
-        const type = (event.target.type || "text").toLowerCase();
-        if (["button", "checkbox", "radio", "range", "file", "submit", "reset", "color"].indexOf(type) === -1) {
-          return;
-        }
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      if (typeof event.stopImmediatePropagation === "function") event.stopImmediatePropagation();
+      // Let the key through (no preventDefault) and notify the isolated world.
       window.postMessage({ source: "scrap-download-hotkey", key: which }, "*");
     },
     true
