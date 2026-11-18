@@ -26,8 +26,10 @@ function pathHasMedia(event: KeyboardEvent): boolean {
   return false
 }
 
-/** Skip app shortcuts only for real typing; never when a video/audio is involved. */
+/** Skip app shortcuts for modifiers, real typing; never when a video/audio is involved. */
 export function shouldSkipKeyboardShortcut(event: KeyboardEvent): boolean {
+  // Ctrl/Meta/Alt combos (e.g. Ctrl+F find) must not fire app keys like fullscreen F.
+  if (event.ctrlKey || event.metaKey || event.altKey) return true
   if (pathHasMedia(event)) return false
   if (isKeyboardTypingTarget(event.target)) return true
   if (typeof document !== 'undefined' && isKeyboardTypingTarget(document.activeElement)) return true
