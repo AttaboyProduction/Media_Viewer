@@ -66,8 +66,10 @@ class ScrapeStatus:
     queue_urls: list[str] = field(default_factory=list)
     # Unfinished URLs this run is retrying. Already-counted ones do not grow total.
     retry_urls: set[str] = field(default_factory=set)
-    # URLs already included in processed for this process.
+    # URLs already in this job's total (downloads or skips). Retries do not grow total.
     counted_urls: set[str] = field(default_factory=set)
+    # URLs that finished with a real media download (only these bump ``processed``).
+    finished_urls: set[str] = field(default_factory=set)
     # Retries and queue URLs still run after the gallery download limit is met.
     leftover_urls: set[str] = field(default_factory=set)
 
@@ -92,6 +94,7 @@ def _reset_status(gallery_url: str) -> None:
         scrape_status.errors = []
         scrape_status.skipped_items = []
         scrape_status.counted_urls = set()
+        scrape_status.finished_urls = set()
         scrape_status.retry_urls = set()
     scrape_status.last_gallery_url = gallery_url
     scrape_status.message = "Starting..."
@@ -271,6 +274,7 @@ def _record_cancelled(url: str) -> None:
         scrape_status.cancelled_urls.append(url)
     if url:
         scrape_status.counted_urls.discard(url)
+        scrape_status.finished_urls.discard(url)
 
 
 def _skip_cancelled_remainder() -> None:
@@ -329,10 +333,15 @@ def _is_retry(url: str) -> bool:
 
 
 def _attempt(url: str) -> None:
-    """Count one new file. A retry already in the total does not move processed."""
-    if _is_retry(url) or (url and url in scrape_status.counted_urls):
+    """Count one successful media download toward ``processed`` (once per URL).
+
+    Skips may already be in ``counted_urls`` so retries do not grow ``total``;
+    only ``finished_urls`` gates the processed bump.
+    """
+    if url and url in scrape_status.finished_urls:
         return
     if url:
+        scrape_status.finished_urls.add(url)
         scrape_status.counted_urls.add(url)
     if scrape_status.processed + 1 > scrape_status.total:
         scrape_status.total = scrape_status.processed + 1
@@ -368,8 +377,9 @@ def _persist_outcome(url: str, *, downloaded: bool, reason: str = "", detail: st
 def _complete_download(url: str) -> None:
     if _is_retry(url):
         scrape_status.retry_urls.discard(url)
-    else:
-        _attempt(url)
+    # Always finish on a real download — even when a prior skip already put the
+    # URL in counted_urls (so retries did not grow total).
+    _attempt(url)
     _drop_skipped(url)
     scrape_status.downloaded += 1
     _persist_outcome(url, downloaded=True)
@@ -383,8 +393,10 @@ def _complete_skip(url: str, reason: str, detail: str = "") -> None:
         scrape_status.retry_urls.discard(url)
         _persist_outcome(url, downloaded=False, reason=reason, detail=detail)
         return
-    if not _is_retry(url):
-        _attempt(url)
+    # In total so a Skipped retry does not grow total — but not finished:
+    # no media file was downloaded, so do not bump ``processed``.
+    if url:
+        scrape_status.counted_urls.add(url)
     _record_skip(url, reason, detail)
 
 
@@ -716,6 +728,9 @@ def _claim_remote_download(url: str) -> str:
         scrape_status.similar = 0
         scrape_status.errors = []
         scrape_status.skipped_items = []
+        scrape_status.counted_urls = set()
+        scrape_status.finished_urls = set()
+        scrape_status.retry_urls = set()
     _sync_open_urls()
     threading.Thread(target=_run_remote_downloads, args=(job_id,), daemon=True).start()
     return "started"
@@ -847,9 +862,8 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
             scrape_status.errors.append(detail)
             scrape_status.message = "Failed"
             scrape_status.current_url = None
-            if scrape_status.processed < scrape_status.total:
-                scrape_status.processed += 1
-                _record_skip("", "error", detail)
+            # Job-level failure: list as skipped, but do not pad processed.
+            _record_skip("", "error", detail)
         raise
     finally:
         _release_queue(my_id)

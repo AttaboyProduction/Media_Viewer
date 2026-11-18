@@ -19,7 +19,7 @@ UNSUPPORTED_LABEL = "Unsupported"
 
 _COUNTERS = ("total", "processed", "downloaded", "skipped", "similar")
 _LISTS = ("errors", "skipped_items", "cancelled_urls")
-_SETS = ("counted_urls", "retry_urls", "accepted_urls")
+_SETS = ("counted_urls", "finished_urls", "retry_urls", "accepted_urls")
 _VALUES = ("last_gallery_url", "message", "current_url")
 
 # Numbers of sources that are not the live one.
@@ -179,15 +179,25 @@ def drop_url(status, url: str) -> None:
     if not key:
         return
 
-    def _scrub(skipped_items, cancelled_urls, counted_urls):
+    def _scrub(skipped_items, cancelled_urls, counted_urls, finished_urls):
         next_skipped = [row for row in skipped_items if identity(row.url) != key]
         removed = len(skipped_items) - len(next_skipped)
         next_cancelled = [item for item in cancelled_urls if identity(item) != key]
         next_counted = {item for item in counted_urls if identity(item) != key}
-        return next_skipped, next_cancelled, next_counted, removed
+        next_finished = {item for item in finished_urls if identity(item) != key}
+        return next_skipped, next_cancelled, next_counted, next_finished, removed
 
-    status.skipped_items, status.cancelled_urls, status.counted_urls, removed = _scrub(
-        status.skipped_items, status.cancelled_urls, status.counted_urls
+    (
+        status.skipped_items,
+        status.cancelled_urls,
+        status.counted_urls,
+        status.finished_urls,
+        removed,
+    ) = _scrub(
+        status.skipped_items,
+        status.cancelled_urls,
+        status.counted_urls,
+        status.finished_urls,
     )
     if removed:
         status.skipped = max(0, int(status.skipped) - removed)
@@ -195,8 +205,17 @@ def drop_url(status, url: str) -> None:
     if status.current_url and identity(status.current_url) == key:
         status.current_url = None
     for snap in _archive.values():
-        snap["skipped_items"], snap["cancelled_urls"], snap["counted_urls"], removed = _scrub(
-            snap["skipped_items"], snap["cancelled_urls"], snap["counted_urls"]
+        (
+            snap["skipped_items"],
+            snap["cancelled_urls"],
+            snap["counted_urls"],
+            snap["finished_urls"],
+            removed,
+        ) = _scrub(
+            snap["skipped_items"],
+            snap["cancelled_urls"],
+            snap["counted_urls"],
+            snap.get("finished_urls") or set(),
         )
         if removed:
             snap["skipped"] = max(0, int(snap["skipped"]) - removed)

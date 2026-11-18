@@ -54,6 +54,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
         pipeline.scrape_status.cancelled_urls = []
         pipeline.scrape_status.retry_urls = set()
         pipeline.scrape_status.counted_urls = set()
+        pipeline.scrape_status.finished_urls = set()
         pipeline.scrape_status.leftover_urls = set()
         pipeline.scrape_status.continue_counts = False
         pipeline.scrape_status.queue_open = False
@@ -138,7 +139,8 @@ class ScrapeLeftoverTests(unittest.TestCase):
         second = "https://gallery.test/post/2"
         pipeline.scrape_status.ran_this_session = True
         pipeline.scrape_status.total = 15
-        pipeline.scrape_status.processed = 15
+        # Skips are in total but not finished — processed is downloads only.
+        pipeline.scrape_status.processed = 13
         pipeline.scrape_status.downloaded = 13
         pipeline.scrape_status.skipped = 2
         pipeline.scrape_status.skipped_items = [
@@ -163,20 +165,41 @@ class ScrapeLeftoverTests(unittest.TestCase):
                 _job([first, second]), "gallery", continue_counts=True, retry_urls=set(retries)
             )
         self.assertEqual(pipeline.scrape_status.total, 15)
-        self.assertEqual(pipeline.scrape_status.processed, 15)
+        self.assertEqual(pipeline.scrape_status.processed, 13)
         pipeline._complete_download(first)
         self.assertEqual(pipeline.scrape_status.downloaded, 14)
         self.assertEqual(pipeline.scrape_status.skipped, 1)
-        self.assertEqual(pipeline.scrape_status.processed, 15)
+        self.assertEqual(pipeline.scrape_status.processed, 14)
         self.assertEqual(pipeline.scrape_status.total, 15)
         self.assertEqual(scrape_leftovers.unfinished_items()[0]["url"], second)
+
+    def test_complete_skip_does_not_count_as_finished(self) -> None:
+        """Skipped URLs stay in total but do not bump processed without a download."""
+        url = "https://gallery.test/post/skip-1"
+        pipeline.scrape_status.total = 3
+        pipeline.scrape_status.processed = 1
+        pipeline.scrape_status.downloaded = 1
+        pipeline.scrape_status.finished_urls = {"https://gallery.test/post/ok"}
+        pipeline.scrape_status.counted_urls = {"https://gallery.test/post/ok"}
+        pipeline._complete_skip(url, "excluded_tag")
+        self.assertEqual(pipeline.scrape_status.processed, 1)
+        self.assertEqual(pipeline.scrape_status.downloaded, 1)
+        self.assertEqual(pipeline.scrape_status.skipped, 1)
+        self.assertIn(url, pipeline.scrape_status.counted_urls)
+        self.assertNotIn(url, pipeline.scrape_status.finished_urls)
+        # A later successful download of that URL finishes it once.
+        pipeline.scrape_status.retry_urls.add(url)
+        pipeline._complete_download(url)
+        self.assertEqual(pipeline.scrape_status.processed, 2)
+        self.assertEqual(pipeline.scrape_status.downloaded, 2)
+        self.assertIn(url, pipeline.scrape_status.finished_urls)
 
     def test_queue_urls_increase_the_total(self) -> None:
         done = "https://gallery.test/post/1"
         fresh = "https://gallery.test/post/9"
         pipeline.scrape_status.ran_this_session = True
         pipeline.scrape_status.total = 15
-        pipeline.scrape_status.processed = 15
+        pipeline.scrape_status.processed = 13
         pipeline.scrape_status.downloaded = 13
         pipeline.scrape_status.skipped = 1
         pipeline.scrape_status.skipped_items = [SkippedItem(url=done, reason="error")]
@@ -191,7 +214,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
                 retry_urls={done},
             )
         self.assertEqual(pipeline.scrape_status.total, 16)
-        self.assertEqual(pipeline.scrape_status.processed, 15)
+        self.assertEqual(pipeline.scrape_status.processed, 13)
         self.assertEqual(pipeline.scrape_status.pending_urls, [done, fresh])
 
     def test_raw_file_queue_drains_through_remote_download(self) -> None:

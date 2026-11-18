@@ -172,6 +172,7 @@ def _idle_status() -> None:
     pipeline.scrape_status.queue_urls = []
     pipeline.scrape_status.retry_urls = set()
     pipeline.scrape_status.counted_urls = set()
+    pipeline.scrape_status.finished_urls = set()
     pipeline.scrape_status.leftover_urls = set()
     pipeline.scrape_status.job_id = 0
     pipeline.scrape_status.last_gallery_url = None
