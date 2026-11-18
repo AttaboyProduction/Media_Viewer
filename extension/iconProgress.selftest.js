@@ -8,6 +8,7 @@ const {
   busyDotGeometry,
   savedDotGeometry,
   panelForPage,
+  formatMediaStatus,
   DOT_SAVED,
   DOT_QUEUED,
   BUSY_POLL_MS,
@@ -89,5 +90,16 @@ const multi = {
 assert(panelForPage(multi, "example").processed === 1, "supported page uses site panel");
 assert(panelForPage(multi, "").key === "unsupported", "off-site page uses unsupported panel");
 assert(panelForPage(multi, "missing").key === "missing", "unknown site returns empty panel for that key");
+assert(formatMediaStatus({ saved: true, queues: [] }) === "In library", "saved only");
+assert(
+  formatMediaStatus({ saved: false, queues: ["Queue to scrape (Example)"] }) ===
+    "In Queue to scrape (Example)",
+  "queue only"
+);
+assert(
+  formatMediaStatus({ saved: true, queues: ["Skipped (Example)", "Offline queue"] }) ===
+    "In library · In Skipped (Example) · In Offline queue",
+  "saved and queues"
+);
 
 console.log("iconProgress.selftest: ok");

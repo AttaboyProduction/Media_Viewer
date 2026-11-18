@@ -1033,6 +1033,83 @@ async function runScrape(message) {
   return { ok: false, error: detailOf(res) };
 }
 
+function urlTouchesPage(candidate, pageUrl) {
+  if (!candidate || !pageUrl) return false;
+  if (ScrapShared.pageKeysMatch(candidate, pageUrl)) return true;
+  const a = libraryKey(candidate) || pageKey(candidate);
+  const b = libraryKey(pageUrl) || pageKey(pageUrl);
+  if (a && b && a === b) return true;
+  return Boolean(a && b && ScrapShared.pageKeysMatch(a, b));
+}
+
+function queueLabel(kind, sourceLabel) {
+  const src = (sourceLabel || "").trim();
+  return src ? `${kind} (${src})` : kind;
+}
+
+/** Library + which queues hold this post (for the popup on a supported media page). */
+async function mediaStatusForPage(pageUrl, scrapeData) {
+  const empty = { saved: false, queues: [], text: "" };
+  if (!pageUrl || !ScrapShared.scrapableUrl(sites, pageUrl)) return empty;
+
+  await loadQueuedPosts();
+  await readOfflineQueue();
+  const lookup = [pageKey(pageUrl), libraryKey(pageUrl), pageUrl].filter(Boolean);
+  if (lookup.length) await refreshSavedPosts(lookup);
+  const saved = setHasPage(savedPostUrls, pageUrl);
+
+  const queues = [];
+  const seen = new Set();
+  function addQueue(kind, sourceLabel) {
+    const label = queueLabel(kind, sourceLabel);
+    if (seen.has(label)) return;
+    seen.add(label);
+    queues.push(label);
+  }
+
+  const sources = scrapeData && Array.isArray(scrapeData.sources) ? scrapeData.sources : [];
+  for (const panel of sources) {
+    const label = panel && panel.label ? String(panel.label) : "";
+    if (panel && panel.running && urlTouchesPage(panel.current_url, pageUrl)) {
+      addQueue("Downloading", label);
+    }
+    if (panel && (panel.queue_urls || []).some((url) => urlTouchesPage(url, pageUrl))) {
+      addQueue("Queue to scrape", label);
+    }
+    const skipped = (panel && panel.skipped_items) || [];
+    if (skipped.some((item) => item && item.reason !== "cancelled" && urlTouchesPage(item.url, pageUrl))) {
+      addQueue("Skipped", label);
+    }
+    if (panel && (panel.cancelled_urls || []).some((url) => urlTouchesPage(url, pageUrl))) {
+      addQueue("Cancelled", label);
+    }
+  }
+  if (scrapeData && urlTouchesPage(scrapeData.current_url, pageUrl) && scrapeData.running) {
+    addQueue("Downloading", scrapeData.source_label || "");
+  }
+  if (scrapeData && (scrapeData.queue_urls || []).some((url) => urlTouchesPage(url, pageUrl))) {
+    addQueue("Queue to scrape", scrapeData.source_label || "");
+  }
+  if (offlineQueue.some((url) => urlTouchesPage(url, pageUrl))) {
+    addQueue("Offline queue", "");
+  }
+  // Local extension mark when the app has not echoed the URL into status yet.
+  if (setHasPage(queuedPostUrls, pageUrl) && !queues.some((q) => q.startsWith("Queue to scrape") || q === "Downloading")) {
+    addQueue("Queue to scrape", siteLabelForPage(pageUrl));
+  }
+
+  return {
+    saved,
+    queues,
+    text: ScrapIconProgress.formatMediaStatus({ saved, queues }),
+  };
+}
+
+function siteLabelForPage(pageUrl) {
+  const site = ScrapShared.siteFor(sites, pageUrl);
+  return site && site.name ? site.name : "";
+}
+
 async function getStatus(pageUrl) {
   const health = await api("/health");
   if (health.ok) {
@@ -1053,11 +1130,13 @@ async function getStatus(pageUrl) {
     scrape.ok && scrape.data
       ? ScrapIconProgress.panelForPage(scrape.data, site ? site.id : "")
       : null;
+  const mediaStatus = await mediaStatusForPage(pageUrl, scrape.ok ? scrape.data : null);
   return {
     online: health.ok,
     scrapeEnabled,
     sites: sites.map((s) => s.name),
     job,
+    mediaStatus,
     queue: offlineQueue.slice(),
     viewerUrl: VIEWER_URL,
     // True only for the active tab's site — hides the Allow button after that site is granted.

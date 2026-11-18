@@ -115,6 +115,17 @@
     };
   }
 
+  /** Short popup lines for one post: library and/or which queue(s). */
+  function formatMediaStatus({ saved, queues }) {
+    const parts = [];
+    if (saved) parts.push("In library");
+    for (const name of queues || []) {
+      const text = String(name || "").trim();
+      if (text) parts.push(`In ${text}`);
+    }
+    return parts.join(" · ");
+  }
+
   const api = {
     BUSY_POLL_MS,
     IDLE_POLL_MS,
@@ -130,6 +141,7 @@
     busyDotGeometry,
     savedDotGeometry,
     panelForPage,
+    formatMediaStatus,
   };
   if (typeof globalThis !== "undefined") globalThis.ScrapIconProgress = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;

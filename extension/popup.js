@@ -124,6 +124,14 @@ function renderQueue(urls) {
   }
 }
 
+function renderMediaStatus() {
+  const el = $("mediaStatus");
+  const ms = current && current.mediaStatus;
+  const show = !!(page && page.onSite && page.scrapable && ms && ms.text);
+  el.hidden = !show;
+  el.textContent = show ? ms.text : "";
+}
+
 function renderPage() {
   const actions = $("actions");
   const filters = $("filters");
@@ -144,6 +152,7 @@ function renderPage() {
     text.textContent = holdNotice || `This site isn't supported. ${keys.file} saves the largest file.`;
     hotkey.textContent = `Shortcut key: ${keys.file} = largest file`;
     $("pageFiles").hidden = false;
+    renderMediaStatus();
     return;
   }
   $("pageFiles").hidden = true;
@@ -154,15 +163,18 @@ function renderPage() {
       (offline
         ? "The app is not running. Download still adds this page to the queue."
         : "Scraping is off in the app. Download still adds this page to the queue.");
+    renderMediaStatus();
     return;
   }
   if (page.scrapable) {
     text.textContent = holdNotice || page.url;
+    renderMediaStatus();
     return;
   }
   filters.hidden = false;
   document.body.classList.add("gallery-filters");
   text.textContent = holdNotice || (page.siteName ? `${page.siteName} — filters apply to this site.` : "Filters apply to this site.");
+  renderMediaStatus();
 }
 
 async function note(result) {
