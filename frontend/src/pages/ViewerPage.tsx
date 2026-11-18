@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useSearchParams } from 'react-router-dom'
 import { fetchAppSettings, fetchMedia, patchAppSettings, type TagMatchMode } from '../api/client'
 import { useApplyAppDefaults } from '../hooks/useAppDefaults'
 import { useMediaBulkActions } from '../hooks/useMediaBulkActions'
@@ -23,6 +24,18 @@ import { parseCommaSeparatedTags } from '../utils/tagList'
 import { paginationTotalPages } from '../utils/pagination'
 import { columnCountForViewerGrid } from '../utils/viewerGrid'
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+
+function pageFromSearch(params: URLSearchParams): number {
+  const raw = Number(params.get('page') || '1')
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1
+}
+
+function cursorFromSearch(params: URLSearchParams): number | null {
+  const raw = params.get('cursor')
+  if (!raw) return null
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null
+}
 
 const TILE_MIN: Record<GridThumbnailSize, number> = {
   compact: 120,
@@ -126,6 +139,7 @@ function MediaCard({
 
 export default function ViewerPage() {
   const queryClient = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
   const { data: appSettings } = useQuery({
     queryKey: ['app-settings'],
     queryFn: fetchAppSettings,
@@ -134,7 +148,9 @@ export default function ViewerPage() {
   const { hasPendingReveals, revealAllPending, revealing } = useContentHide()
   const prefs = appSettings ?? DEFAULT_APP_SETTINGS
 
-  const [page, setPage] = useState(1)
+  const [page, setPage] = useState(() => pageFromSearch(searchParams))
+  /** Frozen max media id for this browse session; cleared on page 1 / filter / sort. */
+  const [listCursor, setListCursor] = useState<number | null>(() => cursorFromSearch(searchParams))
   const [selectedTags, setSelectedTags] = useState<string[]>([])
   const [tagMode, setTagMode] = useState<TagMatchMode>('and')
   const [tagsFilterExpanded, setTagsFilterExpanded] = useState(false)
@@ -152,7 +168,18 @@ export default function ViewerPage() {
     setHideExcluded(s.viewer_hide_excluded_tags)
   }, [])
   useApplyAppDefaults(appSettings, applyDefaults)
-  const resetPage = useCallback(() => setPage(1), [])
+  const resetBrowseSession = useCallback(() => {
+    setListCursor(null)
+    setPage(1)
+  }, [])
+  const goToPage = useCallback((next: number) => {
+    if (next <= 1) {
+      setListCursor(null)
+      setPage(1)
+      return
+    }
+    setPage(next)
+  }, [])
   const viewerPageSizeOptions =
     prefs.viewer_page_sizes?.length > 0
       ? prefs.viewer_page_sizes
@@ -166,7 +193,7 @@ export default function ViewerPage() {
     settings: appSettings,
     settingKey: 'viewer_page_size',
     fallback: DEFAULT_APP_SETTINGS.viewer_page_size,
-    onResetPage: resetPage,
+    onResetPage: resetBrowseSession,
     allowedSizes: viewerPageSizeOptions,
   })
 
@@ -240,9 +267,12 @@ export default function ViewerPage() {
     if (!hasHiddenConfig || hideExcluded === null) return
     const next = !hideExcluded
     setHideExcluded(next)
-    setPage(1)
+    resetBrowseSession()
     hideExcludedMutation.mutate(next)
   }
+
+  const requestCursor =
+    page > 1 && listCursor != null && sort !== 'random' ? listCursor : undefined
 
   const { data, isLoading, isFetching, error } = useQuery({
     queryKey: [
@@ -259,6 +289,7 @@ export default function ViewerPage() {
       hiddenGroupKeys,
       mediaExcludeTags,
       sort,
+      requestCursor ?? null,
     ],
     queryFn: () =>
       fetchMedia({
@@ -272,6 +303,7 @@ export default function ViewerPage() {
         exclude_tags: mediaExcludeTags,
         exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
         sort: sort!,
+        cursor: requestCursor,
       }),
     enabled: mediaQueryEnabled,
     // Keep the visible page while refetching (no "Loading..." blank on tag clicks or paging),
@@ -315,6 +347,26 @@ export default function ViewerPage() {
     clearSelection,
   ])
 
+  // Capture / refresh the session cursor from page-1 responses (no request cursor).
+  useEffect(() => {
+    if (!data || requestCursor != null) return
+    if (data.cursor != null) setListCursor(data.cursor)
+  }, [data, requestCursor])
+
+  // Keep ?page=&cursor= in sync for share/reload (rule34-style).
+  useEffect(() => {
+    const next = new URLSearchParams(searchParams)
+    if (page > 1) next.set('page', String(page))
+    else next.delete('page')
+    if (page > 1 && listCursor != null && sort !== 'random') {
+      next.set('cursor', String(listCursor))
+    } else {
+      next.delete('cursor')
+    }
+    if (next.toString() === searchParams.toString()) return
+    setSearchParams(next, { replace: true })
+  }, [page, listCursor, sort, searchParams, setSearchParams])
+
   const toggleSelectMode = () => {
     if (!selectMode) setSelectedId(null)
     toggleGridSelect()
@@ -334,7 +386,7 @@ export default function ViewerPage() {
   })
 
   const toggleTagFilter = (name: string) => {
-    setPage(1)
+    resetBrowseSession()
     setSelectedTags((prev) =>
       prev.includes(name) ? prev.filter((t) => t !== name) : [...prev, name],
     )
@@ -343,7 +395,7 @@ export default function ViewerPage() {
   const sidebarLayout = (prefs.viewer_tag_layout ?? 'chips') === 'sidebar'
   const showLoading = !mediaQueryEnabled || isLoading || (isFetching && !data)
   const totalPages = data ? paginationTotalPages(data.total, data.page_size) : 1
-  usePageClamp(page, data ? totalPages : page, setPage)
+  usePageClamp(page, data ? totalPages : page, goToPage)
   const gridClass = `media-grid media-grid-${prefs.grid_thumbnail_size}${
     isFetching && data ? ' media-grid-refreshing' : ''
   }${selectMode ? ' recent-scrape-selecting' : ''}`
@@ -362,7 +414,13 @@ export default function ViewerPage() {
   return (
     <div className="page viewer-page-fill">
       <div className="filters">
-        <select value={mediaType} onChange={(e) => { setMediaType(e.target.value); setPage(1) }}>
+        <select
+          value={mediaType}
+          onChange={(e) => {
+            setMediaType(e.target.value)
+            resetBrowseSession()
+          }}
+        >
           <option value="">All types</option>
           <option value="image">Images</option>
           <option value="gif">GIFs</option>
@@ -372,7 +430,7 @@ export default function ViewerPage() {
           value={minRating ?? ''}
           onChange={(e) => {
             setMinRating(e.target.value ? Number(e.target.value) : undefined)
-            setPage(1)
+            resetBrowseSession()
           }}
         >
           <option value="">Any rating</option>
@@ -382,7 +440,10 @@ export default function ViewerPage() {
         </select>
         <select
           value={sort ?? prefs.viewer_sort}
-          onChange={(e) => setSort(e.target.value as ViewerSort)}
+          onChange={(e) => {
+            setSort(e.target.value as ViewerSort)
+            resetBrowseSession()
+          }}
           disabled={sort === null}
         >
           <option value="date_desc">Newest</option>
@@ -429,7 +490,7 @@ export default function ViewerPage() {
             onChange={(e) => {
               const next = e.target.checked
               setIncludeDiscarded(next)
-              setPage(1)
+              resetBrowseSession()
               includeDiscardedMutation.mutate(next)
             }}
           />{' '}
@@ -462,13 +523,13 @@ export default function ViewerPage() {
             selectedTags={selectedTags}
             onToggle={toggleTagFilter}
             onClear={() => {
-              setPage(1)
+              resetBrowseSession()
               setSelectedTags([])
             }}
             tagMode={tagMode}
             onTagModeChange={(mode) => {
               setTagMode(mode)
-              setPage(1)
+              resetBrowseSession()
             }}
           />
           <div className="viewer-sidebar-main">
@@ -516,7 +577,7 @@ export default function ViewerPage() {
                 total: data.total,
                 pageSize: pageSize ?? prefs.viewer_page_size,
                 pageSizeOptions: viewerPageSizeOptions,
-                onPageChange: setPage,
+                onPageChange: goToPage,
                 onPageSizeChange: changePageSize,
                 pageSizeDisabled: !pageSizeReady || pageSizePending,
               }}
@@ -542,13 +603,13 @@ export default function ViewerPage() {
             expanded: tagsFilterExpanded,
             onExpandedChange: setTagsFilterExpanded,
             onClearSelected: () => {
-              setPage(1)
+              resetBrowseSession()
               setSelectedTags([])
             },
             tagMode,
             onTagModeChange: (mode) => {
               setTagMode(mode)
-              setPage(1)
+              resetBrowseSession()
             },
             toolbarActions: (
               <button
@@ -597,7 +658,7 @@ export default function ViewerPage() {
             total: data.total,
             pageSize: pageSize ?? prefs.viewer_page_size,
             pageSizeOptions: viewerPageSizeOptions,
-            onPageChange: setPage,
+            onPageChange: goToPage,
             onPageSizeChange: changePageSize,
             pageSizeDisabled: !pageSizeReady || pageSizePending,
           }}

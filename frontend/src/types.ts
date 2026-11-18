@@ -50,6 +50,8 @@ export interface MediaListResponse {
   total: number
   page: number
   page_size: number
+  /** Frozen max media id for this browse session; null when empty or random sort. */
+  cursor?: number | null
 }
 
 export interface Tag {

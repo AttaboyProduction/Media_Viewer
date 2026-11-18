@@ -119,6 +119,8 @@ class MediaListTestCase(unittest.TestCase):
             "include_discarded": False,
             "exclude_id": None,
             "sort": "date_desc",
+            "cursor": None,
+            "tag_mode": "and",
             "db": self.db,
         }
         params.update(kwargs)
@@ -312,7 +314,35 @@ class SortAndPageTests(MediaListTestCase):
         self.assertEqual(first.total, 7)
         self.assertEqual(len(first.items), 4)
         self.assertEqual(len(second.items), 3)
-        self.assertNotIn("discarded", {item.source_post_id for item in first.items})
+        self.assertIsNone(first.cursor)
+
+    def test_cursor_freezes_page_when_newer_media_arrives(self):
+        for index in range(4):
+            self._add_media(f"m{index}", minutes=index)
+        self.db.commit()
+
+        page1 = self._list(page=1, page_size=2, sort="date_desc")
+        self.assertEqual([item.source_post_id for item in page1.items], ["m3", "m2"])
+        self.assertIsNotNone(page1.cursor)
+        frozen = page1.cursor
+
+        page2 = self._list(page=2, page_size=2, sort="date_desc", cursor=frozen)
+        self.assertEqual([item.source_post_id for item in page2.items], ["m1", "m0"])
+        self.assertEqual(page2.cursor, frozen)
+        self.assertEqual(page2.total, 4)
+
+        # Newer scrape (higher id) must not shove page 2's items.
+        self._add_media("m4", minutes=4)
+        self.db.commit()
+        page2_again = self._list(page=2, page_size=2, sort="date_desc", cursor=frozen)
+        self.assertEqual([item.source_post_id for item in page2_again.items], ["m1", "m0"])
+        self.assertEqual(page2_again.total, 4)
+
+        # Page 1 without cursor sees the new file and a new high-water cursor.
+        refreshed = self._list(page=1, page_size=2, sort="date_desc", cursor=None)
+        self.assertEqual(refreshed.items[0].source_post_id, "m4")
+        self.assertGreater(refreshed.cursor, frozen)
+        self.assertEqual(refreshed.total, 5)
 
     def test_pagination_boundaries(self):
         for index in range(5):

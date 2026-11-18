@@ -19,6 +19,7 @@ import StarRating from './StarRating'
 import TagEditor from './TagEditor'
 import { useConfirm } from '../context/ConfirmContext'
 import { useContentHide } from '../hooks/useContentHide'
+import { useKeyboardRating } from '../hooks/useKeyboardRating'
 import { DEFAULT_APP_SETTINGS } from '../types/appSettings'
 import { registerEscapeHandler } from '../utils/escapeStack'
 
@@ -84,6 +85,7 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
     mutationFn: (score: number) => setRating(mediaId, score),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['media'] }),
   })
+  useKeyboardRating(Boolean(media), mediaId, (score) => ratingMutation.mutate(score))
   const discardMutation = useMutation({
     mutationFn: (discarded: boolean) => discardMedia(mediaId, discarded),
     onSuccess: (_, discarded) => {
@@ -682,6 +684,7 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
           avg={media.rating.avg_rating}
           count={media.rating.rating_count}
         />
+        <p className="settings-hint">Keys 1–5; second key within 2s for .5</p>
         {contentLocked ? (
           <div className="content-hide-meta-placeholder">
             <p className="settings-hint">Tags are hidden until content is shown.</p>

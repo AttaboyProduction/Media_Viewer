@@ -42,6 +42,8 @@ export interface MediaFilters {
   exclude_tag_groups?: string[]
   exclude_id?: number
   sort?: string
+  /** Frozen max media id; omit on page 1 to establish a new browse session. */
+  cursor?: number | null
 }
 
 export function fetchMedia(filters: MediaFilters = {}) {
@@ -61,6 +63,7 @@ export function fetchMedia(filters: MediaFilters = {}) {
   }
   if (filters.exclude_id) params.set('exclude_id', String(filters.exclude_id))
   if (filters.sort) params.set('sort', filters.sort)
+  if (filters.cursor != null) params.set('cursor', String(filters.cursor))
   return request<MediaListResponse>(`/media?${params}`)
 }
 

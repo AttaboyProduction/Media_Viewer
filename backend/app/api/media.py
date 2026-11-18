@@ -77,6 +77,10 @@ def list_media(
     exclude_id: int | None = None,
     sort: str = "date_desc",
     tag_mode: str = "and",
+    cursor: int | None = Query(
+        None,
+        description="Frozen max media id for this browse session; newer ids stay off the list",
+    ),
     db: Session = Depends(get_db),
 ) -> MediaListOut:
     query = db.query(MediaItem)
@@ -108,6 +112,15 @@ def list_media(
                 .having(func.avg(Rating.score) >= min_rating)
             )
         )
+
+    session_cursor: int | None = None
+    if sort != "random":
+        if cursor is not None:
+            session_cursor = cursor
+            query = query.filter(MediaItem.id <= cursor)
+        else:
+            max_id = query.with_entities(func.max(MediaItem.id)).scalar()
+            session_cursor = int(max_id) if max_id is not None else None
 
     total = query.count()
     start = (page - 1) * page_size
@@ -141,6 +154,7 @@ def list_media(
         total=total,
         page=page,
         page_size=page_size,
+        cursor=session_cursor,
     )
 
 

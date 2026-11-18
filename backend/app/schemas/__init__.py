@@ -75,6 +75,8 @@ class MediaListOut(BaseModel):
     total: int
     page: int
     page_size: int
+    # Frozen high-water media id for this browse session (null when empty / random).
+    cursor: int | None = None
 
 
 class MediaTagsUpdate(BaseModel):
