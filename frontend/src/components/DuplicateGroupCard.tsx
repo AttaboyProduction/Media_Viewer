@@ -62,6 +62,8 @@ export default function DuplicateGroupCard({
     queryClient.invalidateQueries({ queryKey: ['duplicates'] })
     queryClient.invalidateQueries({ queryKey: ['duplicate-group'] })
     queryClient.invalidateQueries({ queryKey: ['media'] })
+    queryClient.invalidateQueries({ queryKey: ['scrape-recent-media'] })
+    queryClient.invalidateQueries({ queryKey: ['scrape-status'] })
   }
 
   const resolve = useMutation({

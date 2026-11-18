@@ -103,7 +103,11 @@ function RecentCard({
       <div className="media-card-meta recent-scrape-meta">
         <span>
           #{item.source_post_id} · {item.media_type}
-          {item.duplicate_of_id != null ? ' · similar' : ''}
+          {item.duplicate_of_id != null
+            ? item.duplicate_kind === 'identical'
+              ? ' · identical'
+              : ' · similar'
+            : ''}
         </span>
         {!selectMode && (
           <button

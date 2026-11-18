@@ -143,6 +143,10 @@ def discard_duplicate_member(db: Session, media_id: int) -> MediaItem:
         raise ValueError("Media not found")
     children = _children(db, media.id)
     media.is_discarded = True
+    # Drop the similar/identical link so Downloaded previously (and other lists)
+    # do not keep showing a stale "similar" mark on the discarded row.
+    media.duplicate_of_id = None
+    media.duplicate_kind = None
     if children:
         _retarget_children(db, media.id, children[0].id)
     db.flush()
@@ -213,6 +217,8 @@ def merge_identical(
         _copy_tags(db, source, keep)
         update_media_urls(db, keep.id, list_media_source_urls(source), [])
         source.is_discarded = True
+        source.duplicate_of_id = None
+        source.duplicate_kind = None
 
     if rating_from_id:
         user = get_local_user(db)
@@ -312,6 +318,23 @@ def mark_related_to(db: Session, anchor_id: int, other_ids: list[int], kind: str
         except ValueError as exc:
             if str(exc) != "Those files are already the same group":
                 raise
+
+
+def clear_duplicate_links_on_discarded(db: Session) -> int:
+    """One-shot repair: discarded rows must not keep a similar/identical mark."""
+    cleared = (
+        db.query(MediaItem)
+        .filter(
+            MediaItem.is_discarded.is_(True),
+            MediaItem.duplicate_of_id.isnot(None),
+        )
+        .update(
+            {"duplicate_of_id": None, "duplicate_kind": None},
+            synchronize_session=False,
+        )
+    )
+    db.flush()
+    return int(cleared or 0)
 
 
 def keep_group_members(db: Session, keep_ids: list[int], scope_ids: list[int] | None = None) -> None:

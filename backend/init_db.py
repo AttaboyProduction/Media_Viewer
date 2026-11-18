@@ -214,6 +214,13 @@ def _backfill_tag_usage_counts(db) -> None:
     db.commit()
 
 
+def _clear_stale_duplicate_marks_on_discarded(db) -> None:
+    from backend.app.services.duplicate_service import clear_duplicate_links_on_discarded
+
+    if clear_duplicate_links_on_discarded(db):
+        db.commit()
+
+
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_media_item_columns()
@@ -229,6 +236,7 @@ def init_db() -> None:
         _backfill_tag_group_links(db)
         _backfill_strip_unknown_when_grouped(db)
         _backfill_tag_sort_orders(db)
+        _clear_stale_duplicate_marks_on_discarded(db)
     finally:
         db.close()
 

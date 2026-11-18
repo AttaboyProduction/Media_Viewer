@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from backend.app.api.media import list_duplicates
 from backend.app.db.models import Base, MediaItem, MediaSourceUrl, MediaTag, Rating, Tag, User
 from backend.app.services.duplicate_service import (
+    clear_duplicate_links_on_discarded,
     keep_group_members,
     mark_related,
     mark_related_many,
@@ -211,8 +212,35 @@ class KeepMembersTests(DuplicateHarness):
         self.assertIsNone(primary.duplicate_of_id)
         self.assertIsNone(keep.duplicate_of_id)
         self.assertTrue(drop.is_discarded)
+        self.assertIsNone(drop.duplicate_of_id)
+        self.assertIsNone(drop.duplicate_kind)
         self.assertEqual(similar.duplicate_of_id, primary.id)
         self.assertFalse(similar.is_discarded)
+
+    def test_merge_clears_duplicate_mark_on_discarded_sources(self):
+        primary = self._add("p")
+        keep = self._add("k", duplicate_of=primary, kind="identical")
+        drop = self._add("d", duplicate_of=primary, kind="identical")
+        merge_identical(self.db, keep.id, [primary.id, drop.id], None)
+        self.db.refresh(keep)
+        self.db.refresh(primary)
+        self.db.refresh(drop)
+        self.assertIsNone(keep.duplicate_of_id)
+        self.assertTrue(primary.is_discarded)
+        self.assertIsNone(primary.duplicate_of_id)
+        self.assertTrue(drop.is_discarded)
+        self.assertIsNone(drop.duplicate_of_id)
+
+    def test_repair_clears_stale_marks_on_already_discarded_rows(self):
+        primary = self._add("p")
+        stale = self._add("old", duplicate_of=primary, kind="similar")
+        stale.is_discarded = True
+        self.db.flush()
+        cleared = clear_duplicate_links_on_discarded(self.db)
+        self.db.refresh(stale)
+        self.assertEqual(cleared, 1)
+        self.assertIsNone(stale.duplicate_of_id)
+        self.assertIsNone(stale.duplicate_kind)
 
     def test_bulk_mark_links_every_selected_file(self):
         first = self._add("1")
