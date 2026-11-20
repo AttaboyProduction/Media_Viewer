@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { fetchScrapeSession, fetchScrapeStatus } from '../api/client'
+import { fetchScrapeSession } from '../api/client'
 import DuplicatesPanel from '../components/DuplicatesPanel'
 import RecentScrapedMediaPanel from '../components/RecentScrapedMediaPanel'
 import { ScrapeBrowserNotice } from '../components/ScrapeBrowsers'
@@ -17,11 +17,6 @@ export default function ScrapePage() {
     queryClient.invalidateQueries({ queryKey: ['scrape-status'] })
   }, [queryClient])
 
-  const { data: scrapeStatus } = useQuery({
-    queryKey: ['scrape-status'],
-    queryFn: fetchScrapeStatus,
-    refetchInterval: 2000,
-  })
   const { data: session } = useQuery({
     queryKey: ['scrape-session'],
     queryFn: fetchScrapeSession,
@@ -33,12 +28,6 @@ export default function ScrapePage() {
     <div className="page">
       {showBrowserNotice && <ScrapeBrowserNotice />}
       <ScrapePanel onFinished={handleScrapeFinished} />
-
-      {scrapeStatus?.hash_backfill_running && (
-        <div className="banner">
-          Indexing existing files… {scrapeStatus.hash_backfill_done}/{scrapeStatus.hash_backfill_total}
-        </div>
-      )}
 
       <RecentScrapedMediaPanel />
       <DuplicatesPanel />

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 
 from backend.app.db.models import MediaItem
@@ -11,6 +12,8 @@ from backend.app.services.hash_service import (
     sha256_file,
 )
 from backend.app.services.media_service import absolute_path_for_media
+
+logger = logging.getLogger(__name__)
 
 backfill_status = {
     "running": False,
@@ -69,6 +72,11 @@ def run_hash_backfill() -> None:
         ]
         backfill_status["total"] = len(pending) + len(videos)
         backfill_status["done"] = 0
+        total = backfill_status["total"]
+        if total:
+            logger.info("Indexing existing files: 0/%s", total)
+        else:
+            logger.info("Indexing existing files: nothing to do")
 
         for item in pending:
             path = absolute_path_for_media(item)
@@ -101,11 +109,18 @@ def run_hash_backfill() -> None:
                 item.duplicate_of_id = target_kind[0].id
                 item.duplicate_kind = target_kind[1]
         db.commit()
+        if total:
+            logger.info(
+                "Indexing existing files: done %s/%s",
+                backfill_status["done"],
+                total,
+            )
     finally:
         db.close()
         backfill_status["running"] = False
 
 
 def start_hash_backfill() -> None:
+    """Background hash/duplicate fill on server start (Launch / Restart). No UI banner."""
     thread = threading.Thread(target=run_hash_backfill, name="hash-backfill", daemon=True)
     thread.start()

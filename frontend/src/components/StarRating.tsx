@@ -86,11 +86,6 @@ export default function StarRating({ value, onChange, avg, count }: Props) {
           </button>
         ))}
       </div>
-      {value != null && value > 0 && (
-        <div className="star-rating-value">
-          {value % 1 === 0 ? value.toFixed(0) : value.toFixed(1)} / 5
-        </div>
-      )}
       {count !== undefined && count > 0 && (
         <div className="star-rating-avg">
           Avg {avg?.toFixed(2)} ({count} rating{count === 1 ? '' : 's'})

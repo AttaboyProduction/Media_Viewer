@@ -681,7 +681,6 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
           avg={media.rating.avg_rating}
           count={media.rating.rating_count}
         />
-        <p className="settings-hint">Keys 1–5; second key within 2s for .5</p>
         {contentLocked ? (
           <div className="content-hide-meta-placeholder">
             <p className="settings-hint">Tags are hidden until content is shown.</p>

@@ -358,11 +358,11 @@ export default function RecentScrapedMediaPanel() {
           )}
         </div>
       </div>
-      <p className="hint">
-        {showAll
-          ? 'All media in the library, newest scraped first (by local scrape date).'
-          : 'Downloads from this app session (survives multiple scrapes until restart or clear).'}
-      </p>
+      {!showAll && (
+        <p className="hint">
+          Downloads from this app session (survives multiple scrapes until restart or clear).
+        </p>
+      )}
       {emptySession && <div className="empty">Nothing downloaded yet this session.</div>}
       {emptyAll && <div className="empty">No downloaded media in the library yet.</div>}
       {isLoading && hasContent && !data && <div className="empty">Loading...</div>}
