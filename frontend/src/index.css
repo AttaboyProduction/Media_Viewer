@@ -1909,6 +1909,15 @@ tr.selected {
   margin-bottom: 0;
 }
 
+.scrape-never-auto-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  user-select: none;
+}
+
 .scrape-source-panel .scrape-progress {
   margin-top: 0.75rem;
 }

@@ -938,6 +938,15 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                 onRun={() => void start(panel.key)}
                 onStop={stop}
                 onClear={() => void clearQueues(panel)}
+                neverAutoRun={appSettings?.never_auto_run_scrape ?? false}
+                onNeverAutoRunChange={(value) => {
+                  queryClient.setQueryData(['app-settings'], (prev: typeof appSettings) =>
+                    prev ? { ...prev, never_auto_run_scrape: value } : prev,
+                  )
+                  patchAppSettings({ never_auto_run_scrape: value }).then((next) => {
+                    queryClient.setQueryData(['app-settings'], next)
+                  })
+                }}
               />
             )
           })}

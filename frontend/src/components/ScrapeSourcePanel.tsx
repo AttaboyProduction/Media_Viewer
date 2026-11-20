@@ -44,6 +44,8 @@ interface Props {
   onRun: () => void
   onStop: () => void
   onClear: () => void
+  neverAutoRun: boolean
+  onNeverAutoRunChange: (value: boolean) => void
 }
 
 /** Run / Stop / Clear queues and the status + Skipped / Queue lists for one source. */
@@ -58,6 +60,8 @@ export default function ScrapeSourcePanel({
   onRun,
   onStop,
   onClear,
+  neverAutoRun,
+  onNeverAutoRunChange,
 }: Props) {
   const [skippedOpen, setSkippedOpen] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
@@ -121,6 +125,17 @@ export default function ScrapeSourcePanel({
         >
           Clear queues
         </button>
+        <label
+          className="scrape-never-auto-run"
+          title="Extension downloads wait in Queue to scrape until you press Run scrape. Turn this off to start downloading as soon as a link arrives."
+        >
+          <input
+            type="checkbox"
+            checked={neverAutoRun}
+            onChange={(e) => onNeverAutoRunChange(e.target.checked)}
+          />{' '}
+          Never auto-run scrape
+        </label>
       </div>
 
       {hasActivity ? (
