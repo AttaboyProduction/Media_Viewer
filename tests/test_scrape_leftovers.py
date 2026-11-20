@@ -55,6 +55,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
         pipeline.scrape_status.retry_urls = set()
         pipeline.scrape_status.counted_urls = set()
         pipeline.scrape_status.finished_urls = set()
+        pipeline.scrape_status.released_urls = set()
         pipeline.scrape_status.leftover_urls = set()
         pipeline.scrape_status.continue_counts = False
         pipeline.scrape_status.queue_open = False
@@ -139,7 +140,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
         second = "https://gallery.test/post/2"
         pipeline.scrape_status.ran_this_session = True
         pipeline.scrape_status.total = 15
-        # Skips are in total but not finished — processed is downloads only.
+        # Errors stay in total and out of processed. processed is downloads only.
         pipeline.scrape_status.processed = 13
         pipeline.scrape_status.downloaded = 13
         pipeline.scrape_status.skipped = 2
@@ -173,26 +174,31 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertEqual(pipeline.scrape_status.total, 15)
         self.assertEqual(scrape_leftovers.unfinished_items()[0]["url"], second)
 
-    def test_complete_skip_does_not_count_as_finished(self) -> None:
-        """Skipped URLs stay in total but do not bump processed without a download."""
-        url = "https://gallery.test/post/skip-1"
+    def test_intentional_skips_leave_total_and_errors_do_not_finish(self) -> None:
+        downloaded = "https://gallery.test/post/got"
+        filtered = "https://gallery.test/post/skip"
+        failed = "https://gallery.test/post/bad"
         pipeline.scrape_status.total = 3
-        pipeline.scrape_status.processed = 1
-        pipeline.scrape_status.downloaded = 1
-        pipeline.scrape_status.finished_urls = {"https://gallery.test/post/ok"}
-        pipeline.scrape_status.counted_urls = {"https://gallery.test/post/ok"}
-        pipeline._complete_skip(url, "excluded_tag")
+        pipeline._complete_download(downloaded)
+        pipeline._complete_skip(filtered, "already_have")
+        pipeline._complete_skip(failed, "error", "timeout")
         self.assertEqual(pipeline.scrape_status.processed, 1)
         self.assertEqual(pipeline.scrape_status.downloaded, 1)
-        self.assertEqual(pipeline.scrape_status.skipped, 1)
-        self.assertIn(url, pipeline.scrape_status.counted_urls)
-        self.assertNotIn(url, pipeline.scrape_status.finished_urls)
-        # A later successful download of that URL finishes it once.
-        pipeline.scrape_status.retry_urls.add(url)
-        pipeline._complete_download(url)
-        self.assertEqual(pipeline.scrape_status.processed, 2)
-        self.assertEqual(pipeline.scrape_status.downloaded, 2)
-        self.assertIn(url, pipeline.scrape_status.finished_urls)
+        self.assertEqual(pipeline.scrape_status.total, 2)
+        self.assertIn(downloaded, pipeline.scrape_status.finished_urls)
+        self.assertNotIn(filtered, pipeline.scrape_status.finished_urls)
+        self.assertNotIn(failed, pipeline.scrape_status.finished_urls)
+
+        pipeline.scrape_status.total = 2
+        pipeline.scrape_status.processed = 0
+        pipeline.scrape_status.downloaded = 0
+        pipeline.scrape_status.finished_urls = set()
+        pipeline.scrape_status.counted_urls = set()
+        pipeline.scrape_status.released_urls = set()
+        pipeline._complete_download(downloaded)
+        pipeline._complete_skip(filtered, "tag_mismatch")
+        self.assertEqual(pipeline.scrape_status.processed, 1)
+        self.assertEqual(pipeline.scrape_status.total, 1)
 
     def test_queue_urls_increase_the_total(self) -> None:
         done = "https://gallery.test/post/1"

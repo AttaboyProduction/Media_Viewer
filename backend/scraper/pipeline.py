@@ -66,9 +66,11 @@ class ScrapeStatus:
     queue_urls: list[str] = field(default_factory=list)
     # Unfinished URLs this run is retrying. Already-counted ones do not grow total.
     retry_urls: set[str] = field(default_factory=set)
-    # URLs already in this job's total (downloads or skips). Retries do not grow total.
+    # URLs already in this job's total. Retries do not grow total.
     counted_urls: set[str] = field(default_factory=set)
-    # URLs that finished with a real media download (only these bump ``processed``).
+    # Intentional skips already removed from total. A re-queue clears this.
+    released_urls: set[str] = field(default_factory=set)
+    # URLs that finished with a real media download (only these bump processed).
     finished_urls: set[str] = field(default_factory=set)
     # Retries and queue URLs still run after the gallery download limit is met.
     leftover_urls: set[str] = field(default_factory=set)
@@ -94,6 +96,7 @@ def _reset_status(gallery_url: str) -> None:
         scrape_status.errors = []
         scrape_status.skipped_items = []
         scrape_status.counted_urls = set()
+        scrape_status.released_urls = set()
         scrape_status.finished_urls = set()
         scrape_status.retry_urls = set()
     scrape_status.last_gallery_url = gallery_url
@@ -134,6 +137,7 @@ def begin_scrape_queue(
             if url in retries and url in scrape_status.counted_urls:
                 continue
             added += 1
+            _hold_download_slot(url)
         scrape_status.total = max(scrape_status.total, scrape_status.processed) + added
         scrape_status.continue_counts = True
         _sync_open_urls()
@@ -167,6 +171,7 @@ def append_leftover_urls(urls: list[str], retry_urls: set[str]) -> None:
         if url in retry_urls and url in scrape_status.counted_urls:
             continue
         added += 1
+        _hold_download_slot(url)
     scrape_status.pending_urls = front + scrape_status.pending_urls + back
     scrape_status.total += added
     _sync_open_urls()
@@ -198,6 +203,7 @@ def append_scrape_urls(urls: list[str], site_id: str) -> list[str] | None:
             scrape_status.accepted_urls.add(url)
             scrape_status.pending_urls.append(url)
             added.append(url)
+            _hold_download_slot(url)
         scrape_status.total += len(added)
         _sync_open_urls()
         return added
@@ -235,6 +241,7 @@ def enqueue_discovered_urls(urls: list[str], *, site_id: str | None) -> list[str
             scrape_status.accepted_urls.add(url)
             scrape_status.pending_urls.append(url)
             scrape_status.total += 1
+            _hold_download_slot(url)
             added.append(url)
         _sync_open_urls()
         return added
@@ -332,17 +339,34 @@ def _is_retry(url: str) -> bool:
     return bool(url) and url in scrape_status.retry_urls and url in scrape_status.counted_urls
 
 
-def _attempt(url: str) -> None:
-    """Count one successful media download toward ``processed`` (once per URL).
+def _hold_download_slot(url: str) -> None:
+    """This URL is a file to download again, so a later skip may leave total."""
+    if url:
+        scrape_status.released_urls.discard(url)
 
-    Skips may already be in ``counted_urls`` so retries do not grow ``total``;
-    only ``finished_urls`` gates the processed bump.
+
+def _release_download_slot(url: str) -> None:
+    """Drop a URL that is not a file to download (already have, filter, identical).
+
+    Cancelled and error rows stay in total. processed is downloads only, so a
+    run that finishes with nothing outstanding lands on processed == total.
     """
+    if not url or url in scrape_status.finished_urls or url in scrape_status.released_urls:
+        return
+    scrape_status.released_urls.add(url)
+    scrape_status.counted_urls.add(url)
+    if scrape_status.total > scrape_status.processed:
+        scrape_status.total -= 1
+
+
+def _attempt(url: str) -> None:
+    """Count one successful media download toward processed (once per URL)."""
     if url and url in scrape_status.finished_urls:
         return
     if url:
         scrape_status.finished_urls.add(url)
         scrape_status.counted_urls.add(url)
+        scrape_status.released_urls.discard(url)
     if scrape_status.processed + 1 > scrape_status.total:
         scrape_status.total = scrape_status.processed + 1
     scrape_status.processed += 1
@@ -377,8 +401,7 @@ def _persist_outcome(url: str, *, downloaded: bool, reason: str = "", detail: st
 def _complete_download(url: str) -> None:
     if _is_retry(url):
         scrape_status.retry_urls.discard(url)
-    # Always finish on a real download — even when a prior skip already put the
-    # URL in counted_urls (so retries did not grow total).
+    # A prior error or cancel is in total but not processed. A real download finishes it.
     _attempt(url)
     _drop_skipped(url)
     scrape_status.downloaded += 1
@@ -391,11 +414,15 @@ def _complete_skip(url: str, reason: str, detail: str = "") -> None:
     if _is_retry(url) and reason not in RETRY_REASONS:
         _drop_skipped(url)
         scrape_status.retry_urls.discard(url)
+        # Was an error or cancel still in total. It is not a download anymore.
+        _release_download_slot(url)
         _persist_outcome(url, downloaded=False, reason=reason, detail=detail)
         return
-    # In total so a Skipped retry does not grow total — but not finished:
-    # no media file was downloaded, so do not bump ``processed``.
-    if url:
+    if reason not in RETRY_REASONS:
+        # Already-have, filters, identical: not a file to download.
+        _release_download_slot(url)
+    elif url:
+        # Error, cancel, unavailable, interrupted stay in total and out of processed.
         scrape_status.counted_urls.add(url)
     _record_skip(url, reason, detail)
 
@@ -691,6 +718,7 @@ def _claim_remote_download(url: str) -> str:
         scrape_status.accepted_urls.add(url)
         scrape_status.pending_urls.append(url)
         scrape_status.total += 1
+        _hold_download_slot(url)
         _sync_open_urls()
         return "appended"
     if scrape_status.running:
@@ -719,6 +747,7 @@ def _claim_remote_download(url: str) -> str:
             scrape_status.total = max(scrape_status.total, scrape_status.processed)
         else:
             scrape_status.total = max(scrape_status.total, scrape_status.processed) + 1
+            _hold_download_slot(url)
     else:
         scrape_status.accepted_urls = {url}
         scrape_status.total = 1
@@ -729,6 +758,7 @@ def _claim_remote_download(url: str) -> str:
         scrape_status.errors = []
         scrape_status.skipped_items = []
         scrape_status.counted_urls = set()
+        scrape_status.released_urls = set()
         scrape_status.finished_urls = set()
         scrape_status.retry_urls = set()
     _sync_open_urls()
@@ -804,22 +834,8 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
         with PlaywrightClient() as client:
             gallery_seeds = [url for url in job.seed_urls if not extract_post_id(url)]
 
-            # Gallery scrapes show the download limit as the queue, plus any
-            # extension URLs already waiting. URL-filter jobs keep the seed count.
-            if job.limit > 0 and not job.ignore_download_limit:
-                with scrape_lock:
-                    if scrape_status.processed:
-                        new_ones = [
-                            url
-                            for url in scrape_status.pending_urls
-                            if url not in scrape_status.counted_urls
-                        ]
-                        scrape_status.total = max(
-                            scrape_status.total, scrape_status.processed
-                        ) + len(new_ones)
-                    else:
-                        scrape_status.total = job.limit + len(scrape_status.pending_urls)
-
+            # total is files to download (queued, downloaded, cancelled, errors),
+            # not the Settings limit. The limit still stops the run via _quota_met.
             scrape_status.message = "Collecting posts..."
             outcome = _drain_pending(client, db, job, existing_posts)
             stop = outcome == "stop_date"
@@ -862,7 +878,7 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
             scrape_status.errors.append(detail)
             scrape_status.message = "Failed"
             scrape_status.current_url = None
-            # Job-level failure: list as skipped, but do not pad processed.
+            # Job-level failure: list it, but do not count it as a download.
             _record_skip("", "error", detail)
         raise
     finally:
