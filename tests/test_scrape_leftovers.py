@@ -65,6 +65,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
         pipeline.scrape_status.errors = []
         pipeline.scrape_status.message = ""
         pipeline.scrape_status.current_url = None
+        pipeline.scrape_status.recent_media_ids = []
         scrape_panels.reset(pipeline.scrape_status)
 
     def tearDown(self) -> None:
@@ -573,6 +574,44 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertEqual([p.key for p in out.sources], ["site_a", "unsupported"])
         self.assertEqual(len(self._panel(out, "site_a").skipped_items), 1)
         self.assertEqual(self._panel(out, "unsupported").cancelled_urls, ["https://cdn.example/f.jpg"])
+
+    def test_restore_clears_prior_session_progress_and_downloads(self) -> None:
+        """Reload must drop old progress / Downloaded previously; total = leftover queues."""
+        status = pipeline.scrape_status
+        status.total = 40
+        status.processed = 22
+        status.downloaded = 20
+        status.similar = 2
+        status.skipped = 5
+        status.errors = ["boom"]
+        status.message = "Downloading..."
+        status.recent_media_ids = [11, 12, 13]
+        status.finished_urls = {"https://gallery.test/post/old"}
+        status.counted_urls = {"https://gallery.test/post/old"}
+        queued = "https://cdn.example/q.jpg"
+        failed = "https://site-a.test/post/20"
+        cancelled = "https://site-a.test/post/21"
+        scrape_leftovers.add_queue([queued], source="unsupported")
+        scrape_leftovers.remember_unfinished(failed, "error", "boom", "site_a")
+        scrape_leftovers.remember_unfinished(cancelled, "cancelled", "", "site_a")
+        scrape_leftovers.restore_into_status()
+        self.assertEqual(status.recent_media_ids, [])
+        self.assertEqual(status.downloaded, 0)
+        self.assertEqual(status.similar, 0)
+        self.assertEqual(status.errors, [])
+        self.assertEqual(status.message, "")
+        self.assertEqual(status.processed, 0)
+        self.assertEqual(status.finished_urls, set())
+        self.assertEqual(status.counted_urls, set())
+        out = scrape_api._status_out()
+        self.assertEqual(out.recent_media_ids, [])
+        site = self._panel(out, "site_a")
+        raw = self._panel(out, "unsupported")
+        self.assertEqual((site.processed, site.downloaded, site.similar, site.total), (0, 0, 0, 2))
+        self.assertEqual((raw.processed, raw.downloaded, raw.similar, raw.total), (0, 0, 0, 1))
+        self.assertEqual([i.url for i in site.skipped_items], [failed, cancelled])
+        self.assertEqual(site.cancelled_urls, [cancelled])
+        self.assertEqual(raw.queue_urls, [queued])
 
     def test_clear_endpoint_clears_only_the_clicked_panel(self) -> None:
         status = pipeline.scrape_status

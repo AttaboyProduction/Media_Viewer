@@ -421,8 +421,9 @@ def persist_interrupted() -> None:
 def restore_into_status() -> None:
     """Show stored leftovers on the Scrape page after a restart, one panel per source.
 
-    Incomplete rows and Queue to scrape URLs raise ``total`` but leave ``processed``
-    at 0 so nothing looks finished until it actually completes again.
+    Clears prior-session progress and Downloaded previously. Incomplete Queue /
+    Skipped / Cancelled URLs set each panel's ``total`` with ``processed`` at 0
+    so nothing looks finished until it completes again in this process.
     """
     from backend.app.services import scrape_panels
     from backend.scraper.pipeline import scrape_status

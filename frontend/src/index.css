@@ -1944,12 +1944,17 @@ tr.selected {
 .scrape-skipped-list {
   margin: 0.35rem 0 0;
   padding-left: 1.1rem;
-  max-height: 12rem;
-  overflow: auto;
+}
+
+.scrape-skipped-list--scroll {
+  /* Cap at ~15 single-line rows; longer URLs wrap and use more height. */
+  max-height: calc(15 * (1.35em + 0.25rem));
+  overflow-y: auto;
 }
 
 .scrape-skipped-list li {
   margin-bottom: 0.25rem;
+  line-height: 1.35;
   word-break: break-all;
 }
 

@@ -30,6 +30,14 @@ function UrlLine({ url }: { url: string }) {
   )
 }
 
+const QUEUE_LIST_SCROLL_AFTER = 15
+
+function queueListClass(count: number): string {
+  return count > QUEUE_LIST_SCROLL_AFTER
+    ? 'scrape-skipped-list scrape-skipped-list--scroll'
+    : 'scrape-skipped-list'
+}
+
 interface Props {
   panel: ScrapeSourcePanelData
   /** The Source/Site chosen in the shared form: this panel's Run uses it. */
@@ -175,7 +183,7 @@ export default function ScrapeSourcePanel({
             >
               <summary>Cancelled ({cancelledUrls.length})</summary>
               {cancelledOpen && (
-                <ul className="scrape-skipped-list">
+                <ul className={queueListClass(cancelledUrls.length)}>
                   {cancelledUrls.map((url) => (
                     <li key={url}>
                       <UrlLine url={url} />
@@ -196,7 +204,7 @@ export default function ScrapeSourcePanel({
             >
               <summary>Skipped ({skippedItems.length})</summary>
               {skippedOpen && (
-                <ul className="scrape-skipped-list">
+                <ul className={queueListClass(skippedItems.length)}>
                   {skippedItems.map((item) => (
                     <li key={`${item.url}:${item.reason}:${item.detail || ''}`}>
                       <UrlLine url={item.url} />
@@ -227,7 +235,7 @@ export default function ScrapeSourcePanel({
             >
               <summary>Queue to scrape ({queueUrls.length})</summary>
               {queueOpen && (
-                <ul className="scrape-skipped-list">
+                <ul className={queueListClass(queueUrls.length)}>
                   {queueUrls.map((url) => (
                     <li key={url}>
                       <UrlLine url={url} />

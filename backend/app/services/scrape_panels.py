@@ -128,13 +128,31 @@ def clear_panel(status, key: str | None = None) -> None:
 def restore(status, items: list[dict]) -> None:
     """Spread stored unfinished rows over their sources after a restart.
 
-    The first source becomes the live one; the rest are parked. Incomplete rows
-    (skipped / cancelled / interrupted) set ``total`` but leave ``processed`` at 0
-    so they do not look finished.
+    Clears prior-session progress and Downloaded previously so Reload does not
+    keep old downloaded/similar/errors counts. The first source becomes the live
+    one; the rest are parked. Incomplete rows set ``total`` with ``processed``
+    at 0 so they do not look finished.
     """
     from backend.scraper.pipeline import SkippedItem
 
     reset(status)
+    # Drop the previous process's progress line and session download list.
+    status.recent_media_ids = []
+    status.downloaded = 0
+    status.similar = 0
+    status.errors = []
+    status.message = ""
+    status.current_url = None
+    status.last_gallery_url = None
+    status.pending_urls = []
+    status.accepted_urls = set()
+    status.counted_urls = set()
+    status.finished_urls = set()
+    status.released_urls = set()
+    status.retry_urls = set()
+    status.leftover_urls = set()
+    status.continue_counts = False
+    status.queue_open = False
     groups: dict[str, list[dict]] = {}
     for item in items:
         key = item.get("source") or SOURCE_UNSUPPORTED
