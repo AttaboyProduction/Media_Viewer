@@ -39,8 +39,9 @@ def _powershell_kill_script() -> str:
         "Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | "
         "Where-Object { $_.OwningProcess -and $_.OwningProcess -gt 0 } | "
         "ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue };"
+        # Match python.exe / pythonw.exe and versioned python3.13.exe / pythonw3.13.exe.
         "Get-CimInstance Win32_Process | "
-        "Where-Object { $_.Name -match '^python(w)?\\.exe$' -and $_.CommandLine -and "
+        "Where-Object { $_.Name -match '^python(w)?(\\d+\\.\\d+)?\\.exe$' -and $_.CommandLine -and "
         "($_.CommandLine -like \"*$root*launcher.py*\" -or "
         "$_.CommandLine -like \"*$root*uvicorn*backend.app.main*\") } | "
         "ForEach-Object { if ($_.ProcessId -gt 0) { "
@@ -51,9 +52,18 @@ def _powershell_kill_script() -> str:
 def _run_powershell(script: str) -> None:
     if sys.platform == "win32":
         subprocess.run(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+            [
+                "powershell",
+                "-NoProfile",
+                "-WindowStyle",
+                "Hidden",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                script,
+            ],
             cwd=ROOT,
-            creationflags=0x08000000,
+            creationflags=0x08000000,  # CREATE_NO_WINDOW
         )
     else:
         os._exit(0)
@@ -280,25 +290,41 @@ def _restart_launch_env() -> dict[str, str]:
 def restart_app() -> dict:
     def _restart() -> None:
         time.sleep(0.4)
-        run_bat = ROOT / "Run.bat"
-        if run_bat.is_file() and sys.platform == "win32":
-            # In-app Reload keeps the current browser/window and calls location.reload()
-            # after health returns — do not open a second viewer on relaunch.
-            # Run.bat restart also writes the flag + env; set both here so a partial path still skips.
-            flag = ROOT / "data" / ".skip_open_viewer"
-            flag.parent.mkdir(parents=True, exist_ok=True)
-            flag.write_text("1", encoding="utf-8")
-            # CREATE_NO_WINDOW: no console flash on Reload. Run.bat uses PowerShell
-            # Sleep (not timeout); launcher builds the UI via node/npm-cli (not npm.cmd).
-            subprocess.Popen(
-                ["cmd", "/c", str(run_bat), "restart"],
-                cwd=ROOT,
-                creationflags=0x08000000,
-                env=_restart_launch_env(),
-            )
-        else:
-            _run_powershell(_powershell_kill_script())
-            os._exit(0)
+        # In-app Reload keeps the current browser/window and calls location.reload()
+        # after health returns — do not open a second viewer on relaunch.
+        flag = ROOT / "data" / ".skip_open_viewer"
+        flag.parent.mkdir(parents=True, exist_ok=True)
+        flag.write_text("1", encoding="utf-8")
+        env = _restart_launch_env()
+        if sys.platform == "win32":
+            # Spawn pythonw --restart directly (no cmd / Run.bat / PowerShell flash).
+            # launcher.stop_running_app uses CREATE_NO_WINDOW, then starts the tray again.
+            pythonw = ROOT / ".venv" / "Scripts" / "pythonw.exe"
+            python = ROOT / ".venv" / "Scripts" / "python.exe"
+            exe = pythonw if pythonw.is_file() else python if python.is_file() else None
+            launcher = ROOT / "launcher.py"
+            if exe is not None and launcher.is_file():
+                # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+                creationflags = 0x00000008 | 0x00000200 | 0x08000000
+                subprocess.Popen(
+                    [str(exe), str(launcher), "--restart", "--no-open-viewer"],
+                    cwd=ROOT,
+                    env=env,
+                    creationflags=creationflags,
+                    close_fds=True,
+                )
+                return
+            run_bat = ROOT / "Run.bat"
+            if run_bat.is_file():
+                subprocess.Popen(
+                    ["cmd", "/c", str(run_bat), "restart"],
+                    cwd=ROOT,
+                    creationflags=0x08000000,
+                    env=env,
+                )
+                return
+        _run_powershell(_powershell_kill_script())
+        os._exit(0)
 
     threading.Thread(target=_restart, daemon=True).start()
     return {"ok": True}

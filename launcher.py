@@ -456,18 +456,51 @@ def ensure_frontend(*, force: bool = False) -> None:
 
 
 def stop_running_app() -> None:
-    """Stop server/tray for this project (same idea as Run.bat restart), excluding this process."""
+    """Stop server/tray for this project (same idea as Run.bat restart), excluding this process.
+
+    On Windows the venv ``python.exe`` / ``pythonw.exe`` stub often has a
+    ``python3.x.exe`` / ``pythonw3.x.exe`` child that runs the real script. Killing
+    the stub (or the child) while ``--restart`` is running aborts relaunch, so skip
+    this PID, venv redirector parents that also run ``launcher.py``, and children.
+
+    Do **not** climb past that into the old uvicorn/tray parent: in-app Reload spawns
+    ``pythonw --restart`` from the live server, and that parent is what we must kill.
+    """
     my_pid = os.getpid()
     if sys.platform == "win32":
         root_ps = str(ROOT).replace("'", "''")
+        # Skip this PID + launcher.py venv stub parents + descendants only.
         script = (
             f"$root = '{root_ps}';"
-            f"$skip = {my_pid};"
+            f"$seed = {my_pid};"
+            "$skip = New-Object 'System.Collections.Generic.HashSet[int]';"
+            "$pyName = '^python(w)?(\\d+\\.\\d+)?\\.exe$';"
+            "[void]$skip.Add([int]$seed);"
+            "$proc = Get-CimInstance Win32_Process -Filter \"ProcessId=$seed\" -ErrorAction SilentlyContinue;"
+            "while ($proc) {"
+            "  $parentId = [int]$proc.ParentProcessId;"
+            "  if ($parentId -le 0 -or -not $skip.Add($parentId)) { break };"
+            "  $parent = Get-CimInstance Win32_Process -Filter \"ProcessId=$parentId\" -ErrorAction SilentlyContinue;"
+            "  if (-not $parent -or $parent.Name -notmatch $pyName) { [void]$skip.Remove($parentId); break };"
+            "  if (-not $parent.CommandLine -or $parent.CommandLine -notlike \"*$root*launcher.py*\") {"
+            "    [void]$skip.Remove($parentId); break"
+            "  };"
+            "  $proc = $parent"
+            "};"
+            "$queue = New-Object System.Collections.Generic.Queue[int];"
+            "$queue.Enqueue([int]$seed);"
+            "while ($queue.Count -gt 0) {"
+            "  $node = $queue.Dequeue();"
+            "  Get-CimInstance Win32_Process -Filter \"ParentProcessId=$node\" -ErrorAction SilentlyContinue | "
+            "  ForEach-Object { if ($skip.Add([int]$_.ProcessId)) { $queue.Enqueue([int]$_.ProcessId) } }"
+            "};"
             "Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | "
-            "Where-Object { $_.OwningProcess -and $_.OwningProcess -gt 0 -and $_.OwningProcess -ne $skip } | "
+            "Where-Object { $_.OwningProcess -and $_.OwningProcess -gt 0 -and -not $skip.Contains([int]$_.OwningProcess) } | "
             "ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue };"
+            # python.exe, pythonw.exe, python3.13.exe, pythonw3.13.exe
             "Get-CimInstance Win32_Process | "
-            "Where-Object { $_.ProcessId -ne $skip -and $_.Name -match '^python(w)?\\.exe$' "
+            "Where-Object { -not $skip.Contains([int]$_.ProcessId) "
+            "-and $_.Name -match $pyName "
             "-and $_.CommandLine -and "
             "($_.CommandLine -like \"*$root*launcher.py*\" -or "
             "$_.CommandLine -like \"*$root*uvicorn*backend.app.main*\") } | "
@@ -788,6 +821,13 @@ def _format_install_failure(exc: subprocess.CalledProcessError) -> str:
 
 
 if __name__ == "__main__":
+    # Quiet Restart / in-app Reload: stop the old tray/server in this process (no
+    # cmd.exe / multi-PowerShell flash), then fall through into a normal launch.
+    if "--restart" in sys.argv:
+        write_skip_open_viewer_flag()
+        os.environ["SCRAP_SKIP_OPEN_VIEWER"] = "1"
+        sys.argv = [arg for arg in sys.argv if arg != "--restart"]
+        stop_running_app()
     try:
         raise SystemExit(bootstrap_and_run())
     except subprocess.CalledProcessError as exc:

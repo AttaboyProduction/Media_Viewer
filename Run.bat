@@ -12,22 +12,28 @@ goto :start
 
 :restart
 rem Keep the current browser tab or app window; do not open a second viewer.
+rem Prefer pythonw --restart (CREATE_NO_WINDOW kill inside launcher) so Reload /
+rem Restart.bat do not flash random PowerShell consoles.
 if not exist "%~dp0data" mkdir "%~dp0data"
 echo 1 > "%~dp0data\.skip_open_viewer"
 set "SCRAP_SKIP_OPEN_VIEWER=1"
 
-rem -WindowStyle Hidden: Keep Reload quiet when started with CREATE_NO_WINDOW.
+if exist "%~dp0.venv\Scripts\pythonw.exe" (
+  start "" /D "%~dp0" "%~dp0.venv\Scripts\pythonw.exe" "%~dp0launcher.py" --restart --no-open-viewer
+  exit /b 0
+)
+if exist "%~dp0.venv\Scripts\python.exe" (
+  start "" /D "%~dp0" "%~dp0.venv\Scripts\python.exe" "%~dp0launcher.py" --restart --no-open-viewer
+  exit /b 0
+)
+
+rem No venv yet: one Hidden PowerShell kill, then fall through to first-time start.
 powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command ^
   "$root = (Resolve-Path '.').Path;" ^
   "Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -and $_.OwningProcess -gt 0 } | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue };" ^
-  "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^python(w)?\.exe$' -and $_.CommandLine -and ($_.CommandLine -like \"*$root*launcher.py*\" -or $_.CommandLine -like \"*$root*uvicorn*backend.app.main*\") } | ForEach-Object { if ($_.ProcessId -gt 0) { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }"
-
-rem Prefer Sleep over timeout: timeout requires a console and fails under CREATE_NO_WINDOW.
-powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 2"
-
-rem Wait until port 8000 is free so a relaunch does not hit the "already running" path mid-kill.
-powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command ^
-  "for ($i=0; $i -lt 30; $i++) { $c = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if (-not $c) { exit 0 }; Start-Sleep -Milliseconds 200 }; exit 0"
+  "Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^python(w)?\.exe$' -and $_.CommandLine -and ($_.CommandLine -like \"*$root*launcher.py*\" -or $_.CommandLine -like \"*$root*uvicorn*backend.app.main*\") } | ForEach-Object { if ($_.ProcessId -gt 0) { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } };" ^
+  "Start-Sleep -Seconds 2;" ^
+  "for ($i=0; $i -lt 30; $i++) { $c = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; if (-not $c) { exit 0 }; Start-Sleep -Milliseconds 200 }"
 
 goto :start
 

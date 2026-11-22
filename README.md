@@ -57,7 +57,7 @@ Tracked `VERSION` is compared to local `data/installed_version` on every `Run.ba
 
 Bump `VERSION` by hand when recipients should rebuild after an update (do not commit `frontend/dist/`). First successful update path stamps `0.1`.
 
-After local code changes without a version bump, use `Restart.bat`, `Run.bat restart`, or the in-app **Reload** button (same kill + start path). Rebuild the UI first with `cd frontend && npm run build` when you changed frontend source and `VERSION` did not bump. Reload keeps the current tab and only refreshes it after `/api/health` returns a new `boot_id` (so it does not reload against the dying process). Both use `data/.skip_open_viewer` + `--no-open-viewer` so relaunch does not open a second viewer; use the tray **Open viewer** item or a normal `Run.bat` when the app is already up if you want another tab. If an install/build step fails on relaunch, the dialog includes the command and recent output; full detail is appended to `data/launcher.log`.
+After local code changes without a version bump, use `Restart.bat`, `Run.bat restart`, or the in-app **Reload** button (same kill + start via `pythonw launcher.py --restart`, without flashing PowerShell consoles). Rebuild the UI first with `cd frontend && npm run build` when you changed frontend source and `VERSION` did not bump. Reload keeps the current tab and only refreshes it after `/api/health` returns a new `boot_id` (so it does not reload against the dying process). Both use `data/.skip_open_viewer` + `--no-open-viewer` so relaunch does not open a second viewer; use the tray **Open viewer** item or a normal `Run.bat` when the app is already up if you want another tab. If an install/build step fails on relaunch, the dialog includes the command and recent output; full detail is appended to `data/launcher.log`.
 
 Then:
 
@@ -318,7 +318,7 @@ Base URL: `http://127.0.0.1:8000/api`
 | PATCH | `/app/settings` | Update settings (`display_mode`) |
 | GET | `/app/adapters` | Installed vs project adapter packages (Scrape page on) |
 | POST | `/app/adapters/install` | Install adapter (`from_project` id or folder `path`) into `data/adapters/` |
-| POST | `/app/restart` | Restart server (like `Run.bat restart`; skips opening a new viewer so in-app Reload can reuse the current window) |
+| POST | `/app/restart` | Restart via detached `pythonw launcher.py --restart` (same as `Run.bat restart`; no console flash; skips opening a new viewer so in-app Reload can reuse the current window) |
 | POST | `/app/shutdown` | Stop server and launcher |
 | GET | `/app/info` | Paths and display mode |
 

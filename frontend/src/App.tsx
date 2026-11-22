@@ -33,7 +33,7 @@ function TopNav({ hideScrapePage }: { hideScrapePage: boolean }) {
       }
     }
     try {
-      // Same path as Run.bat restart; wait until a *new* server is up, not the dying one.
+      // Same as Run.bat restart (pythonw --restart); wait for a *new* boot_id, not the dying one.
       const before = await readHealth()
       const oldBootId = before.bootId
       await restartApp()
