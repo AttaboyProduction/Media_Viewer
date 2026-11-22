@@ -266,13 +266,13 @@ export default function MediaDetailModal({
         })
         return
       }
-      if (e.key === 'ArrowLeft' && canPrev && !navBusy) {
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        // Always consume so grid page ←/→ does not fire under an open detail view.
         e.preventDefault()
-        void step('prev')
-      }
-      if (e.key === 'ArrowRight' && canNext && !navBusy) {
-        e.preventDefault()
-        void step('next')
+        e.stopPropagation()
+        if (navBusy) return
+        if (e.key === 'ArrowLeft' && canPrev) void step('prev')
+        if (e.key === 'ArrowRight' && canNext) void step('next')
       }
     }
     window.addEventListener('keydown', onKey, true)

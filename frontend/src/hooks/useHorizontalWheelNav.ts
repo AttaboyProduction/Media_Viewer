@@ -1,7 +1,12 @@
 import { useEffect, useRef, type RefObject } from 'react'
 import { takeHorizontalWheelNav } from '../utils/horizontalWheelNav'
+import { shouldSkipKeyboardShortcut } from '../utils/keyboardTarget'
 
-/** Wheel-tilt previous/next on `ref`. Listener is non-passive so the tilt does not scroll. */
+/**
+ * Wheel-tilt and ←/→ previous/next on `ref` (and document for keys).
+ * Wheel listener is non-passive so the tilt does not scroll.
+ * Keys use bubble phase so a capture-phase detail modal can own ←/→ first.
+ */
 export function useHorizontalWheelNav(
   ref: RefObject<HTMLElement | null>,
   onDirection: (direction: 'prev' | 'next') => void,
@@ -20,4 +25,16 @@ export function useHorizontalWheelNav(
     el.addEventListener('wheel', onWheel, { passive: false })
     return () => el.removeEventListener('wheel', onWheel)
   }, [ref, enabled])
+
+  useEffect(() => {
+    if (!enabled) return
+    const onKey = (event: KeyboardEvent) => {
+      if (shouldSkipKeyboardShortcut(event)) return
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      event.preventDefault()
+      onDirectionRef.current(event.key === 'ArrowLeft' ? 'prev' : 'next')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [enabled])
 }

@@ -33,6 +33,7 @@ assert(horizontalWheelDirection(40, 0) === 'next', 'wheel tilt right is next')
 assert(horizontalWheelDirection(-40, 0) === 'prev', 'wheel tilt left is previous')
 assert(horizontalWheelDirection(4, 0) === null, 'tiny horizontal wheel is ignored')
 assert(horizontalWheelDirection(10, 40) === null, 'vertical wheel scroll is not navigation')
+// Arrow keys share the same prev/next page step as wheel tilt (see useHorizontalWheelNav).
 
 assert(
   paginationItemCount(18, 47) === '18 out of 47 items',
