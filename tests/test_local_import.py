@@ -10,7 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.db.models import Base, MediaItem
-from backend.app.services.local_import import link_one_file
+from backend.app.services.local_import import find_missing_linked, link_one_file, path_under_folder
 from backend.app.services.local_media import (
     STORAGE_LINKED,
     STORAGE_MANAGED,
@@ -128,6 +128,36 @@ class LocalImportDbTests(unittest.TestCase):
         self.db.commit()
         self.assertFalse(path.exists())
         self.assertIsNone(self.db.query(MediaItem).filter(MediaItem.id == media_id).first())
+
+    def test_find_missing_linked_under_synced_folders(self) -> None:
+        kept = self._make_jpg("kept.jpg", b"kept-bytes")
+        gone = self._make_jpg("gone.jpg", b"gone-bytes")
+        outside = Path(self.root.parent) / "outside.jpg"
+        outside.write_bytes(b"outside-bytes")
+        nested_dir = self.root / "sub"
+        nested_dir.mkdir()
+        nested = nested_dir / "deep.jpg"
+        nested.write_bytes(b"deep-bytes")
+
+        for path in (kept, gone, outside, nested):
+            media, skip = link_one_file(self.db, path)
+            self.assertIsNone(skip)
+            assert media is not None
+        self.db.commit()
+        gone.unlink()
+        nested.unlink()
+
+        missing = find_missing_linked(self.db, [str(self.root)], recursive=True)
+        self.assertEqual(
+            [item["path"] for item in missing],
+            [str(gone.resolve()), str(nested.resolve())],
+        )
+        flat = find_missing_linked(self.db, [str(self.root)], recursive=False)
+        self.assertEqual([item["path"] for item in flat], [str(gone.resolve())])
+        self.assertTrue(path_under_folder(gone.resolve(), self.root.resolve(), recursive=False))
+        self.assertFalse(
+            path_under_folder(nested.resolve(), self.root.resolve(), recursive=False)
+        )
 
     def test_delete_linked_rejects_managed(self) -> None:
         media = MediaItem(

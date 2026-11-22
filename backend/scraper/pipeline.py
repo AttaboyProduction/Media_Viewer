@@ -77,6 +77,9 @@ class ScrapeStatus:
     finished_urls: set[str] = field(default_factory=set)
     # Retries and queue URLs still run after the gallery download limit is met.
     leftover_urls: set[str] = field(default_factory=set)
+    # Linked local rows whose files vanished under a Sync folders root.
+    # ``[{id, path}, ...]`` until the UI acks or deletes them.
+    missing_linked: list[dict] = field(default_factory=list)
 
 
 scrape_status = ScrapeStatus()

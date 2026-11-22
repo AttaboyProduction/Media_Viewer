@@ -21,6 +21,65 @@ from backend.app.services.local_media import (
 from backend.scraper.pipeline import SkippedItem, scrape_status
 
 
+def _path_key(path: Path) -> str:
+    return str(path).casefold().replace("\\", "/")
+
+
+def path_under_folder(path: Path, folder: Path, *, recursive: bool) -> bool:
+    """True when ``path`` is a media file inside ``folder`` (not the folder itself)."""
+    path_key = _path_key(path)
+    root_key = _path_key(folder).rstrip("/")
+    if not root_key or path_key == root_key:
+        return False
+    prefix = root_key + "/"
+    if not path_key.startswith(prefix):
+        return False
+    rest = path_key[len(prefix) :]
+    if not rest:
+        return False
+    if not recursive and "/" in rest:
+        return False
+    return True
+
+
+def find_missing_linked(
+    db: Session, folder_paths: list[str], *, recursive: bool
+) -> list[dict]:
+    """Linked library rows under these folders whose files are gone from disk."""
+    roots: list[Path] = []
+    for raw in folder_paths:
+        try:
+            root = normalize_absolute_path(raw)
+        except OSError:
+            continue
+        if root.is_dir():
+            roots.append(root)
+    if not roots:
+        return []
+
+    missing: list[dict] = []
+    rows = (
+        db.query(MediaItem.id, MediaItem.local_path)
+        .filter(MediaItem.storage_kind == STORAGE_LINKED)
+        .all()
+    )
+    for media_id, local_path in rows:
+        text = (local_path or "").strip()
+        if not text:
+            continue
+        try:
+            path = normalize_absolute_path(text)
+        except OSError:
+            path = Path(text)
+        if not any(path_under_folder(path, root, recursive=recursive) for root in roots):
+            continue
+        if path.is_file():
+            continue
+        missing.append({"id": int(media_id), "path": str(path)})
+    missing.sort(key=lambda item: item["path"].casefold())
+    return missing
+
+
 def _apply_visual_match(db: Session, media: MediaItem, phash: str | None) -> None:
     match = find_earlier_phash_match(db, phash, exclude_id=media.id)
     if match and match[0].content_hash != media.content_hash:
@@ -80,7 +139,12 @@ def link_one_file(db: Session, path: Path) -> tuple[MediaItem | None, str | None
 
 
 def run_local_import(paths: list[str], *, recursive: bool, job_id: int = 0) -> None:
-    """Background job: scan paths, hash, insert linked rows; updates scrape_status."""
+    """Background job: scan paths, hash, insert linked rows; updates scrape_status.
+
+    After a finished (not cancelled) run, folder roots are checked for linked
+    library rows whose files are gone. Those land on ``missing_linked`` so the
+    UI can ask whether to remove them from the app.
+    """
     if job_id and scrape_status.job_id != job_id:
         return
     scrape_status.running = True
@@ -95,51 +159,69 @@ def run_local_import(paths: list[str], *, recursive: bool, job_id: int = 0) -> N
     scrape_status.message = "Scanning local files..."
     scrape_status.current_url = None
     scrape_status.skipped_items = []
+    scrape_status.missing_linked = []
     scrape_status.ran_this_session = True
 
     try:
         files = iter_media_files(paths, recursive=recursive)
         scrape_status.total = len(files)
-        if not files:
-            scrape_status.message = "No supported media files found"
-            return
-
         db = SessionLocal()
         try:
             cancelled = False
-            for path in files:
-                if job_id and scrape_status.job_id != job_id:
-                    return
-                if scrape_status.cancel:
-                    cancelled = True
-                    break
-                scrape_status.message = f"Importing {path.name}"
-                scrape_status.current_url = str(path)
-                try:
-                    media, skip = link_one_file(db, path)
-                    scrape_status.processed += 1
-                    if skip:
-                        scrape_status.skipped += 1
-                        scrape_status.skipped_items.append(
-                            SkippedItem(url=str(path), reason=skip)
-                        )
-                    else:
-                        assert media is not None
-                        scrape_status.downloaded += 1
-                        scrape_status.recent_media_ids.append(media.id)
-                        if media.duplicate_kind == "similar":
-                            scrape_status.similar += 1
-                    db.commit()
-                except Exception as exc:  # noqa: BLE001
-                    db.rollback()
-                    scrape_status.processed += 1
-                    scrape_status.errors.append(f"{path}: {exc}")
+            if files:
+                for path in files:
+                    if job_id and scrape_status.job_id != job_id:
+                        return
+                    if scrape_status.cancel:
+                        cancelled = True
+                        break
+                    scrape_status.message = f"Importing {path.name}"
+                    scrape_status.current_url = str(path)
+                    try:
+                        media, skip = link_one_file(db, path)
+                        scrape_status.processed += 1
+                        if skip:
+                            scrape_status.skipped += 1
+                            scrape_status.skipped_items.append(
+                                SkippedItem(url=str(path), reason=skip)
+                            )
+                        else:
+                            assert media is not None
+                            scrape_status.downloaded += 1
+                            scrape_status.recent_media_ids.append(media.id)
+                            if media.duplicate_kind == "similar":
+                                scrape_status.similar += 1
+                        db.commit()
+                    except Exception as exc:  # noqa: BLE001
+                        db.rollback()
+                        scrape_status.processed += 1
+                        scrape_status.errors.append(f"{path}: {exc}")
+                if cancelled:
+                    left = scrape_status.total - scrape_status.processed
+                    if left > 0:
+                        scrape_status.skipped += left
+                        scrape_status.processed += left
             if cancelled:
-                left = scrape_status.total - scrape_status.processed
-                if left > 0:
-                    scrape_status.skipped += left
-                    scrape_status.processed += left
-            scrape_status.message = "Cancelled" if cancelled else "Done"
+                scrape_status.message = "Cancelled"
+            else:
+                folder_paths = [p for p in paths if Path(p).is_dir()]
+                if folder_paths:
+                    scrape_status.message = "Checking for missing linked files..."
+                    missing = find_missing_linked(db, folder_paths, recursive=recursive)
+                    scrape_status.missing_linked = missing
+                    if missing:
+                        scrape_status.message = (
+                            f"Done — could not find {len(missing)} linked file"
+                            f"{'' if len(missing) == 1 else 's'} on disk"
+                        )
+                    elif files:
+                        scrape_status.message = "Done"
+                    else:
+                        scrape_status.message = "No supported media files found"
+                elif files:
+                    scrape_status.message = "Done"
+                else:
+                    scrape_status.message = "No supported media files found"
         finally:
             db.close()
     except Exception as exc:  # noqa: BLE001

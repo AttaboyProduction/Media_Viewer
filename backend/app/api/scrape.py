@@ -100,6 +100,11 @@ def _status_out() -> ScrapeStatusOut:
         hash_backfill_done=int(backfill_status["done"]),
         recent_media_ids=list(scrape_status.recent_media_ids),
         ran_this_session=bool(scrape_status.ran_this_session),
+        missing_linked=[
+            {"id": int(item["id"]), "path": str(item["path"])}
+            for item in scrape_status.missing_linked
+            if isinstance(item, dict) and item.get("id") is not None
+        ],
     )
 
 
@@ -388,6 +393,18 @@ def post_import_pick_folder() -> LocalPathsOut:
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Folder dialog failed: {exc}") from exc
     return LocalPathsOut(paths=[folder] if folder else [])
+
+
+@router.post(
+    "/import/ack-missing",
+    response_model=ScrapeStatusOut,
+    dependencies=[Depends(require_scrape_page)],
+)
+def post_ack_missing_linked() -> ScrapeStatusOut:
+    """Clear the Sync folders missing-file prompt after the user answers."""
+    with scrape_lock:
+        scrape_status.missing_linked = []
+    return _status_out()
 
 
 @router.post(

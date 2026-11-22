@@ -246,6 +246,11 @@ class ScrapeSourcePanelOut(BaseModel):
     queue_urls: list[str] = Field(default_factory=list)
 
 
+class MissingLinkedFileOut(BaseModel):
+    id: int
+    path: str
+
+
 class ScrapeStatusOut(BaseModel):
     running: bool
     total: int
@@ -265,6 +270,8 @@ class ScrapeStatusOut(BaseModel):
     hash_backfill_done: int = 0
     recent_media_ids: list[int] = Field(default_factory=list)
     ran_this_session: bool = False
+    # Linked local files that vanished under a Sync folders root (until acked).
+    missing_linked: list[MissingLinkedFileOut] = Field(default_factory=list)
     # Source of the live (running or last) job, and every source with activity.
     source_key: str = ""
     source_label: str = ""

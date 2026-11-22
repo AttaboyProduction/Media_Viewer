@@ -356,6 +356,11 @@ export function runLocalImport(paths: string[], recursive: boolean) {
   })
 }
 
+/** Clear the Sync folders missing-file list after the user answers. */
+export function ackMissingLinkedFiles() {
+  return request<ScrapeStatus>('/scrape/import/ack-missing', { method: 'POST' })
+}
+
 export function fetchDuplicates() {
   return request<DuplicateReview>('/media/duplicates')
 }

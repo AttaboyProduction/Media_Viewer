@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   cancelScrape,
+  ackMissingLinkedFiles,
+  bulkMediaAction,
   clearScrapeQueues,
   retryScrapeSkipped,
   fetchAdapters,
@@ -153,6 +155,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
   const [localRecursive, setLocalRecursive] = useState(true)
   const localHydratedRef = useRef(false)
   const wasRunningRef = useRef(false)
+  const missingPromptKeyRef = useRef<string | null>(null)
 
   const { data: tags } = useQuery({ queryKey: ['tags'], queryFn: fetchTags })
   const { data: appSettings } = useQuery({
@@ -182,6 +185,48 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     }
     wasRunningRef.current = Boolean(status?.running)
   }, [status, onFinished])
+
+  useEffect(() => {
+    if (!status || status.running) return
+    const missing = status.missing_linked ?? []
+    if (missing.length === 0) {
+      missingPromptKeyRef.current = null
+      return
+    }
+    const key = missing.map((item) => item.id).sort((a, b) => a - b).join(',')
+    if (missingPromptKeyRef.current === key) return
+    missingPromptKeyRef.current = key
+
+    const count = missing.length
+    void (async () => {
+      const ok = await confirm({
+        title: `Could not find ${count} file${count === 1 ? '' : 's'}`,
+        message:
+          `Sync could not find ${count} linked media file${count === 1 ? '' : 's'} on disk that ${
+            count === 1 ? 'is' : 'are'
+          } still in the library under these folders.\n\n` +
+          'Delete them from the app? The files are already gone from the folders.',
+        detailLines: missing.map((item) => item.path),
+        confirmLabel: 'Delete from app',
+        cancelLabel: 'Keep in library',
+        danger: true,
+      })
+      try {
+        if (ok) {
+          await bulkMediaAction(
+            missing.map((item) => item.id),
+            'delete',
+          )
+          queryClient.invalidateQueries({ queryKey: ['media'] })
+        }
+        const next = await ackMissingLinkedFiles()
+        queryClient.setQueryData(['scrape-status'], next)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to update missing linked files')
+        missingPromptKeyRef.current = null
+      }
+    })()
+  }, [status, confirm, queryClient])
 
   const selectedSource = session?.selected_source ?? null
   const isLocalSource = selectedSource?.kind === 'local'
@@ -663,7 +708,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
               disabled={!canSyncFolders}
               title={
                 localFolders.length
-                  ? 'Re-scan saved folders and link any new media'
+                  ? 'Re-scan saved folders for new media and check for files removed from disk'
                   : 'Add a folder first'
               }
               onClick={async () => {

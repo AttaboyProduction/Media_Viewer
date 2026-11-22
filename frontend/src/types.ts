@@ -162,6 +162,11 @@ export interface ScrapeSourcePanel {
   queue_urls: string[]
 }
 
+export interface MissingLinkedFile {
+  id: number
+  path: string
+}
+
 export interface ScrapeStatus {
   running: boolean
   total: number
@@ -181,6 +186,8 @@ export interface ScrapeStatus {
   hash_backfill_done: number
   recent_media_ids: number[]
   ran_this_session: boolean
+  /** Linked local rows whose files vanished under a Sync folders root. */
+  missing_linked: MissingLinkedFile[]
   source_key: string
   source_label: string
   sources: ScrapeSourcePanel[]

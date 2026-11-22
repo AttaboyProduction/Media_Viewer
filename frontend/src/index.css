@@ -843,25 +843,67 @@ tr.drop-guide-after td {
   border: 1px solid var(--border);
   border-radius: 12px;
   width: min(100%, 28rem);
+  max-height: min(90vh, 40rem);
   padding: 1.25rem;
   box-shadow: 0 12px 40px var(--bg-overlay);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.confirm-dialog--detail {
+  width: min(100%, 40rem);
 }
 
 .confirm-dialog-title {
   margin: 0 0 0.5rem;
   font-size: 1.05rem;
+  flex: 0 0 auto;
 }
 
 .confirm-dialog-message {
   margin: 0 0 1rem;
   color: var(--text-secondary);
   line-height: 1.45;
+  white-space: pre-wrap;
+  flex: 0 0 auto;
+}
+
+.confirm-dialog-detail {
+  margin: 0 0 1rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-media);
+  /* Grows with the path list; scrolls only when taller than the panel allows. */
+  flex: 1 1 auto;
+  min-height: 3.5rem;
+  max-height: min(50vh, 22rem);
+  overflow: auto;
+}
+
+.confirm-dialog-detail-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.confirm-dialog-detail-list li + li {
+  margin-top: 0.35rem;
+  padding-top: 0.35rem;
+  border-top: 1px solid var(--border);
 }
 
 .confirm-dialog-actions {
   display: flex;
   justify-content: flex-end;
   gap: 0.5rem;
+  flex: 0 0 auto;
 }
 
 .modal {

@@ -12,6 +12,8 @@ import { registerEscapeHandler } from '../utils/escapeStack'
 export interface ConfirmOptions {
   title?: string
   message: string
+  /** Extra lines (paths, etc.) shown in a scrollable block that grows with the text. */
+  detailLines?: string[]
   confirmLabel?: string
   cancelLabel?: string
   danger?: boolean
@@ -62,7 +64,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       {pending && options && (
         <div className="confirm-backdrop" onClick={() => close(false)}>
           <div
-            className="confirm-dialog"
+            className={`confirm-dialog${options.detailLines?.length ? ' confirm-dialog--detail' : ''}`}
             role="alertdialog"
             aria-modal="true"
             aria-labelledby="confirm-dialog-title"
@@ -74,7 +76,20 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
                 {options.title}
               </h3>
             )}
-            <p id="confirm-dialog-message" className="confirm-dialog-message">{options.message}</p>
+            <p id="confirm-dialog-message" className="confirm-dialog-message">
+              {options.message}
+            </p>
+            {options.detailLines && options.detailLines.length > 0 ? (
+              <div className="confirm-dialog-detail" tabIndex={0}>
+                <ul className="confirm-dialog-detail-list">
+                  {options.detailLines.map((line, index) => (
+                    <li key={`${index}:${line}`} title={line}>
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             <div className="confirm-dialog-actions">
               <button type="button" className="btn" onClick={() => close(false)}>
                 {cancelLabel}
