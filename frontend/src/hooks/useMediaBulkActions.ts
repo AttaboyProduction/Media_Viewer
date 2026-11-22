@@ -1,6 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { bulkAddMediaTags, bulkMediaAction, markRelatedMany } from '../api/client'
+import {
+  bulkAddMediaTags,
+  bulkMediaAction,
+  fetchMediaById,
+  markRelatedMany,
+} from '../api/client'
 import { useConfirm } from '../context/ConfirmContext'
 import type { MediaItem } from '../types'
 import {
@@ -21,7 +26,7 @@ export function useMediaBulkActions({
   onFinished,
 }: {
   selectedIds: number[]
-  /** Current page items; selection is cleared when the page changes. */
+  /** Visible page items; remembered so Download/Share still work for off-page selections. */
   items: readonly MediaItem[]
   clearSelectedIds: () => void
   onSettled?: () => void
@@ -31,14 +36,32 @@ export function useMediaBulkActions({
   const { confirm } = useConfirm()
   const [transferBusy, setTransferBusy] = useState(false)
   const [transferMessage, setTransferMessage] = useState<string | null>(null)
+  const [knownById, setKnownById] = useState(() => new Map<number, MediaItem>())
 
-  const selectedItems = useMemo(
-    () =>
-      selectedIds
-        .map((id) => items.find((item) => item.id === id))
-        .filter((item): item is MediaItem => Boolean(item)),
-    [items, selectedIds],
-  )
+  useEffect(() => {
+    const keep = new Set(selectedIds)
+    for (const item of items) keep.add(item.id)
+    setKnownById((prev) => {
+      const next = new Map<number, MediaItem>()
+      let changed = false
+      for (const id of keep) {
+        const item = items.find((row) => row.id === id) ?? prev.get(id)
+        if (!item) continue
+        next.set(id, item)
+        if (prev.get(id) !== item) changed = true
+      }
+      if (!changed && next.size === prev.size) {
+        for (const id of next.keys()) {
+          if (!prev.has(id)) {
+            changed = true
+            break
+          }
+        }
+        if (!changed) return prev
+      }
+      return next
+    })
+  }, [items, selectedIds])
 
   useEffect(() => {
     if (!transferMessage) return
@@ -88,19 +111,36 @@ export function useMediaBulkActions({
     addTagsMutation.isPending ||
     transferBusy
 
-  const transferFiles = () =>
-    selectedItems.map((item) => ({
+  const resolveTransferItems = async () => {
+    const byId = new Map(knownById)
+    for (const item of items) byId.set(item.id, item)
+    const resolved: MediaItem[] = []
+    for (const id of selectedIds) {
+      let item = byId.get(id)
+      if (!item) {
+        item = await fetchMediaById(id)
+        byId.set(id, item)
+      }
+      resolved.push(item)
+    }
+    return resolved
+  }
+
+  const transferFilesFrom = (rows: MediaItem[]) =>
+    rows.map((item) => ({
       url: item.media_url,
       filename: suggestedMediaFilename(item),
       mediaType: item.media_type,
     }))
 
   const handleBulkDownload = async () => {
-    const files = transferFiles()
-    if (files.length === 0 || transferBusy) return
+    if (selectedIds.length === 0 || transferBusy) return
     setTransferBusy(true)
     setTransferMessage(null)
     try {
+      const rows = await resolveTransferItems()
+      const files = transferFilesFrom(rows)
+      if (files.length === 0) return
       await downloadMediaFiles(files)
       setTransferMessage(files.length === 1 ? 'Downloaded' : `Downloaded ${files.length} files`)
     } catch (err) {
@@ -111,14 +151,17 @@ export function useMediaBulkActions({
   }
 
   const handleBulkShare = async () => {
-    const files = transferFiles()
-    if (files.length === 0 || transferBusy) return
+    if (selectedIds.length === 0 || transferBusy) return
     setTransferBusy(true)
     setTransferMessage(null)
     try {
+      const rows = await resolveTransferItems()
+      const files = transferFilesFrom(rows)
+      if (files.length === 0) return
       const result = await shareMediaFiles(files)
       if (result === 'downloaded_fallback') setTransferMessage(shareDownloadFallbackMessage())
-      else if (result === 'shared') setTransferMessage(files.length === 1 ? 'Shared' : `Shared ${files.length} files`)
+      else if (result === 'shared')
+        setTransferMessage(files.length === 1 ? 'Shared' : `Shared ${files.length} files`)
     } catch (err) {
       setTransferMessage(err instanceof Error ? err.message : 'Share failed')
     } finally {

@@ -155,9 +155,10 @@ export default function RelatedMediaPicker({
     exitSelectMode,
   } = useMediaMultiSelect(pageIds)
 
+  // Keep Select across pages; clear when the filtered set changes.
   useEffect(() => {
     clearSelection()
-  }, [page, selectedTags, tagMode, hideExcluded, clearSelection])
+  }, [selectedTags, tagMode, hideExcluded, clearSelection])
 
   const totalPages = data ? paginationTotalPages(data.total, PAGE_SIZE) : 1
   usePageClamp(page, data ? totalPages : page, setPage)

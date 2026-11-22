@@ -72,7 +72,7 @@ function MediaCard({
   const { isLocked, revealForMedia } = useContentHide()
   const locked = isLocked(item)
   const playVideo =
-    item.media_type === 'video' && !locked && !selectMode && (videoAutoplay || hover)
+    item.media_type === 'video' && !locked && (videoAutoplay || hover)
 
   const open = () => {
     if (locked) {
@@ -416,10 +416,10 @@ export default function ViewerPage() {
     clearSelection,
   } = useMediaMultiSelect(pageIds)
 
+  // Keep Select across pages; clear when the filtered set changes.
   useEffect(() => {
     clearSelection()
   }, [
-    page,
     pageSize,
     selectedTags,
     tagMode,

@@ -214,7 +214,7 @@ export default function RecentScrapedMediaPanel() {
   // Selection only ever covers what is on screen, so bulk actions never hit hidden items.
   useEffect(() => {
     clearSelection()
-  }, [page, pageSize, scope, selectedTags, tagMode, clearSelection])
+  }, [pageSize, scope, selectedTags, tagMode, clearSelection])
 
   useEffect(() => {
     if (recentCount === 0) return
