@@ -471,6 +471,7 @@ export default function ViewerPage() {
     selectedIds,
     items: data?.items ?? [],
     clearSelectedIds: () => setSelectedIds([]),
+    setSelectedIds,
   })
 
   const toggleTagFilter = (name: string) => {

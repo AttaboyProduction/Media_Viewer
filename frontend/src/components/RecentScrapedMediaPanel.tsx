@@ -268,6 +268,7 @@ export default function RecentScrapedMediaPanel() {
       selectedIds,
       items,
       clearSelectedIds: () => setSelectedIds([]),
+      setSelectedIds,
       onSettled: () => {
         queryClient.invalidateQueries({ queryKey: ['scrape-recent-media'] })
         queryClient.invalidateQueries({ queryKey: ['scrape-status'] })

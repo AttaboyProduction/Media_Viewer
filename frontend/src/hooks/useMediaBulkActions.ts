@@ -9,10 +9,17 @@ import {
 import { useConfirm } from '../context/ConfirmContext'
 import type { MediaItem } from '../types'
 import {
+  commitShareMediaFiles,
   downloadMediaFiles,
-  shareDownloadFallbackMessage,
-  shareMediaFiles,
+  formatFileSize,
+  prepareShareMediaFiles,
+  shareMediaFileOrDownload,
+  shareMediaFilesMessage,
+  sharePreparedBatch,
   suggestedMediaFilename,
+  WEB_SHARE_MAX_BYTES,
+  webShareNeedsNotice,
+  webShareStepOptions,
 } from '../utils/mediaViewerActions'
 
 type BulkAction = 'discard' | 'delete' | 'mark' | 'add_tags'
@@ -22,6 +29,7 @@ export function useMediaBulkActions({
   selectedIds,
   items,
   clearSelectedIds,
+  setSelectedIds,
   onSettled,
   onFinished,
 }: {
@@ -29,6 +37,8 @@ export function useMediaBulkActions({
   /** Visible page items; remembered so Download/Share still work for off-page selections. */
   items: readonly MediaItem[]
   clearSelectedIds: () => void
+  /** Drop ids that already shared so the next Share click sends the remainder. */
+  setSelectedIds?: (updater: (prev: number[]) => number[]) => void
   onSettled?: () => void
   onFinished?: (action: BulkAction, ids: number[]) => void
 }) {
@@ -158,10 +168,192 @@ export function useMediaBulkActions({
       const rows = await resolveTransferItems()
       const files = transferFilesFrom(rows)
       if (files.length === 0) return
-      const result = await shareMediaFiles(files)
-      if (result === 'downloaded_fallback') setTransferMessage(shareDownloadFallbackMessage())
-      else if (result === 'shared')
-        setTransferMessage(files.length === 1 ? 'Shared' : `Shared ${files.length} files`)
+
+      if (files.length === 1) {
+        const only = files[0]
+        const row = rows[0]
+        if (row && row.file_size != null && row.file_size > WEB_SHARE_MAX_BYTES) {
+          const sizeLabel = formatFileSize(row.file_size) || 'over 50 MB'
+          const ok = await confirm({
+            title: 'File too large to share',
+            message: `Windows cannot share a file larger than about 50 MB through the share sheet (this file is ${sizeLabel}). Download it instead?`,
+            confirmLabel: 'Download',
+            cancelLabel: 'Cancel',
+          })
+          if (!ok) return
+          await downloadMediaFiles(files)
+          setTransferMessage(
+            shareMediaFilesMessage({
+              kind: 'downloaded_fallback',
+              sharedCount: 0,
+              downloadedCount: 1,
+              remainingCount: 0,
+              sharedIndexes: [],
+              downloadedIndexes: [0],
+            }),
+          )
+          if (setSelectedIds) setSelectedIds(() => [])
+          return
+        }
+        const result = await shareMediaFileOrDownload(only.url, only.filename, only.mediaType)
+        if (result === 'cancelled') return
+        if (result === 'shared') {
+          setTransferMessage('Shared')
+          if (setSelectedIds) setSelectedIds(() => [])
+          return
+        }
+        setTransferMessage(
+          shareMediaFilesMessage({
+            kind: 'downloaded_fallback',
+            sharedCount: 0,
+            downloadedCount: 1,
+            remainingCount: 0,
+            sharedIndexes: [],
+            downloadedIndexes: [0],
+          }),
+        )
+        if (setSelectedIds) setSelectedIds(() => [])
+        return
+      }
+
+      const prepared = await prepareShareMediaFiles(files)
+      const oversizedLabels = prepared.tooLarge.map((index) => {
+        const name = files[index]?.filename || `File ${index + 1}`
+        const size = formatFileSize(prepared.built[index]?.size) || 'over 50 MB'
+        return `${name} (${size})`
+      })
+
+      // Multi-step / oversized: keep a Share next dialog until every shareable batch is done.
+      // Each dialog confirm click is a fresh user gesture for navigator.share.
+      if (webShareNeedsNotice(prepared.plan)) {
+        let sharedCount = 0
+        const dropIds = new Set<number>()
+        const totalSteps = Math.max(1, prepared.batches.length)
+
+        if (prepared.batches.length === 0 && prepared.tooLarge.length > 0) {
+          const ok = await confirm(
+            webShareStepOptions({
+              step: 1,
+              totalSteps: 1,
+              nextCount: 0,
+              remainingShareCount: 0,
+              sharedSoFar: 0,
+              tooLargeCount: prepared.tooLarge.length,
+              oversizedLabels,
+            }),
+          )
+          if (!ok) return
+        }
+
+        for (let batchIndex = 0; batchIndex < prepared.batches.length; batchIndex += 1) {
+          const nextCount = prepared.batches[batchIndex]?.length ?? 0
+          const remainingAfter = prepared.batches.slice(batchIndex + 1).flat().length
+          const ok = await confirm(
+            webShareStepOptions({
+              step: batchIndex + 1,
+              totalSteps,
+              nextCount,
+              remainingShareCount: remainingAfter,
+              sharedSoFar: sharedCount,
+              tooLargeCount: prepared.tooLarge.length,
+              oversizedLabels: batchIndex === 0 ? oversizedLabels : [],
+            }),
+          )
+          if (!ok) break
+
+          const result = await sharePreparedBatch(prepared, batchIndex)
+          if (result.status === 'cancelled' || result.status === 'failed') {
+            if (result.status === 'failed') {
+              setTransferMessage('Share failed — open Share again for the remaining files')
+            }
+            break
+          }
+          sharedCount += result.sharedIndexes.length
+          for (const index of result.sharedIndexes) {
+            const id = selectedIds[index]
+            if (typeof id === 'number') dropIds.add(id)
+          }
+          if (setSelectedIds && dropIds.size) {
+            setSelectedIds((prev) => prev.filter((id) => !dropIds.has(id)))
+          }
+        }
+
+        let downloadedCount = 0
+        if (prepared.tooLarge.length) {
+          await downloadMediaFiles(prepared.tooLarge.map((i) => prepared.downloadMeta[i]))
+          downloadedCount = prepared.tooLarge.length
+          for (const index of prepared.tooLarge) {
+            const id = selectedIds[index]
+            if (typeof id === 'number') dropIds.add(id)
+          }
+          if (setSelectedIds && dropIds.size) {
+            setSelectedIds((prev) => prev.filter((id) => !dropIds.has(id)))
+          }
+        }
+
+        const remainingShare = prepared.batches.flat().length - sharedCount
+        if (sharedCount > 0 && remainingShare > 0) {
+          setTransferMessage(
+            shareMediaFilesMessage({
+              kind: 'shared_more',
+              sharedCount,
+              downloadedCount,
+              remainingCount: remainingShare,
+              sharedIndexes: [],
+              downloadedIndexes: prepared.tooLarge,
+            }),
+          )
+        } else if (sharedCount > 0 && downloadedCount > 0) {
+          setTransferMessage(
+            shareMediaFilesMessage({
+              kind: 'shared_partial',
+              sharedCount,
+              downloadedCount,
+              remainingCount: 0,
+              sharedIndexes: [],
+              downloadedIndexes: prepared.tooLarge,
+            }),
+          )
+        } else if (sharedCount > 0) {
+          setTransferMessage(
+            shareMediaFilesMessage({
+              kind: 'shared',
+              sharedCount,
+              downloadedCount: 0,
+              remainingCount: 0,
+              sharedIndexes: [],
+              downloadedIndexes: [],
+            }),
+          )
+        } else if (downloadedCount > 0) {
+          setTransferMessage(
+            shareMediaFilesMessage({
+              kind: 'downloaded_fallback',
+              sharedCount: 0,
+              downloadedCount,
+              remainingCount: 0,
+              sharedIndexes: [],
+              downloadedIndexes: prepared.tooLarge,
+            }),
+          )
+        }
+        return
+      }
+
+      const outcome = await commitShareMediaFiles(prepared)
+      if (setSelectedIds) {
+        const dropIndexes = [...outcome.sharedIndexes, ...outcome.downloadedIndexes]
+        const dropIds = new Set(
+          dropIndexes
+            .map((index) => selectedIds[index])
+            .filter((id): id is number => typeof id === 'number'),
+        )
+        if (dropIds.size) {
+          setSelectedIds((prev) => prev.filter((id) => !dropIds.has(id)))
+        }
+      }
+      const message = shareMediaFilesMessage(outcome)
+      if (message) setTransferMessage(message)
     } catch (err) {
       setTransferMessage(err instanceof Error ? err.message : 'Share failed')
     } finally {

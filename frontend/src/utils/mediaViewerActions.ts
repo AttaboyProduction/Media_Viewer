@@ -112,6 +112,169 @@ export async function copyMediaToClipboard(
 
 export type ShareMediaResult = 'shared' | 'cancelled' | 'unsupported' | 'downloaded_fallback'
 
+/** Chromium Web Share limits (Windows/Chrome share sheet). */
+export const WEB_SHARE_MAX_FILES = 10
+export const WEB_SHARE_MAX_BYTES = 50 * 1024 * 1024
+
+export type ShareMediaFilesOutcome = {
+  kind: 'shared' | 'cancelled' | 'downloaded_fallback' | 'shared_partial' | 'shared_more'
+  sharedCount: number
+  downloadedCount: number
+  /** Shareable files still selected after this click (need another Share click). */
+  remainingCount: number
+  /** Indexes into the input files array that were shared on this click. */
+  sharedIndexes: number[]
+  /** Indexes downloaded this click (too large alone); drop from the selection too. */
+  downloadedIndexes: number[]
+}
+
+/**
+ * Split file sizes into shareable batches under Chromium's file-count and byte caps.
+ * Indexes whose size alone exceeds ``maxBytes`` go in ``tooLarge`` (must download).
+ */
+export function packWebShareBatches(
+  sizes: readonly number[],
+  maxFiles: number = WEB_SHARE_MAX_FILES,
+  maxBytes: number = WEB_SHARE_MAX_BYTES,
+): { batches: number[][]; tooLarge: number[] } {
+  const batches: number[][] = []
+  const tooLarge: number[] = []
+  let current: number[] = []
+  let bytes = 0
+  for (let i = 0; i < sizes.length; i += 1) {
+    const size = Math.max(0, sizes[i] ?? 0)
+    if (size > maxBytes) {
+      if (current.length) {
+        batches.push(current)
+        current = []
+        bytes = 0
+      }
+      tooLarge.push(i)
+      continue
+    }
+    if (
+      current.length > 0 &&
+      (current.length >= maxFiles || bytes + size > maxBytes)
+    ) {
+      batches.push(current)
+      current = []
+      bytes = 0
+    }
+    current.push(i)
+    bytes += size
+  }
+  if (current.length) batches.push(current)
+  return { batches, tooLarge }
+}
+
+export type WebSharePlan = {
+  batchCount: number
+  firstBatchCount: number
+  remainingShareCount: number
+  tooLargeCount: number
+  totalCount: number
+  tooLargeIndexes: number[]
+}
+
+export function webSharePlanFromSizes(sizes: readonly number[]): WebSharePlan {
+  const { batches, tooLarge } = packWebShareBatches(sizes)
+  return {
+    batchCount: batches.length,
+    firstBatchCount: batches[0]?.length ?? 0,
+    remainingShareCount: batches.slice(1).flat().length,
+    tooLargeCount: tooLarge.length,
+    totalCount: sizes.length,
+    tooLargeIndexes: tooLarge,
+  }
+}
+
+export function webShareNeedsNotice(plan: WebSharePlan): boolean {
+  return plan.batchCount > 1 || plan.tooLargeCount > 0
+}
+
+/** Copy for each step of the multi-batch share confirm dialog. */
+export function webShareStepOptions(args: {
+  step: number
+  totalSteps: number
+  nextCount: number
+  remainingShareCount: number
+  sharedSoFar: number
+  tooLargeCount: number
+  oversizedLabels?: string[]
+}): {
+  title: string
+  message: string
+  detailLines?: string[]
+  confirmLabel: string
+  cancelLabel: string
+} {
+  const {
+    step,
+    totalSteps,
+    nextCount,
+    remainingShareCount,
+    sharedSoFar,
+    tooLargeCount,
+    oversizedLabels = [],
+  } = args
+  const detailLines: string[] = []
+  if (totalSteps > 1) {
+    detailLines.push(
+      `Windows can share at most about 50 MB (and ${WEB_SHARE_MAX_FILES} files) at a time.`,
+      `Step ${step} of ${totalSteps}: share ${nextCount} file${nextCount === 1 ? '' : 's'} now` +
+        (remainingShareCount > 0
+          ? `, then ${remainingShareCount} more after that.`
+          : '.'),
+    )
+  }
+  if (tooLargeCount > 0) {
+    detailLines.push(
+      `${tooLargeCount} file${tooLargeCount === 1 ? '' : 's'} larger than 50 MB cannot be shared and will be downloaded when you finish or stop.`,
+    )
+    for (const label of oversizedLabels) {
+      detailLines.push(label.startsWith('•') ? label : `• ${label}`)
+    }
+  }
+  const multi = totalSteps > 1
+  return {
+    title: multi
+      ? sharedSoFar > 0
+        ? 'Continue sharing?'
+        : 'Share in multiple steps?'
+      : 'Some files are too large to share',
+    message: multi
+      ? sharedSoFar > 0
+        ? `Shared ${sharedSoFar} so far. ${remainingShareCount + nextCount} still need the share sheet.`
+        : 'The share sheet can only take part of this selection at once. Use Share next for each batch until everything is done.'
+      : 'Files larger than 50 MB cannot be shared through Windows share.',
+    detailLines: detailLines.length ? detailLines : undefined,
+    confirmLabel: multi ? (sharedSoFar > 0 ? 'Share next' : 'Share next') : 'Download oversized',
+    cancelLabel: sharedSoFar > 0 ? 'Stop' : 'Cancel',
+  }
+}
+
+/** @deprecated Prefer webShareStepOptions for the multi-step dialog. */
+export function webShareNoticeOptions(
+  plan: WebSharePlan,
+  oversizedLabels: string[] = [],
+): {
+  title: string
+  message: string
+  detailLines?: string[]
+  confirmLabel: string
+  cancelLabel: string
+} {
+  return webShareStepOptions({
+    step: 1,
+    totalSteps: Math.max(1, plan.batchCount),
+    nextCount: plan.firstBatchCount || plan.tooLargeCount,
+    remainingShareCount: plan.remainingShareCount,
+    sharedSoFar: 0,
+    tooLargeCount: plan.tooLargeCount,
+    oversizedLabels,
+  })
+}
+
 type ShareFileCache = { key: string; file: File }
 let shareFileCache: ShareFileCache | null = null
 
@@ -227,43 +390,204 @@ export async function shareMediaFile(
   }
 }
 
-/**
- * Share via the OS sheet when possible; otherwise download so phone users can
- * share from Files / Downloads / Photos (common when the page is not a secure context).
- */
-/** Share every file in one OS sheet, or download them when sharing is unavailable. */
-export async function shareMediaFiles(
+export type PreparedShareMediaFiles = {
+  files: { url: string; filename: string; mediaType: string }[]
+  built: File[]
+  downloadMeta: { url: string; filename: string }[]
+  batches: number[][]
+  tooLarge: number[]
+  plan: WebSharePlan
+}
+
+const emptyShareOutcome = (): ShareMediaFilesOutcome => ({
+  kind: 'cancelled',
+  sharedCount: 0,
+  downloadedCount: 0,
+  remainingCount: 0,
+  sharedIndexes: [],
+  downloadedIndexes: [],
+})
+
+/** Fetch share File objects and plan batches (call before the confirm dialog). */
+export async function prepareShareMediaFiles(
   files: { url: string; filename: string; mediaType: string }[],
-): Promise<ShareMediaResult> {
-  if (files.length === 0) return 'cancelled'
-  if (files.length === 1) {
-    const file = files[0]
-    return shareMediaFileOrDownload(file.url, file.filename, file.mediaType)
-  }
-  if (typeof navigator.share !== 'function') {
-    await downloadMediaFiles(files)
-    return 'downloaded_fallback'
-  }
+): Promise<PreparedShareMediaFiles> {
   const used = new Set<string>()
   const built: File[] = []
+  const downloadMeta: { url: string; filename: string }[] = []
   for (const file of files) {
-    built.push(
-      await buildShareFile(file.url, uniqueFilename(file.filename, used), file.mediaType),
-    )
+    const name = uniqueFilename(file.filename, used)
+    built.push(await buildShareFile(file.url, name, file.mediaType))
+    downloadMeta.push({ url: file.url, filename: name })
   }
-  const payload: ShareData = { files: built }
+  const { batches, tooLarge } = packWebShareBatches(built.map((file) => file.size))
+  return {
+    files,
+    built,
+    downloadMeta,
+    batches,
+    tooLarge,
+    plan: webSharePlanFromSizes(built.map((file) => file.size)),
+  }
+}
+
+/**
+ * Open the OS share sheet for one prepared batch.
+ * Call this from a fresh button click (confirm dialog) so the user gesture stays valid.
+ */
+export async function sharePreparedBatch(
+  prepared: PreparedShareMediaFiles,
+  batchIndex: number,
+): Promise<{ status: 'shared' | 'cancelled' | 'failed'; sharedIndexes: number[] }> {
+  const indexes = prepared.batches[batchIndex]
+  if (!indexes?.length) return { status: 'failed', sharedIndexes: [] }
+  if (typeof navigator.share !== 'function') return { status: 'failed', sharedIndexes: [] }
+
+  const batchFiles = indexes.map((i) => prepared.built[i])
+  const payload: ShareData = { files: batchFiles }
   if (typeof navigator.canShare === 'function' && !navigator.canShare(payload)) {
-    await downloadMediaFiles(files)
-    return 'downloaded_fallback'
+    return { status: 'failed', sharedIndexes: [] }
   }
   try {
     await navigator.share(payload)
-    return 'shared'
+    return { status: 'shared', sharedIndexes: indexes }
   } catch (err) {
-    if (isShareAbort(err)) return 'cancelled'
-    await downloadMediaFiles(files)
-    return 'downloaded_fallback'
+    if (isShareAbort(err)) return { status: 'cancelled', sharedIndexes: [] }
+    return { status: 'failed', sharedIndexes: [] }
   }
+}
+
+/** Share the first batch only (legacy one-shot path). */
+export async function commitShareMediaFiles(
+  prepared: PreparedShareMediaFiles,
+): Promise<ShareMediaFilesOutcome> {
+  const { files, downloadMeta, batches, tooLarge } = prepared
+  if (typeof navigator.share !== 'function') {
+    await downloadMediaFiles(files)
+    return {
+      kind: 'downloaded_fallback',
+      sharedCount: 0,
+      downloadedCount: files.length,
+      remainingCount: 0,
+      sharedIndexes: [],
+      downloadedIndexes: files.map((_, i) => i),
+    }
+  }
+
+  if (!batches.length) {
+    if (tooLarge.length) {
+      await downloadMediaFiles(tooLarge.map((i) => downloadMeta[i]))
+    }
+    return {
+      kind: 'downloaded_fallback',
+      sharedCount: 0,
+      downloadedCount: tooLarge.length || files.length,
+      remainingCount: 0,
+      sharedIndexes: [],
+      downloadedIndexes: tooLarge,
+    }
+  }
+
+  const result = await sharePreparedBatch(prepared, 0)
+  if (result.status === 'cancelled') return emptyShareOutcome()
+  if (result.status === 'failed') {
+    await downloadMediaFiles(downloadMeta)
+    return {
+      kind: 'downloaded_fallback',
+      sharedCount: 0,
+      downloadedCount: files.length,
+      remainingCount: 0,
+      sharedIndexes: [],
+      downloadedIndexes: files.map((_, i) => i),
+    }
+  }
+
+  if (tooLarge.length) {
+    await downloadMediaFiles(tooLarge.map((i) => downloadMeta[i]))
+  }
+
+  const sharedCount = result.sharedIndexes.length
+  const downloadedCount = tooLarge.length
+  const remainingCount = batches.slice(1).flat().length
+  if (remainingCount > 0) {
+    return {
+      kind: 'shared_more',
+      sharedCount,
+      downloadedCount,
+      remainingCount,
+      sharedIndexes: result.sharedIndexes,
+      downloadedIndexes: tooLarge,
+    }
+  }
+  if (downloadedCount > 0) {
+    return {
+      kind: 'shared_partial',
+      sharedCount,
+      downloadedCount,
+      remainingCount: 0,
+      sharedIndexes: result.sharedIndexes,
+      downloadedIndexes: tooLarge,
+    }
+  }
+  return {
+    kind: 'shared',
+    sharedCount,
+    downloadedCount: 0,
+    remainingCount: 0,
+    sharedIndexes: result.sharedIndexes,
+    downloadedIndexes: [],
+  }
+}
+
+/** Prepare + commit in one step (no confirm dialog). */
+export async function shareMediaFiles(
+  files: { url: string; filename: string; mediaType: string }[],
+): Promise<ShareMediaFilesOutcome> {
+  if (files.length === 0) return emptyShareOutcome()
+  if (files.length === 1) {
+    const file = files[0]
+    const result = await shareMediaFileOrDownload(file.url, file.filename, file.mediaType)
+    if (result === 'shared') {
+      return {
+        kind: 'shared',
+        sharedCount: 1,
+        downloadedCount: 0,
+        remainingCount: 0,
+        sharedIndexes: [0],
+        downloadedIndexes: [],
+      }
+    }
+    if (result === 'cancelled') return emptyShareOutcome()
+    return {
+      kind: 'downloaded_fallback',
+      sharedCount: 0,
+      downloadedCount: 1,
+      remainingCount: 0,
+      sharedIndexes: [],
+      downloadedIndexes: [0],
+    }
+  }
+  const prepared = await prepareShareMediaFiles(files)
+  return commitShareMediaFiles(prepared)
+}
+
+/** Status line after a multi-file share attempt. */
+export function shareMediaFilesMessage(outcome: ShareMediaFilesOutcome): string | null {
+  if (outcome.kind === 'cancelled') return null
+  if (outcome.kind === 'shared') {
+    return outcome.sharedCount === 1 ? 'Shared' : `Shared ${outcome.sharedCount} files`
+  }
+  if (outcome.kind === 'shared_more') {
+    const extra =
+      outcome.downloadedCount > 0
+        ? ` (${outcome.downloadedCount} too large were downloaded)`
+        : ''
+    return `Shared ${outcome.sharedCount}; ${outcome.remainingCount} left to share${extra}`
+  }
+  if (outcome.kind === 'shared_partial') {
+    return `Shared ${outcome.sharedCount}; downloaded ${outcome.downloadedCount} (too large for share)`
+  }
+  return shareDownloadFallbackMessage()
 }
 
 export async function shareMediaFileOrDownload(

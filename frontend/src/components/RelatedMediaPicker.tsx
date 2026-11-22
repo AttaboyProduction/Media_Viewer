@@ -252,6 +252,7 @@ export default function RelatedMediaPicker({
     selectedIds,
     items,
     clearSelectedIds: () => setSelectedIds([]),
+    setSelectedIds,
   })
   const markBusy = addMutation.isPending || markMutation.isPending || transferBusy
 

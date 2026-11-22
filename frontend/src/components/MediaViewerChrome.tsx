@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useConfirm } from '../context/ConfirmContext'
 import type { MediaItem } from '../types'
 import { registerEscapeHandler } from '../utils/escapeStack'
 import {
@@ -12,6 +13,7 @@ import {
   shareDownloadFallbackMessage,
   shareMediaFileOrDownload,
   suggestedMediaFilename,
+  WEB_SHARE_MAX_BYTES,
 } from '../utils/mediaViewerActions'
 
 type Props = {
@@ -23,6 +25,7 @@ type Props = {
 }
 
 export default function MediaViewerChrome({ media, index, total, onRotate }: Props) {
+  const { confirm } = useConfirm()
   const [menuOpen, setMenuOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
@@ -162,6 +165,19 @@ export default function MediaViewerChrome({ media, index, total, onRotate }: Pro
                 disabled={busy}
                 onClick={() =>
                   void run(async () => {
+                    if (media.file_size != null && media.file_size > WEB_SHARE_MAX_BYTES) {
+                      const sizeLabel = formatFileSize(media.file_size) || 'over 50 MB'
+                      const ok = await confirm({
+                        title: 'File too large to share',
+                        message: `Windows cannot share a file larger than about 50 MB through the share sheet (this file is ${sizeLabel}). Download it instead?`,
+                        confirmLabel: 'Download',
+                        cancelLabel: 'Cancel',
+                      })
+                      if (!ok) return
+                      await downloadMediaFile(media.media_url, filename)
+                      showStatus(shareDownloadFallbackMessage(), 4000)
+                      return
+                    }
                     const result = await shareMediaFileOrDownload(
                       media.media_url,
                       filename,
