@@ -20,6 +20,7 @@ import { useMediaMultiSelect } from '../hooks/useMediaMultiSelect'
 import { excludeTagsForMediaQuery } from '../utils/contentHide'
 import { paginationTotalPages } from '../utils/pagination'
 import ContentHideMedia from './ContentHideMedia'
+import MediaCardThumb from './MediaCardThumb'
 import MediaDetailModal from './MediaDetailModal'
 import MediaCollectionView from './list/MediaCollectionView'
 import { useContentHide } from '../hooks/useContentHide'
@@ -64,26 +65,13 @@ function RecentCard({
             onClick={(e) => e.preventDefault()}
           >
             <ContentHideMedia item={item} revealOnClick={false}>
-              {item.media_type === 'video' ? (
-                <video src={item.media_url} muted preload="metadata" draggable={false} />
-              ) : (
-                <img
-                  src={item.thumbnail_url}
-                  alt={item.source_post_id}
-                  loading="lazy"
-                  draggable={false}
-                />
-              )}
+              <MediaCardThumb item={item} size="compact" alt={item.source_post_id} />
             </ContentHideMedia>
           </button>
         ) : (
           <button type="button" className="recent-scrape-thumb" onClick={openOrReveal}>
             <ContentHideMedia item={item}>
-              {item.media_type === 'video' ? (
-                <video src={item.media_url} muted preload="metadata" />
-              ) : (
-                <img src={item.thumbnail_url} alt={item.source_post_id} loading="lazy" />
-              )}
+              <MediaCardThumb item={item} size="compact" alt={item.source_post_id} />
             </ContentHideMedia>
           </button>
         )}

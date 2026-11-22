@@ -3,8 +3,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 import { keepDuplicates, mergeDuplicates, resolveDuplicate } from '../api/client'
 import type { DuplicateGroup, MediaItem } from '../types'
-import { useContentHide } from '../hooks/useContentHide'
 import ContentHideMedia from './ContentHideMedia'
+import MediaCardThumb from './MediaCardThumb'
 
 function formatSize(bytes: number | null) {
   if (bytes == null || bytes <= 0) return ''
@@ -14,16 +14,10 @@ function formatSize(bytes: number | null) {
 }
 
 function Preview({ item, selected }: { item: MediaItem; selected: boolean }) {
-  const { isLocked } = useContentHide()
-  const locked = isLocked(item)
   return (
     <div className={`duplicate-preview${selected ? ' selected' : ''}`}>
       <ContentHideMedia item={item}>
-        {item.media_type === 'video' ? (
-          <video src={item.media_url} muted controls={!locked} preload="metadata" />
-        ) : (
-          <img src={item.thumbnail_url} alt={item.source_post_id} />
-        )}
+        <MediaCardThumb item={item} size="large" alt={item.source_post_id} />
       </ContentHideMedia>
       <div className="media-card-meta">
         #{item.source_post_id} · {item.media_type}

@@ -11,6 +11,7 @@ import { parseCommaSeparatedTags } from '../utils/tagList'
 import { DEFAULT_APP_SETTINGS } from '../types/appSettings'
 import { paginationTotalPages } from '../utils/pagination'
 import ContentHideMedia from './ContentHideMedia'
+import MediaCardThumb from './MediaCardThumb'
 import MediaBulkBar from './list/MediaBulkBar'
 import MediaCollectionView from './list/MediaCollectionView'
 
@@ -46,11 +47,7 @@ function RelatedCard({
         </label>
       )}
       <ContentHideMedia item={item} revealOnClick={!selectMode}>
-        {item.media_type === 'video' ? (
-          <video src={item.media_url} muted preload="metadata" />
-        ) : (
-          <img src={item.thumbnail_url} alt="" loading="lazy" />
-        )}
+        <MediaCardThumb item={item} size="compact" />
       </ContentHideMedia>
       <div className="media-card-meta">
         {item.id} · #{item.source_post_id} · {item.media_type}

@@ -286,6 +286,28 @@ def get_media(media_id: int, db: Session = Depends(get_db)) -> MediaSummary:
     return build_media_summary(db, media)
 
 
+@router.get("/{media_id}/preview")
+def get_media_preview(
+    media_id: int,
+    size: str = Query("normal"),
+    db: Session = Depends(get_db),
+):
+    """Square JPEG sized for the card grid. Built once and reused from data/previews/."""
+    from backend.app.services.preview_cache import ensure_preview
+
+    media = db.query(MediaItem).filter(MediaItem.id == media_id).first()
+    if not media:
+        raise HTTPException(status_code=404, detail="Media not found")
+    path = absolute_path_for_media(media)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Media file missing on disk")
+    try:
+        preview = ensure_preview(media.id, path, media.media_type or "image", size)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(preview, media_type="image/jpeg")
+
+
 @router.get("/{media_id}/file")
 def get_media_file(media_id: int, db: Session = Depends(get_db)):
     """Serve media bytes by id (required for linked local files outside media/)."""

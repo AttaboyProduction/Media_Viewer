@@ -23,7 +23,9 @@ import { excludeTagsForMediaQuery } from '../utils/contentHide'
 import { parseCommaSeparatedTags } from '../utils/tagList'
 import { paginationTotalPages } from '../utils/pagination'
 import { columnCountForViewerGrid } from '../utils/viewerGrid'
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { previewSizeForTile, type PreviewSize } from '../utils/mediaPreview'
+import MediaCardThumb from '../components/MediaCardThumb'
+import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 
 function pageFromSearch(params: URLSearchParams): number {
   const raw = Number(params.get('page') || '1')
@@ -47,6 +49,7 @@ function MediaCard({
   item,
   onOpen,
   videoAutoplay,
+  previewSize,
   openOnDoubleClick,
   selectMode = false,
   selected = false,
@@ -55,14 +58,17 @@ function MediaCard({
   item: MediaItem
   onOpen: () => void
   videoAutoplay: boolean
+  previewSize: PreviewSize
   openOnDoubleClick: boolean
   selectMode?: boolean
   selected?: boolean
   onSelectPointerDown?: (e: ReactMouseEvent, id: number) => void
 }) {
-  const videoRef = useRef<HTMLVideoElement | null>(null)
+  const [hover, setHover] = useState(false)
   const { isLocked, revealForMedia } = useContentHide()
   const locked = isLocked(item)
+  const playVideo =
+    item.media_type === 'video' && !locked && !selectMode && (videoAutoplay || hover)
 
   const open = () => {
     if (locked) {
@@ -72,23 +78,6 @@ function MediaCard({
     onOpen()
   }
 
-  const playPreview = () => {
-    if (locked || videoAutoplay || selectMode) return
-    const video = videoRef.current
-    if (!video) return
-    void video.play().catch(() => {
-      /* autoplay policies / aborted play */
-    })
-  }
-
-  const stopPreview = () => {
-    if (videoAutoplay || selectMode) return
-    const video = videoRef.current
-    if (!video) return
-    video.pause()
-    video.currentTime = 0
-  }
-
   return (
     <div
       className={`media-card${selected ? ' media-card-selected' : ''}${selectMode ? ' media-card-selecting' : ''}`}
@@ -96,8 +85,8 @@ function MediaCard({
       onClick={selectMode || openOnDoubleClick ? undefined : open}
       onDoubleClick={selectMode || !openOnDoubleClick ? undefined : open}
       onMouseDown={selectMode ? (e) => onSelectPointerDown?.(e, item.id) : undefined}
-      onMouseEnter={item.media_type === 'video' ? playPreview : undefined}
-      onMouseLeave={item.media_type === 'video' ? stopPreview : undefined}
+      onMouseEnter={item.media_type === 'video' ? () => setHover(true) : undefined}
+      onMouseLeave={item.media_type === 'video' ? () => setHover(false) : undefined}
     >
       {selectMode && (
         <label className="recent-scrape-select">
@@ -112,19 +101,12 @@ function MediaCard({
         </label>
       )}
       <ContentHideMedia item={item} revealOnClick={!selectMode}>
-        {item.media_type === 'video' ? (
-          <video
-            ref={videoRef}
-            src={item.media_url}
-            muted
-            loop
-            playsInline
-            autoPlay={videoAutoplay && !selectMode && !locked}
-            preload={videoAutoplay && !selectMode && !locked ? 'auto' : 'metadata'}
-          />
-        ) : (
-          <img src={item.thumbnail_url} alt={item.source_post_id} loading="lazy" />
-        )}
+        <MediaCardThumb
+          item={item}
+          size={previewSize}
+          playVideo={playVideo}
+          alt={item.source_post_id}
+        />
       </ContentHideMedia>
       <div className="media-card-meta">
         {item.rating.my_rating ? <StarsDisplay score={item.rating.my_rating} size="sm" /> : 'Unrated'}
@@ -410,6 +392,11 @@ export default function ViewerPage() {
           availableHeight: gridAvailHeight,
         })
       : null
+  const tilePx =
+    gridColumns && gridWidth > 0
+      ? (gridWidth - gridGap * (gridColumns - 1)) / gridColumns
+      : TILE_MIN[prefs.grid_thumbnail_size]
+  const previewSize = previewSizeForTile(tilePx)
 
   return (
     <div className="page viewer-page-fill">
@@ -560,6 +547,7 @@ export default function ViewerPage() {
                   item={item}
                   onOpen={() => setSelectedId(item.id)}
                   videoAutoplay={prefs.grid_video_autoplay}
+                  previewSize={previewSize}
                   openOnDoubleClick={prefs.media_open_on_double_click}
                   selectMode={selectMode}
                   selected={selectedIds.includes(item.id)}
@@ -641,6 +629,7 @@ export default function ViewerPage() {
               item={item}
               onOpen={() => setSelectedId(item.id)}
               videoAutoplay={prefs.grid_video_autoplay}
+              previewSize={previewSize}
               openOnDoubleClick={prefs.media_open_on_double_click}
               selectMode={selectMode}
               selected={selectedIds.includes(item.id)}
