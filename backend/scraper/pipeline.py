@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import threading
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -68,9 +69,11 @@ class ScrapeStatus:
     retry_urls: set[str] = field(default_factory=set)
     # URLs already in this job's total. Retries do not grow total.
     counted_urls: set[str] = field(default_factory=set)
-    # Intentional skips already removed from total. A re-queue clears this.
+    # Intentional skips already settled. A re-queue clears this.
     released_urls: set[str] = field(default_factory=set)
-    # URLs that finished with a real media download (only these bump processed).
+    # URLs already included in processed. A retried skip or error leaves this set.
+    processed_urls: set[str] = field(default_factory=set)
+    # URLs that finished with a real media download.
     finished_urls: set[str] = field(default_factory=set)
     # Retries and queue URLs still run after the gallery download limit is met.
     leftover_urls: set[str] = field(default_factory=set)
@@ -78,7 +81,13 @@ class ScrapeStatus:
 
 scrape_status = ScrapeStatus()
 # Shared with the scrape API so a new job and an extension append can't overlap.
-scrape_lock = threading.Lock()
+# RLock: status updates nest (skip → record) and Stop already holds this lock.
+scrape_lock = threading.RLock()
+# URLs popped into a download worker. Stop and crash recovery treat them as still open.
+_inflight_urls: set[str] = set()
+_posts_lock = threading.Lock()
+# Workers set this False so the browser fallback stays on the thread that owns Playwright.
+_browser_ok = threading.local()
 
 
 def _reset_status(gallery_url: str) -> None:
@@ -97,6 +106,7 @@ def _reset_status(gallery_url: str) -> None:
         scrape_status.skipped_items = []
         scrape_status.counted_urls = set()
         scrape_status.released_urls = set()
+        scrape_status.processed_urls = set()
         scrape_status.finished_urls = set()
         scrape_status.retry_urls = set()
     scrape_status.last_gallery_url = gallery_url
@@ -126,8 +136,19 @@ def begin_scrape_queue(
     scrape_status.site_id = site_id
     scrape_status.queue_open = True
     if continue_counts and scrape_status.ran_this_session:
+        # After a reload, total is only the leftover queue (processed is 0).
+        # Those URLs are added again below, so drop that placeholder first.
+        # A run that already downloaded keeps its total and grows from there.
+        if (
+            scrape_status.processed == 0
+            and not scrape_status.finished_urls
+            and not scrape_status.counted_urls
+        ):
+            scrape_status.total = 0
         added = 0
         for url in post_seeds:
+            if url in retries:
+                _reopen_skipped_or_error(url)
             # accepted_urls remembers this session, including files that failed
             # or were cancelled. Only a URL still waiting in this queue is a duplicate.
             if url in scrape_status.pending_urls:
@@ -160,6 +181,8 @@ def append_leftover_urls(urls: list[str], retry_urls: set[str]) -> None:
     back: list[str] = []
     added = 0
     for url in urls:
+        if url in retry_urls:
+            _reopen_skipped_or_error(url)
         if not url or url in scrape_status.pending_urls or url in front or url in back:
             continue
         scrape_status.accepted_urls.add(url)
@@ -247,10 +270,47 @@ def enqueue_discovered_urls(urls: list[str], *, site_id: str | None) -> list[str
         return added
 
 
+def _download_concurrency() -> int:
+    """How many media files download at once. Settings → Other → Scrape, clamped to 1–6."""
+    from backend.app.services.app_settings import get_scrape_concurrency
+
+    return get_scrape_concurrency()
+
+
+def _browser_allowed() -> bool:
+    return getattr(_browser_ok, "ok", True)
+
+
+def _note_inflight(url: str, active: bool) -> None:
+    if not url:
+        return
+    with scrape_lock:
+        if active:
+            _inflight_urls.add(url)
+        else:
+            _inflight_urls.discard(url)
+
+
+def _listing_saturated(job: ScrapeJob) -> bool:
+    """Gallery paging stops once queued + in-flight + downloaded cover the limit.
+
+    Files already queued still download. The limit is what stops the listing
+    from enqueueing the rest of the gallery.
+    """
+    if job.ignore_download_limit or job.limit <= 0:
+        return False
+    with scrape_lock:
+        outstanding = (
+            scrape_status.downloaded + len(_inflight_urls) + len(scrape_status.pending_urls)
+        )
+        return outstanding >= job.limit
+
+
 def _pop_pending() -> str | None:
     with scrape_lock:
         if scrape_status.pending_urls:
             url = scrape_status.pending_urls.pop(0)
+            _inflight_urls.add(url)
             _sync_open_urls(extra=[url])
             return url
         return None
@@ -272,20 +332,17 @@ def _cancelled() -> bool:
 
 
 def _record_cancelled(url: str) -> None:
-    """Mark one queued URL as cancelled for this job and for the session list.
-
-    Cancelled work stays incomplete: do not bump ``processed`` or ``counted_urls``.
-    """
+    """Mark one queued URL as cancelled. It counts toward processed once."""
+    _count_settled(url)
     _record_skip(url, "cancelled")
     if url not in scrape_status.cancelled_urls:
         scrape_status.cancelled_urls.append(url)
     if url:
-        scrape_status.counted_urls.discard(url)
         scrape_status.finished_urls.discard(url)
 
 
 def _skip_cancelled_remainder() -> None:
-    """Move every file still queued onto Cancelled / Skipped without marking them done."""
+    """Move every file still queued onto Cancelled. Each one counts as settled."""
     with scrape_lock:
         left = list(scrape_status.pending_urls)
         scrape_status.pending_urls = []
@@ -298,17 +355,21 @@ def abandon_running_job() -> None:
 
     The worker thread may still be blocked on the network. Bumping ``job_id``
     detaches it so a late response cannot write into this job or the next one.
-    Files still queued, including the one in flight, go to Cancelled and stay
-    incomplete (``processed`` is not padded up to ``total``).
+    Files still queued, including the one in flight, go to Cancelled and count
+    as settled. Files that were never queued stay out of ``processed``.
     """
     with scrape_lock:
         scrape_status.cancel = True
         if scrape_status.running:
             scrape_status.job_id += 1
             left = list(scrape_status.pending_urls)
+            for url in _inflight_urls:
+                if url not in left:
+                    left.append(url)
             if scrape_status.current_url and scrape_status.current_url not in left:
                 left.insert(0, scrape_status.current_url)
             scrape_status.pending_urls = []
+            _inflight_urls.clear()
             scrape_status.current_url = None
             for url in left:
                 _record_cancelled(url)
@@ -328,7 +389,10 @@ def _sync_open_urls(extra: list[str] | None = None) -> None:
     from backend.app.services.scrape_leftovers import sync_open
 
     urls = list(scrape_status.pending_urls)
-    if scrape_status.current_url:
+    for url in _inflight_urls:
+        if url not in urls:
+            urls.append(url)
+    if scrape_status.current_url and scrape_status.current_url not in urls:
         urls.append(scrape_status.current_url)
     urls.extend(extra or [])
     scrape_status.queue_urls = sync_open(urls)
@@ -340,36 +404,61 @@ def _is_retry(url: str) -> bool:
 
 
 def _hold_download_slot(url: str) -> None:
-    """This URL is a file to download again, so a later skip may leave total."""
+    """This URL is queued to download, so a later settle can count it again."""
     if url:
         scrape_status.released_urls.discard(url)
 
 
 def _release_download_slot(url: str) -> None:
-    """Drop a URL that is not a file to download (already have, filter, identical).
+    """Mark an intentional skip (already have, filter, identical).
 
-    Cancelled and error rows stay in total. processed is downloads only, so a
-    run that finishes with nothing outstanding lands on processed == total.
+    It stays in ``total``. ``processed`` counts it once via ``_count_settled``.
     """
     if not url or url in scrape_status.finished_urls or url in scrape_status.released_urls:
         return
     scrape_status.released_urls.add(url)
     scrape_status.counted_urls.add(url)
-    if scrape_status.total > scrape_status.processed:
-        scrape_status.total -= 1
+
+
+def _count_settled(url: str) -> None:
+    """Count one settled file toward processed, once per URL.
+
+    Downloads, skips, errors, and cancels all count. A URL already settled
+    (an earlier error, then a download) is not counted again.
+    """
+    if not url or url in scrape_status.processed_urls:
+        return
+    scrape_status.processed_urls.add(url)
+    scrape_status.counted_urls.add(url)
+    if scrape_status.processed + 1 > scrape_status.total:
+        scrape_status.total = scrape_status.processed + 1
+    scrape_status.processed += 1
+
+
+def _reopen_skipped_or_error(url: str) -> None:
+    """A new run is retrying this skip or error. Take it back out of processed."""
+    if not url or url not in scrape_status.processed_urls or url in scrape_status.finished_urls:
+        return
+    row = next((item for item in scrape_status.skipped_items if item.url == url), None)
+    prefix = f"{url}:"
+    in_errors = any(item == url or item.startswith(prefix) for item in scrape_status.errors)
+    if row is not None and row.reason == "cancelled" and not in_errors:
+        return
+    if row is None and not in_errors:
+        return
+    scrape_status.processed_urls.discard(url)
+    scrape_status.processed = max(0, scrape_status.processed - 1)
 
 
 def _attempt(url: str) -> None:
-    """Count one successful media download toward processed (once per URL)."""
+    """Record a real download. processed includes it once, even after an error."""
     if url and url in scrape_status.finished_urls:
         return
     if url:
         scrape_status.finished_urls.add(url)
         scrape_status.counted_urls.add(url)
         scrape_status.released_urls.discard(url)
-    if scrape_status.processed + 1 > scrape_status.total:
-        scrape_status.total = scrape_status.processed + 1
-    scrape_status.processed += 1
+    _count_settled(url)
 
 
 def _drop_skipped(url: str) -> None:
@@ -381,6 +470,16 @@ def _drop_skipped(url: str) -> None:
     if removed:
         scrape_status.skipped = max(0, scrape_status.skipped - removed)
     scrape_status.cancelled_urls = [item for item in scrape_status.cancelled_urls if item != url]
+
+
+def _drop_errors(url: str) -> None:
+    """Drop this file's lines from the live error list."""
+    if not url:
+        return
+    prefix = f"{url}:"
+    scrape_status.errors = [
+        item for item in scrape_status.errors if item != url and not item.startswith(prefix)
+    ]
 
 
 def _persist_outcome(url: str, *, downloaded: bool, reason: str = "", detail: str = "") -> None:
@@ -399,35 +498,52 @@ def _persist_outcome(url: str, *, downloaded: bool, reason: str = "", detail: st
 
 
 def _complete_download(url: str) -> None:
+    with scrape_lock:
+        _complete_download_locked(url)
+
+
+def _complete_download_locked(url: str) -> None:
     if _is_retry(url):
         scrape_status.retry_urls.discard(url)
-    # A prior error or cancel is in total but not processed. A real download finishes it.
     _attempt(url)
     _drop_skipped(url)
+    _drop_errors(url)
     scrape_status.downloaded += 1
     _persist_outcome(url, downloaded=True)
 
 
 def _complete_skip(url: str, reason: str, detail: str = "") -> None:
+    with scrape_lock:
+        _complete_skip_locked(url, reason, detail)
+
+
+def _complete_skip_locked(url: str, reason: str, detail: str = "") -> None:
     from backend.app.services.scrape_leftovers import RETRY_REASONS
 
     if _is_retry(url) and reason not in RETRY_REASONS:
         _drop_skipped(url)
+        _drop_errors(url)
         scrape_status.retry_urls.discard(url)
-        # Was an error or cancel still in total. It is not a download anymore.
+        # The old error is gone. This outcome stays in total and counts once.
+        _count_settled(url)
         _release_download_slot(url)
         _persist_outcome(url, downloaded=False, reason=reason, detail=detail)
         return
     if reason not in RETRY_REASONS:
-        # Already-have, filters, identical: not a file to download.
+        # Already-have, filters, identical stay in total.
         _release_download_slot(url)
     elif url:
-        # Error, cancel, unavailable, interrupted stay in total and out of processed.
         scrape_status.counted_urls.add(url)
+    _count_settled(url)
     _record_skip(url, reason, detail)
 
 
 def _record_skip(url: str, reason: str, detail: str = "") -> None:
+    with scrape_lock:
+        _record_skip_locked(url, reason, detail)
+
+
+def _record_skip_locked(url: str, reason: str, detail: str = "") -> None:
     if url:
         for row in scrape_status.skipped_items:
             if row.url == url:
@@ -481,14 +597,6 @@ def _quota_met(job: ScrapeJob) -> bool:
     return job.limit > 0 and scrape_status.downloaded >= job.limit
 
 
-def _quota_blocks_pending(job: ScrapeJob) -> bool:
-    """Gallery quota does not drop a retry or a Queue to scrape URL still waiting."""
-    if not _quota_met(job):
-        return False
-    nxt = scrape_status.pending_urls[0] if scrape_status.pending_urls else None
-    return not (nxt and nxt in scrape_status.leftover_urls)
-
-
 def _maybe_upgrade_video(db, post_url: str, post_id: str) -> bool:
     """Replace a saved smaller encode when the original file is available.
 
@@ -529,19 +637,24 @@ def _process_post_url(
 ) -> str:
     """Process one post URL.
 
-    Returns ``ok``, ``stop_date``, or ``stop_cancel``.
+    Returns ``ok``, ``stop_date``, ``stop_cancel``, or ``needs_browser``.
+
+    ``needs_browser`` means the JSON API missed and this thread must not open
+    Playwright. The caller retries on the thread that owns the browser.
     """
     owner = scrape_status.job_id
     if _cancelled() or scrape_status.job_id != owner:
         return "stop_cancel"
 
     post_id = extract_post_id(post_url)
-    if post_id and post_id in existing_posts:
+    with _posts_lock:
+        already = bool(post_id and post_id in existing_posts)
+        posted_at = existing_posts.get(post_id) if already else None
+    if already:
         if job.ignore_download_limit and _maybe_upgrade_video(db, post_url, post_id):
             _complete_download(post_url)
             return "ok"
         _complete_skip(post_url, "already_have")
-        posted_at = existing_posts[post_id]
         if should_stop_for_date(posted_at, job):  # type: ignore[arg-type]
             scrape_status.message = "Reached date range boundary"
             scrape_status.current_url = None
@@ -561,6 +674,8 @@ def _process_post_url(
                 post = scrape_post_from_api(post_url)
             except Exception as exc:  # noqa: BLE001 — fall back to page scrape
                 api_error = exc
+        if post is None and not _browser_allowed():
+            return "needs_browser"
         if post is None:
             page = client.new_page()
             try:
@@ -608,7 +723,8 @@ def _process_post_url(
                 scrape_status.recent_media_ids.append(result.media.id)
                 if result.media.duplicate_of_id:
                     scrape_status.similar += 1
-                existing_posts[post.post_id] = post.posted_at
+                with _posts_lock:
+                    existing_posts[post.post_id] = post.posted_at
         return "ok"
     except Exception as exc:  # noqa: BLE001 — collect per-post errors
         db.rollback()
@@ -627,67 +743,162 @@ def _process_post_url(
 
 
 def _drain_pending(client: PlaywrightClient, db, job: ScrapeJob, existing_posts: dict) -> str:
-    """Scrape URLs waiting on the job, including ones added while this runs."""
-    while True:
-        if _cancelled() or _quota_blocks_pending(job):
-            return "stop_cancel" if _cancelled() else "ok"
-        url = _pop_pending()
-        if url is None:
-            return "ok"
-        owner = scrape_status.job_id
-        outcome = _process_post_url(client, db, job, url, existing_posts)
-        if outcome == "stop_cancel":
-            # Popped, but not processed. Put it back so the cancel count includes it.
-            # A Stop that already detached this job must not push the URL onto the next one.
+    """Download every URL already queued. Kept for callers that do not share lanes."""
+    del db
+    lanes = _DownloadLanes(client, job, existing_posts)
+    try:
+        return lanes.drain()
+    finally:
+        lanes.close()
+
+
+class _DownloadLanes:
+    """Download queued posts ``scrape_concurrency`` at a time.
+
+    The browser fallback runs on the calling thread. File downloads and the
+    JSON API run on the pool, each with its own database session.
+    """
+
+    def __init__(self, client, job: ScrapeJob, existing_posts: dict) -> None:
+        self.client = client
+        self.job = job
+        self.existing_posts = existing_posts
+        self.n = _download_concurrency()
+        self.listing_stop = False
+        self._job_id = scrape_status.job_id
+        self._executor = (
+            ThreadPoolExecutor(max_workers=self.n, thread_name_prefix="media-download")
+            if self.n > 1
+            else None
+        )
+        self._futures: dict = {}
+
+    def close(self) -> None:
+        if self._executor is not None:
+            self._executor.shutdown(wait=True, cancel_futures=False)
+            self._executor = None
+
+    def fill(self) -> None:
+        """Start downloads until the pool is full or the queue is empty."""
+        self._reap(block=False)
+        while len(self._futures) < self.n and not _cancelled():
+            url = _pop_pending()
+            if url is None:
+                break
+            if self._executor is None:
+                self._handle(url, self._call(url, browser=True))
+            else:
+                self._futures[self._executor.submit(self._worker, url)] = url
+
+    def drain(self) -> str:
+        """Download until the queue and the pool are both empty."""
+        while True:
+            self.fill()
+            if not self._futures:
+                if _cancelled():
+                    return "stop_cancel"
+                return "stop_date" if self.listing_stop else "ok"
+            self._reap(block=True)
+
+    def _worker(self, url: str) -> str:
+        _browser_ok.ok = False
+        db = SessionLocal()
+        try:
+            return _process_post_url(self.client, db, self.job, url, self.existing_posts)
+        finally:
+            db.close()
+
+    def _call(self, url: str, *, browser: bool) -> str:
+        _browser_ok.ok = browser
+        db = SessionLocal()
+        try:
+            return _process_post_url(self.client, db, self.job, url, self.existing_posts)
+        finally:
+            db.close()
+
+    def _reap(self, block: bool) -> None:
+        if not self._futures:
+            return
+        if block:
+            done, _ = wait(set(self._futures), return_when=FIRST_COMPLETED)
+        else:
+            done = [fut for fut in list(self._futures) if fut.done()]
+        for fut in done:
+            url = self._futures.pop(fut)
+            try:
+                outcome = fut.result()
+            except Exception as exc:  # noqa: BLE001 — one worker must not drop the rest
+                detail = str(exc)
+                scrape_status.errors.append(f"{url}: {detail}")
+                _complete_skip(url, "error", detail)
+                outcome = "ok"
+            self._handle(url, outcome)
+
+    def _handle(self, url: str, outcome: str) -> None:
+        try:
+            if outcome == "needs_browser":
+                outcome = self._call(url, browser=True)
+            if outcome == "stop_cancel":
+                # Popped, but not finished. Put it back so Stop can count it.
+                # A Stop that already detached this job must not push onto the next one.
+                with scrape_lock:
+                    if scrape_status.job_id == self._job_id and url not in scrape_status.pending_urls:
+                        scrape_status.pending_urls.insert(0, url)
+            elif outcome == "stop_date":
+                self.listing_stop = True
+        finally:
+            _note_inflight(url, False)
+
+
+def _finish_queue(
+    my_id: int,
+    client: PlaywrightClient,
+    db,
+    job: ScrapeJob,
+    existing_posts: dict,
+    lanes: _DownloadLanes | None = None,
+) -> None:
+    """Download whatever is left, then close the queue so a new job can start."""
+    del db
+    own = lanes is None
+    if lanes is None:
+        lanes = _DownloadLanes(client, job, existing_posts)
+    try:
+        if scrape_status.job_id != my_id:
+            return
+        if not _cancelled():
+            lanes.drain()
+        if scrape_status.job_id != my_id:
+            return
+        if _cancelled():
+            _skip_cancelled_remainder()
             with scrape_lock:
-                if scrape_status.job_id == owner:
-                    scrape_status.pending_urls.insert(0, url)
-            return outcome
-        if outcome != "ok":
-            return outcome
-
-
-def _finish_queue(my_id: int, client: PlaywrightClient, db, job: ScrapeJob, existing_posts: dict) -> None:
-    """Scrape whatever is left, then close the queue so a new job can start."""
-    while not _cancelled():
+                if scrape_status.job_id == my_id:
+                    scrape_status.message = "Cancelled"
+                    scrape_status.current_url = None
+                    scrape_status.running = False
+                    scrape_status.queue_open = False
+                    scrape_status.kind = ""
+            return
         with scrape_lock:
             if scrape_status.job_id != my_id:
                 return
-            if scrape_status.pending_urls:
-                url = scrape_status.pending_urls.pop(0)
-            else:
-                if _cancelled():
-                    scrape_status.message = "Cancelled"
-                elif not scrape_status.message.startswith("Reached"):
-                    if (
-                        job.limit > 0
-                        and not job.ignore_download_limit
-                        and scrape_status.downloaded < job.limit
-                    ):
-                        scrape_status.message = "Done — no more posts"
-                    else:
-                        scrape_status.message = "Done"
-                scrape_status.current_url = None
-                scrape_status.running = False
-                scrape_status.queue_open = False
-                scrape_status.kind = ""
-                return
-        outcome = _process_post_url(client, db, job, url, existing_posts)
-        if outcome == "stop_cancel":
-            with scrape_lock:
-                if scrape_status.job_id == my_id:
-                    scrape_status.pending_urls.insert(0, url)
-            break
-    if scrape_status.job_id != my_id or not _cancelled():
-        return
-    _skip_cancelled_remainder()
-    with scrape_lock:
-        if scrape_status.job_id == my_id:
-            scrape_status.message = "Cancelled"
+            if not scrape_status.message.startswith("Reached"):
+                if (
+                    job.limit > 0
+                    and not job.ignore_download_limit
+                    and scrape_status.downloaded < job.limit
+                ):
+                    scrape_status.message = "Done — no more posts"
+                else:
+                    scrape_status.message = "Done"
             scrape_status.current_url = None
             scrape_status.running = False
             scrape_status.queue_open = False
             scrape_status.kind = ""
+    finally:
+        if own:
+            lanes.close()
 
 
 def begin_remote_download(url: str) -> str:
@@ -744,6 +955,7 @@ def _claim_remote_download(url: str) -> str:
         if already_counted:
             # This session already counted the file. Retrying it must not grow total.
             scrape_status.retry_urls.add(url)
+            _reopen_skipped_or_error(url)
             scrape_status.total = max(scrape_status.total, scrape_status.processed)
         else:
             scrape_status.total = max(scrape_status.total, scrape_status.processed) + 1
@@ -759,6 +971,7 @@ def _claim_remote_download(url: str) -> str:
         scrape_status.skipped_items = []
         scrape_status.counted_urls = set()
         scrape_status.released_urls = set()
+        scrape_status.processed_urls = set()
         scrape_status.finished_urls = set()
         scrape_status.retry_urls = set()
     _sync_open_urls()
@@ -778,29 +991,64 @@ def _finish_remote_download(url: str, result) -> None:
 
 
 def _run_remote_downloads(job_id: int) -> None:
-    """Save queued picture URLs with no tags. Stop counts the rest as skipped."""
-    try:
-        while not _cancelled() and scrape_status.job_id == job_id:
-            url = _pop_pending()
-            if url is None:
-                break
-            if _cancelled():
-                with scrape_lock:
-                    if scrape_status.job_id == job_id:
-                        scrape_status.pending_urls.insert(0, url)
-                break
-            scrape_status.message = "Downloading file"
-            scrape_status.current_url = url
-            try:
-                from backend.app.services.scrape_leftovers import page_url_for
+    """Save queued picture URLs with no tags, several at once. Stop counts the rest as skipped."""
+    n = _download_concurrency()
+    executor = (
+        ThreadPoolExecutor(max_workers=n, thread_name_prefix="file-download") if n > 1 else None
+    )
+    futures: dict = {}
 
-                result = save_remote_file(url, page_url_for(url))
-            except Exception as exc:  # noqa: BLE001 — one bad file should not drop the rest
-                detail = str(exc)
+    def one(url: str) -> str:
+        if _cancelled() or scrape_status.job_id != job_id:
+            return "stop"
+        scrape_status.message = "Downloading file"
+        scrape_status.current_url = url
+        try:
+            from backend.app.services.scrape_leftovers import page_url_for
+
+            result = save_remote_file(url, page_url_for(url))
+        except Exception as exc:  # noqa: BLE001 — one bad file should not drop the rest
+            detail = str(exc)
+            with scrape_lock:
                 scrape_status.errors.append(f"{url}: {detail}")
-                _complete_skip(url, "error", detail)
-                continue
-            _finish_remote_download(url, result)
+            _complete_skip(url, "error", detail)
+            return "ok"
+        if scrape_status.job_id != job_id:
+            return "stop"
+        _finish_remote_download(url, result)
+        return "ok"
+
+    try:
+        while scrape_status.job_id == job_id:
+            while len(futures) < n and not _cancelled() and scrape_status.job_id == job_id:
+                url = _pop_pending()
+                if url is None:
+                    break
+                if executor is None:
+                    if one(url) == "stop":
+                        with scrape_lock:
+                            if scrape_status.job_id == job_id and url not in scrape_status.pending_urls:
+                                scrape_status.pending_urls.insert(0, url)
+                    _note_inflight(url, False)
+                else:
+                    futures[executor.submit(one, url)] = url
+            if not futures:
+                break
+            done, _ = wait(set(futures), return_when=FIRST_COMPLETED)
+            for fut in done:
+                url = futures.pop(fut)
+                try:
+                    outcome = fut.result()
+                except Exception as exc:  # noqa: BLE001
+                    detail = str(exc)
+                    scrape_status.errors.append(f"{url}: {detail}")
+                    _complete_skip(url, "error", detail)
+                    outcome = "ok"
+                if outcome == "stop":
+                    with scrape_lock:
+                        if scrape_status.job_id == job_id and url not in scrape_status.pending_urls:
+                            scrape_status.pending_urls.insert(0, url)
+                _note_inflight(url, False)
         if scrape_status.job_id == job_id and _cancelled():
             _skip_cancelled_remainder()
             with scrape_lock:
@@ -811,6 +1059,8 @@ def _run_remote_downloads(job_id: int) -> None:
             scrape_status.message = "Done"
             scrape_status.current_url = None
     finally:
+        if executor is not None:
+            executor.shutdown(wait=True, cancel_futures=False)
         _release_queue(job_id)
 
 
@@ -834,44 +1084,56 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
         with PlaywrightClient() as client:
             gallery_seeds = [url for url in job.seed_urls if not extract_post_id(url)]
 
-            # total is files to download (queued, downloaded, cancelled, errors),
-            # not the Settings limit. The limit still stops the run via _quota_met.
+            # total is files in this run (queued, downloaded, skipped, cancelled,
+            # errors). processed counts each of those once it settles. The
+            # Settings limit still stops the listing and counts downloads only.
             scrape_status.message = "Collecting posts..."
-            outcome = _drain_pending(client, db, job, existing_posts)
-            stop = outcome == "stop_date"
+            lanes = _DownloadLanes(client, job, existing_posts)
+            try:
+                outcome = lanes.drain()
+                stop = outcome == "stop_date"
 
-            if not stop and outcome != "stop_cancel":
-                for gallery_url in gallery_seeds:
-                    if _cancelled() or _quota_met(job):
-                        break
-                    scrape_status.message = f"Collecting posts from {gallery_url}"
-                    scrape_status.last_gallery_url = gallery_url
-                    scrape_status.current_url = gallery_url
-                    page = client.new_page()
-                    try:
-                        for post_url in iter_post_urls(
-                            page,
-                            gallery_url,
-                            # 0 = keep paging until quota / cancel / exhaustion
-                            limit=0,
-                            sort=job.sort,
-                            should_stop=lambda: _cancelled() or _quota_met(job),
-                        ):
-                            if _cancelled() or _quota_met(job):
-                                break
-                            enqueue_discovered_urls([post_url], site_id=scrape_status.site_id)
-                            queued = _drain_pending(client, db, job, existing_posts)
-                            if queued == "stop_date":
-                                stop = True
-                                break
-                            if queued == "stop_cancel":
-                                break
-                    finally:
-                        page.close()
-                    if stop or _cancelled() or _quota_met(job):
-                        break
+                if not stop and outcome != "stop_cancel":
+                    for gallery_url in gallery_seeds:
+                        if _cancelled() or _quota_met(job) or lanes.listing_stop:
+                            break
+                        scrape_status.message = f"Collecting posts from {gallery_url}"
+                        scrape_status.last_gallery_url = gallery_url
+                        scrape_status.current_url = gallery_url
+                        page = client.new_page()
+                        try:
+                            for post_url in iter_post_urls(
+                                page,
+                                gallery_url,
+                                # 0 = keep paging until quota / cancel / exhaustion
+                                limit=0,
+                                sort=job.sort,
+                                should_stop=lambda: (
+                                    _cancelled() or _quota_met(job) or _listing_saturated(job)
+                                ),
+                            ):
+                                if (
+                                    _cancelled()
+                                    or _quota_met(job)
+                                    or lanes.listing_stop
+                                    or _listing_saturated(job)
+                                ):
+                                    break
+                                enqueue_discovered_urls(
+                                    [post_url], site_id=scrape_status.site_id
+                                )
+                                lanes.fill()
+                                if lanes.listing_stop or _cancelled():
+                                    stop = lanes.listing_stop
+                                    break
+                        finally:
+                            page.close()
+                        if stop or _cancelled() or _quota_met(job):
+                            break
 
-            _finish_queue(my_id, client, db, job, existing_posts)
+                _finish_queue(my_id, client, db, job, existing_posts, lanes)
+            finally:
+                lanes.close()
     except Exception as exc:  # noqa: BLE001
         if scrape_status.job_id == my_id:
             detail = str(exc)

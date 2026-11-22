@@ -28,10 +28,16 @@ const bitmapCache = new Map();
 let pendingHotkeyOrigins = [];
 
 async function api(path, options = {}) {
+  const timeoutMs = options.timeoutMs || 8000;
+  const rest = { ...options };
+  delete rest.timeoutMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(API + path, {
-      ...options,
-      headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+      ...rest,
+      signal: controller.signal,
+      headers: { "Content-Type": "application/json", ...(rest.headers || {}) },
     });
     let data = null;
     try {
@@ -43,9 +49,12 @@ async function api(path, options = {}) {
       scheduleIdlePoll();
     }
     return { ok: response.ok, status: response.status, data };
-  } catch {
-    setOnline(false);
+  } catch (err) {
+    // A slow app should not look offline, and the popup must not wait forever.
+    if (!err || err.name !== "AbortError") setOnline(false);
     return { ok: false, status: 0, data: null };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -1120,7 +1129,9 @@ async function getStatus(pageUrl) {
   const health = await api("/health");
   if (health.ok) {
     await pullConfig();
-    await flushOfflineQueue();
+    // Don't block the popup on flushing a stored queue. That request can sit
+    // until a scrape accepts the URLs, which left the popup on "Checking app…".
+    flushOfflineQueue().catch(() => {});
   } else {
     await loadConfig();
   }

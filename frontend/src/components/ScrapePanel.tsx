@@ -460,11 +460,14 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
   }
 
   const visiblePanels = panels.filter((panel) => {
-    if (panel.key === formSourceKey) return true
-    if (panel.running) return true
-    if (panel.total > 0 && panel.processed < panel.total) return true
-    if (panel.queue_urls.length > 0) return true
-    return false
+    // Unsupported stays up while it still has work. Other sources show only when selected.
+    if (panel.key === 'unsupported') {
+      if (panel.running) return true
+      if (panel.total > 0 && panel.processed < panel.total) return true
+      if (panel.queue_urls.length > 0) return true
+      return false
+    }
+    return panel.key === formSourceKey
   })
 
   return (

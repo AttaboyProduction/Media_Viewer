@@ -487,6 +487,17 @@ export default function AppSettingsPage() {
                       Skip identical downloads
                     </label>
                   </SettingsOption>
+                  <SettingsOption
+                    label="Downloads at once"
+                    hint="How many media files download at the same time. 1 waits for each file to finish. Default 2, maximum 6. Applies to the next scrape."
+                  >
+                    <SettingsNumberInput
+                      value={settings.scrape_concurrency}
+                      min={1}
+                      max={6}
+                      onCommit={(n) => save({ scrape_concurrency: n })}
+                    />
+                  </SettingsOption>
                   <SettingsOption label="Default limit">
                     <SettingsNumberInput
                       value={settings.scrape_default_limit}

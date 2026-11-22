@@ -48,6 +48,7 @@ class AppSettingsOut(BaseModel):
     scrape_downloads_page_size: int = 18
     scrape_skip_identical: bool = False
     never_auto_run_scrape: bool = False
+    scrape_concurrency: int = 2
     scrape_browser: Literal["auto", "obscura", "playwright"] = "auto"
     check_browser_updates_on_start: bool = True
     content_hide_rules: list[ContentHideRule] = Field(default_factory=list)
@@ -91,6 +92,7 @@ class AppSettingsPatch(BaseModel):
     scrape_downloads_page_size: int | None = None
     scrape_skip_identical: bool | None = None
     never_auto_run_scrape: bool | None = None
+    scrape_concurrency: int | None = None
     scrape_browser: Literal["auto", "obscura", "playwright"] | None = None
     check_browser_updates_on_start: bool | None = None
     content_hide_rules: list[ContentHideRule] | None = None

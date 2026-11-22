@@ -58,6 +58,8 @@ _DEFAULTS: dict = {
     "scrape_skip_identical": False,
     # On: extension links wait in Queue to scrape until Run scrape. Off (default) starts them immediately.
     "never_auto_run_scrape": False,
+    # How many media files download at once. Clamped to 1–6.
+    "scrape_concurrency": 2,
     # auto = Obscura when installed, otherwise Playwright Chromium.
     "scrape_browser": "auto",
     # Missing key uses the metered-connection default (see _normalize_settings), then it is saved.
@@ -213,6 +215,7 @@ def _normalize_settings(data: dict) -> dict:
     merged["scrape_downloads_show_all"] = bool(merged.get("scrape_downloads_show_all", False))
     merged["scrape_skip_identical"] = bool(merged.get("scrape_skip_identical", False))
     merged["never_auto_run_scrape"] = bool(merged.get("never_auto_run_scrape", False))
+    merged["scrape_concurrency"] = _clamp_int(merged.get("scrape_concurrency", 2), 1, 6, 2)
     scrape_dl_size = _clamp_int(merged.get("scrape_downloads_page_size", 18), 18, 90, 18)
     merged["scrape_downloads_page_size"] = (
         scrape_dl_size if scrape_dl_size in _SCRAPE_DOWNLOAD_PAGE_SIZES else 18
@@ -389,6 +392,11 @@ def scrape_page_enabled() -> bool:
 
 def get_phash_threshold() -> int:
     return int(load_app_settings().get("phash_threshold", 8))
+
+
+def get_scrape_concurrency() -> int:
+    """How many media files download at once. Settings value, clamped to 1–6."""
+    return _clamp_int(load_app_settings().get("scrape_concurrency", 2), 1, 6, 2)
 
 
 def get_untyped_tag_group_key(db=None) -> str:

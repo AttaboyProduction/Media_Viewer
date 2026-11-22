@@ -19,7 +19,14 @@ UNSUPPORTED_LABEL = "Unsupported"
 
 _COUNTERS = ("total", "processed", "downloaded", "skipped", "similar")
 _LISTS = ("errors", "skipped_items", "cancelled_urls")
-_SETS = ("counted_urls", "finished_urls", "released_urls", "retry_urls", "accepted_urls")
+_SETS = (
+    "counted_urls",
+    "finished_urls",
+    "released_urls",
+    "processed_urls",
+    "retry_urls",
+    "accepted_urls",
+)
 _VALUES = ("last_gallery_url", "message", "current_url")
 
 # Numbers of sources that are not the live one.
@@ -148,6 +155,7 @@ def restore(status, items: list[dict]) -> None:
     status.accepted_urls = set()
     status.counted_urls = set()
     status.finished_urls = set()
+    status.processed_urls = set()
     status.released_urls = set()
     status.retry_urls = set()
     status.leftover_urls = set()

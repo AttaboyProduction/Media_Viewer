@@ -173,6 +173,7 @@ def _idle_status() -> None:
     pipeline.scrape_status.retry_urls = set()
     pipeline.scrape_status.counted_urls = set()
     pipeline.scrape_status.finished_urls = set()
+    pipeline.scrape_status.processed_urls = set()
     pipeline.scrape_status.leftover_urls = set()
     pipeline.scrape_status.job_id = 0
     pipeline.scrape_status.last_gallery_url = None
@@ -710,8 +711,8 @@ class CancelRemainderTests(unittest.TestCase):
             ignore_download_limit=True,
         )
         pipeline._finish_queue(4, None, None, job, {})
-        # Cancelled URLs stay incomplete — processed is only the finished download.
-        self.assertEqual(pipeline.scrape_status.processed, 1)
+        # The download and both cancels are settled, so the run reads 3/3.
+        self.assertEqual(pipeline.scrape_status.processed, 3)
         self.assertEqual(pipeline.scrape_status.total, 3)
         self.assertEqual(pipeline.scrape_status.skipped, 2)
         self.assertEqual(pipeline.scrape_status.downloaded, 1)
@@ -739,7 +740,7 @@ class CancelRemainderTests(unittest.TestCase):
         self.assertFalse(pipeline.scrape_status.running)
         self.assertFalse(pipeline.scrape_status.queue_open)
         self.assertEqual(pipeline.scrape_status.message, "Cancelled")
-        self.assertEqual(pipeline.scrape_status.processed, 8)
+        self.assertEqual(pipeline.scrape_status.processed, 9)
         self.assertEqual(pipeline.scrape_status.total, 10)
         self.assertEqual(pipeline.scrape_status.skipped, 1)
         self.assertEqual(pipeline.scrape_status.job_id, 5)
@@ -758,7 +759,7 @@ class CancelRemainderTests(unittest.TestCase):
         )
         pipeline._finish_queue(4, None, None, job, {})
         self.assertFalse(pipeline.scrape_status.running)
-        self.assertEqual(pipeline.scrape_status.processed, 8)
+        self.assertEqual(pipeline.scrape_status.processed, 9)
         self.assertEqual(pipeline.scrape_status.pending_urls, [])
 
     def test_stop_does_not_pad_an_unreached_limit(self) -> None:

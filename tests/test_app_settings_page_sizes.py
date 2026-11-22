@@ -14,6 +14,12 @@ class TestAppSettingsPageSizes(unittest.TestCase):
         self.assertEqual(n["viewer_page_size"], 36)
         self.assertEqual(n["tags_page_sizes"], [25, 50, 100])
         self.assertEqual(n["tags_page_size"], 50)
+        self.assertEqual(n["scrape_concurrency"], 2)
+
+    def test_scrape_concurrency_clamps_to_one_through_six(self) -> None:
+        self.assertEqual(app_settings._normalize_settings({"scrape_concurrency": 0})["scrape_concurrency"], 1)
+        self.assertEqual(app_settings._normalize_settings({"scrape_concurrency": 9})["scrape_concurrency"], 6)
+        self.assertEqual(app_settings._normalize_settings({"scrape_concurrency": "4"})["scrape_concurrency"], 4)
 
     def test_normalize_lists(self) -> None:
         n = app_settings._normalize_settings(

@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     media_dir: Path = ROOT_DIR / "media"
     data_dir: Path = ROOT_DIR / "data"
     default_gallery_url: str = ""
-    scrape_concurrency: int = 2
+    # Downloads at once is the app setting scrape_concurrency (Settings → Other → Scrape).
     frontend_dist: Path = ROOT_DIR / "frontend" / "dist"
     phash_threshold: int = 8
 

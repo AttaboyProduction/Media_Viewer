@@ -10,7 +10,7 @@ settings.media_dir.mkdir(parents=True, exist_ok=True)
 
 engine = create_engine(
     settings.database_url,
-    connect_args={"check_same_thread": False},
+    connect_args={"check_same_thread": False, "timeout": 30},
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 

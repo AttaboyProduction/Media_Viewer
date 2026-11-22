@@ -32,7 +32,29 @@ try {
 
 function send(message) {
   const payload = typeof message === "string" ? { type: message } : message;
-  return new Promise((resolve) => chrome.runtime.sendMessage(payload, resolve));
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    }, 5000);
+    try {
+      chrome.runtime.sendMessage(payload, (response) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (chrome.runtime.lastError) resolve(null);
+        else resolve(response);
+      });
+    } catch {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(null);
+      }
+    }
+  });
 }
 
 async function activeTab() {
@@ -67,7 +89,13 @@ function setHold(text) {
 }
 
 function render(status) {
-  if (!status || !Array.isArray(status.sites)) return;
+  if (!status || !Array.isArray(status.sites)) {
+    // Keep the last good snapshot. The placeholder must not stay up forever.
+    if (!current) {
+      $("appText").textContent = "Couldn't reach the app. Is MediaViewer running?";
+    }
+    return;
+  }
   current = status;
 
   $("appDot").className = `dot ${status.online ? (status.scrapeEnabled ? "ok" : "warn") : ""}`;
@@ -318,16 +346,24 @@ async function loadPageFiles(tab) {
   renderPageFiles(result.files || []);
 }
 
+let refreshing = false;
+
 async function refreshAll() {
-  const tab = await activeTab();
-  const url = (tab && tab.url) || "";
-  page = await send({ type: "describePage", url });
-  render(await send({ type: "getStatus", url }));
-  if (!(page && page.onSite) && tab && url && url !== listedUrl) {
-    listedUrl = url;
-    await loadPageFiles(tab);
+  if (refreshing) return;
+  refreshing = true;
+  try {
+    const tab = await activeTab();
+    const url = (tab && tab.url) || "";
+    page = await send({ type: "describePage", url });
+    render(await send({ type: "getStatus", url }));
+    if (!(page && page.onSite) && tab && url && url !== listedUrl) {
+      listedUrl = url;
+      await loadPageFiles(tab);
+    }
+    if (page && page.onSite) listedUrl = "";
+  } finally {
+    refreshing = false;
   }
-  if (page && page.onSite) listedUrl = "";
 }
 
 refreshAll();
