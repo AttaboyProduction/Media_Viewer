@@ -358,7 +358,15 @@ export default function MediaDetailModal({
   const sourceUrls = (
     media.source_urls && media.source_urls.length > 0 ? media.source_urls : [media.source_url]
   ).filter((url) => !isLinked || !url.toLowerCase().startsWith('file:'))
-  const displayNumber = numbering === 'db' ? String(media.id) : media.source_post_id
+  const sourceNumber = (() => {
+    if (!media.source_post_id.startsWith('loc_')) return media.source_post_id
+    for (const url of sourceUrls) {
+      const match = url.match(/\/post\/(\d+)/)
+      if (match) return match[1]
+    }
+    return media.source_post_id
+  })()
+  const displayNumber = numbering === 'db' ? String(media.id) : sourceNumber
   const addUrl = () => {
     const trimmed = newUrl.trim()
     if (!trimmed) return
@@ -548,11 +556,11 @@ export default function MediaDetailModal({
             <>
         <div className="source-meta-block">
           <div className="source-meta-header">
-            <span className="source-label">{isLinked ? 'Local file' : 'Source URLs'}</span>
+            <span className="source-label">Source URLs</span>
             <span className="source-id" title={numbering === 'db' ? 'Database ID' : 'Source post id'}>
               #{displayNumber}
               {numbering === 'db' ? (
-                <span className="source-id-secondary"> · source #{media.source_post_id}</span>
+                <span className="source-id-secondary"> · source #{sourceNumber}</span>
               ) : (
                 <span className="source-id-secondary"> · id {media.id}</span>
               )}

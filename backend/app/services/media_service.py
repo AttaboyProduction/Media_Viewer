@@ -370,6 +370,7 @@ def update_media_urls(
         raise ValueError("At least one source URL is required")
 
     media.source_url = remaining[0]
+    _apply_source_post_id(db, media, remaining)
     extras = remaining[1:]
     existing_extras = {row.url: row for row in list(media.source_url_rows)}
     for url, row in list(existing_extras.items()):
@@ -573,6 +574,43 @@ def delete_media(db: Session, media_id: int) -> None:
         unlink_media_files([path])
 
 
+def source_post_id_from_urls(urls: list[str]) -> str | None:
+    """Post id from an installed adapter, or a ``/post/<id>`` URL."""
+    from backend.scraper.gallery import extract_post_id
+    from backend.scraper.sites import resolve_extension_url
+
+    for url in urls:
+        text = (url or "").strip()
+        if not text or text.lower().startswith("file:"):
+            continue
+        try:
+            hit = resolve_extension_url(text)
+        except Exception:
+            hit = None
+        if hit and hit[1]:
+            return hit[1][:32]
+        post_id = extract_post_id(text)
+        if post_id:
+            return post_id[:32]
+    return None
+
+
+def _apply_source_post_id(db: Session, media: MediaItem, urls: list[str]) -> None:
+    """Replace a local ``loc_`` id with the post id from the source URL when it is free."""
+    if not str(media.source_post_id).startswith("loc_"):
+        return
+    post_id = source_post_id_from_urls(urls)
+    if not post_id or post_id == media.source_post_id:
+        return
+    conflict = (
+        db.query(MediaItem)
+        .filter(MediaItem.source_post_id == post_id, MediaItem.id != media.id)
+        .first()
+    )
+    if conflict is None:
+        media.source_post_id = post_id
+
+
 def _managed_copy_destination(media: MediaItem, source: Path) -> Path:
     folder = settings.media_dir / (media.media_type or "image")
     folder.mkdir(parents=True, exist_ok=True)
@@ -618,13 +656,14 @@ def delete_linked_media_file(db: Session, media_id: int) -> MediaItem:
     if not source.is_file():
         raise ValueError("Local file is already gone")
 
+    _drop_file_urls(db, media)
+    _apply_source_post_id(db, media, list_media_source_urls(media))
     dest = _managed_copy_destination(media, source)
     shutil.copy2(source, dest)
     try:
         media.local_path = dest.relative_to(settings.media_dir.parent).as_posix()
         media.storage_kind = STORAGE_MANAGED
         media.file_size = dest.stat().st_size
-        _drop_file_urls(db, media)
         db.flush()
         source.unlink()
     except Exception:

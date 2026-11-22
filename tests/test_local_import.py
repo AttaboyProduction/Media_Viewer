@@ -163,6 +163,7 @@ class LocalImportDbTests(unittest.TestCase):
             self.assertEqual(kept.id, media_id)
             self.assertEqual(kept.storage_kind, STORAGE_MANAGED)
             self.assertEqual(kept.source_url, "https://example.com/post/1")
+            self.assertEqual(kept.source_post_id, "1")
             stored = absolute_path_for_media(kept)
             self.assertTrue(stored.is_file())
             self.assertEqual(stored.read_bytes(), b"keep-these-bytes")
