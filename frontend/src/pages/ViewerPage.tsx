@@ -26,6 +26,7 @@ import { parseCommaSeparatedTags } from '../utils/tagList'
 import { paginationTotalPages } from '../utils/pagination'
 import { columnCountForViewerGrid } from '../utils/viewerGrid'
 import { previewSizeForTile, type PreviewSize } from '../utils/mediaPreview'
+import { fileIndexOnPage } from '../utils/mediaViewerActions'
 import MediaCardThumb from '../components/MediaCardThumb'
 import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 
@@ -307,6 +308,98 @@ export default function ViewerPage() {
   })
 
   const pageIds = data?.items.map((item) => item.id) ?? []
+  const fileTotal = data?.total ?? 0
+  const totalPages = data ? paginationTotalPages(data.total, data.page_size) : 1
+  const fileIndex =
+    selectedId != null && pageSize
+      ? fileIndexOnPage(page, pageSize, pageIds, selectedId)
+      : -1
+  const canDetailPrev = fileIndex > 0
+  const canDetailNext = fileIndex >= 0 && fileIndex < fileTotal - 1
+
+  const fetchViewerPage = useCallback(
+    async (targetPage: number) => {
+      const cursor =
+        targetPage > 1 && listCursor != null && sort !== 'random' ? listCursor : undefined
+      return queryClient.fetchQuery({
+        queryKey: [
+          'media',
+          targetPage,
+          pageSize,
+          selectedTags,
+          tagMode,
+          mediaType,
+          minRating,
+          includeDiscarded,
+          hideExcluded,
+          hiddenTagNames,
+          hiddenGroupKeys,
+          mediaExcludeTags,
+          sort,
+          cursor ?? null,
+        ],
+        queryFn: () =>
+          fetchMedia({
+            page: targetPage,
+            page_size: pageSize!,
+            tags: selectedTags,
+            tag_mode: tagMode,
+            media_type: mediaType || undefined,
+            min_rating: minRating,
+            include_discarded: includeDiscarded!,
+            exclude_tags: mediaExcludeTags,
+            exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
+            sort: sort!,
+            cursor,
+          }),
+      })
+    },
+    [
+      queryClient,
+      pageSize,
+      selectedTags,
+      tagMode,
+      mediaType,
+      minRating,
+      includeDiscarded,
+      hideExcluded,
+      hiddenTagNames,
+      hiddenGroupKeys,
+      mediaExcludeTags,
+      sort,
+      listCursor,
+    ],
+  )
+
+  const navigateDetailAdjacent = useCallback(
+    async (direction: 'prev' | 'next') => {
+      if (selectedId == null || pageSize == null) return
+      const local = pageIds.indexOf(selectedId)
+      if (direction === 'next') {
+        if (local >= 0 && local < pageIds.length - 1) {
+          setSelectedId(pageIds[local + 1])
+          return
+        }
+        if (page >= totalPages) return
+        const result = await fetchViewerPage(page + 1)
+        if (!result.items.length) return
+        setPage(page + 1)
+        setSelectedId(result.items[0].id)
+        return
+      }
+      if (local > 0) {
+        setSelectedId(pageIds[local - 1])
+        return
+      }
+      if (page <= 1) return
+      const result = await fetchViewerPage(page - 1)
+      if (!result.items.length) return
+      goToPage(page - 1)
+      setSelectedId(result.items[result.items.length - 1].id)
+    },
+    [selectedId, pageSize, pageIds, page, totalPages, fetchViewerPage, goToPage],
+  )
+
   const {
     selectMode,
     selectedIds,
@@ -378,7 +471,6 @@ export default function ViewerPage() {
 
   const sidebarLayout = (prefs.viewer_tag_layout ?? 'chips') === 'sidebar'
   const showLoading = !mediaQueryEnabled || isLoading || (isFetching && !data)
-  const totalPages = data ? paginationTotalPages(data.total, data.page_size) : 1
   usePageClamp(page, data ? totalPages : page, goToPage)
   const dimGrid = useSuppressPageSwitchDim(page, data?.page, isFetching)
   const gridClass = `media-grid media-grid-${prefs.grid_thumbnail_size}${
@@ -761,9 +853,12 @@ export default function ViewerPage() {
       {selectedId !== null && (
         <MediaDetailModal
           mediaId={selectedId}
-          mediaIds={data?.items.map((item) => item.id) ?? []}
+          fileIndex={fileIndex}
+          fileTotal={fileTotal}
+          canPrev={canDetailPrev}
+          canNext={canDetailNext}
           onClose={() => setSelectedId(null)}
-          onNavigate={setSelectedId}
+          onNavigateAdjacent={navigateDetailAdjacent}
         />
       )}
     </div>

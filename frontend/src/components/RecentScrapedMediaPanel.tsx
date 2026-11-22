@@ -21,6 +21,7 @@ import { usePersistedPageSize } from '../hooks/usePersistedPageSize'
 import { useMediaMultiSelect } from '../hooks/useMediaMultiSelect'
 import { excludeTagsForMediaQuery } from '../utils/contentHide'
 import { paginationTotalPages } from '../utils/pagination'
+import { fileIndexOnPage } from '../utils/mediaViewerActions'
 import ContentHideMedia from './ContentHideMedia'
 import MediaCardThumb from './MediaCardThumb'
 import MediaDetailModal from './MediaDetailModal'
@@ -319,11 +320,69 @@ export default function RecentScrapedMediaPanel() {
     previewSize: 'compact',
     fetchPage: fetchPreviewPage,
   })
-  // Whole-session navigation only when nothing is filtered out of the grid.
-  const navIds =
+  // Whole-session id list when the grid is this session with no tag filter.
+  const sessionNavIds =
     !showAll && selectedTags.length === 0 && status?.recent_media_ids
       ? [...status.recent_media_ids].reverse()
-      : pageIds
+      : null
+  const useSessionNav = sessionNavIds != null
+  const detailPageSize = pageSize ?? DEFAULT_APP_SETTINGS.scrape_downloads_page_size
+  const fileTotal = useSessionNav ? sessionNavIds.length : total
+  const fileIndex = useSessionNav
+    ? selectedId != null
+      ? sessionNavIds.indexOf(selectedId)
+      : -1
+    : selectedId != null
+      ? fileIndexOnPage(page, detailPageSize, pageIds, selectedId)
+      : -1
+  const canDetailPrev = fileIndex > 0
+  const canDetailNext = fileIndex >= 0 && fileIndex < fileTotal - 1
+
+  const navigateDetailAdjacent = useCallback(
+    async (direction: 'prev' | 'next') => {
+      if (selectedId == null) return
+      if (useSessionNav && sessionNavIds) {
+        const local = sessionNavIds.indexOf(selectedId)
+        const next = direction === 'next' ? local + 1 : local - 1
+        if (next < 0 || next >= sessionNavIds.length) return
+        setSelectedId(sessionNavIds[next])
+        if (detailPageSize > 0) setPage(Math.floor(next / detailPageSize) + 1)
+        return
+      }
+      const local = pageIds.indexOf(selectedId)
+      if (direction === 'next') {
+        if (local >= 0 && local < pageIds.length - 1) {
+          setSelectedId(pageIds[local + 1])
+          return
+        }
+        if (page >= totalPages) return
+        const result = await fetchPreviewPage(page + 1)
+        if (!result.items.length) return
+        setPage(page + 1)
+        setSelectedId(result.items[0].id)
+        return
+      }
+      if (local > 0) {
+        setSelectedId(pageIds[local - 1])
+        return
+      }
+      if (page <= 1) return
+      const result = await fetchPreviewPage(page - 1)
+      if (!result.items.length) return
+      setPage(page - 1)
+      setSelectedId(result.items[result.items.length - 1].id)
+    },
+    [
+      selectedId,
+      useSessionNav,
+      sessionNavIds,
+      detailPageSize,
+      pageIds,
+      page,
+      totalPages,
+      fetchPreviewPage,
+    ],
+  )
 
   const hasContent = showAll ? total > 0 || isLoading || selectedTags.length > 0 : recentCount > 0
   const emptySession = sessionEmpty && !isLoading
@@ -474,13 +533,16 @@ export default function RecentScrapedMediaPanel() {
       {selectedId !== null && (
         <MediaDetailModal
           mediaId={selectedId}
-          mediaIds={navIds}
+          fileIndex={fileIndex}
+          fileTotal={fileTotal}
+          canPrev={canDetailPrev}
+          canNext={canDetailNext}
           onClose={() => {
             setSelectedId(null)
             void queryClient.invalidateQueries({ queryKey: ['scrape-recent-media'] })
             void queryClient.invalidateQueries({ queryKey: ['scrape-status'] })
           }}
-          onNavigate={setSelectedId}
+          onNavigateAdjacent={navigateDetailAdjacent}
         />
       )}
     </div>

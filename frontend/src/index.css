@@ -784,7 +784,7 @@ tr.drop-guide-after td {
   inset: 0;
   background: var(--bg-overlay);
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   justify-items: center;
   z-index: 100;
   padding: 0.75rem 1rem 1rem;
@@ -794,14 +794,13 @@ tr.drop-guide-after td {
 }
 
 .modal-stage {
-  grid-row: 2;
+  grid-row: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   justify-self: stretch;
   width: 100%;
   min-height: 0;
-  padding-top: 0.75rem;
 }
 
 .reload-lock-overlay {
@@ -884,15 +883,19 @@ tr.drop-guide-after td {
 }
 
 .modal-media-controls {
-  grid-row: 1;
+  /* Bottom-right overlay, left of Download / rotate / ⋮ — does not reserve layout space. */
+  position: absolute;
+  right: calc(1rem + 2.5rem * 3 + 0.2rem * 2 + 0.65rem);
+  bottom: 1rem;
+  z-index: 4;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 0.75rem;
+  gap: 0.5rem;
   width: fit-content;
-  max-width: 100%;
-  padding: 0.35rem 0.75rem;
+  max-width: calc(100% - 2rem - 8.5rem);
+  padding: 0.3rem 0.55rem;
   background: var(--bg-surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -960,7 +963,6 @@ tr.drop-guide-after td {
 
 .modal-backdrop-expanded .modal-stage {
   min-height: 0;
-  padding-top: 0.75rem;
   align-items: stretch;
 }
 
@@ -1073,6 +1075,131 @@ tr.drop-guide-after td {
 
 .modal-backdrop-expanded .modal-zoom-btn:disabled {
   opacity: 0.4;
+}
+
+/* Telegram-style detail chrome: bottom info + actions; ← / Full view / → sits left of actions. */
+.modal-viewer-info {
+  position: absolute;
+  left: 1.1rem;
+  bottom: 1.1rem;
+  z-index: 4;
+  max-width: min(22rem, calc(100% - 8rem));
+  color: #f4f4f5;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+  pointer-events: none;
+}
+
+.modal-viewer-info-title {
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.modal-viewer-info-sub,
+.modal-viewer-info-status {
+  margin-top: 0.15rem;
+  font-size: 0.78rem;
+  color: rgba(244, 244, 245, 0.82);
+  line-height: 1.3;
+}
+
+.modal-viewer-info-status {
+  color: #a7f3d0;
+}
+
+.modal-viewer-actions {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.modal-viewer-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: #f4f4f5;
+  cursor: pointer;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.75));
+}
+
+.modal-viewer-action-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.modal-viewer-action-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.modal-viewer-more {
+  position: relative;
+}
+
+.modal-viewer-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.4rem);
+  min-width: 10.5rem;
+  padding: 0.35rem 0;
+  border-radius: 10px;
+  background: #2b2e33;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.modal-viewer-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  width: 100%;
+  padding: 0.55rem 0.9rem;
+  border: none;
+  background: transparent;
+  color: #f4f4f5;
+  font: inherit;
+  font-size: 0.9rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.modal-viewer-menu-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.modal-viewer-menu-item:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.modal-backdrop:not(.modal-backdrop-expanded) .modal-viewer-info,
+.modal-backdrop:not(.modal-backdrop-expanded) .modal-viewer-actions {
+  color: var(--text-primary);
+  text-shadow: none;
+  filter: none;
+}
+
+.modal-backdrop:not(.modal-backdrop-expanded) .modal-viewer-action-btn {
+  color: var(--text-primary);
+  filter: none;
+}
+
+.modal-backdrop:not(.modal-backdrop-expanded) .modal-viewer-action-btn:hover:not(:disabled) {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.15));
+}
+
+.modal-backdrop:not(.modal-backdrop-expanded) .modal-viewer-info-sub {
+  color: var(--text-secondary);
 }
 
 .source-id-secondary {

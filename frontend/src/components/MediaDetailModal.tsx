@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type WheelEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type WheelEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   deleteLinkedMediaFile,
@@ -14,6 +14,7 @@ import {
 } from '../api/client'
 import ContentHideMedia from './ContentHideMedia'
 import DuplicateGroupCard from './DuplicateGroupCard'
+import MediaViewerChrome from './MediaViewerChrome'
 import RelatedMediaPicker from './RelatedMediaPicker'
 import StarRating from './StarRating'
 import TagEditor from './TagEditor'
@@ -26,9 +27,14 @@ import { shouldSkipKeyboardShortcut } from '../utils/keyboardTarget'
 
 interface Props {
   mediaId: number
-  mediaIds: number[]
+  /** 0-based index in the full list (all pages / session), not only this page. */
+  fileIndex: number
+  fileTotal: number
+  canPrev: boolean
+  canNext: boolean
   onClose: () => void
-  onNavigate: (id: number) => void
+  /** Move one file; may load the previous/next page when at a page edge. */
+  onNavigateAdjacent: (direction: 'prev' | 'next') => void | Promise<void>
 }
 
 const ZOOM_MIN = 1
@@ -46,17 +52,28 @@ function ceilZoom(z: number) {
   return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.ceil(z / ZOOM_STEP - 1e-9) * ZOOM_STEP))
 }
 
-export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigate }: Props) {
+export default function MediaDetailModal({
+  mediaId,
+  fileIndex,
+  fileTotal,
+  canPrev,
+  canNext,
+  onClose,
+  onNavigateAdjacent,
+}: Props) {
   const queryClient = useQueryClient()
   const { confirm } = useConfirm()
   const { isLocked, revealForMedia, revealing } = useContentHide()
   const [newUrl, setNewUrl] = useState('')
   const [relatedOpen, setRelatedOpen] = useState(false)
   const [expanded, setExpanded] = useState(false)
+  const [navBusy, setNavBusy] = useState(false)
   const [urlAddOpen, setUrlAddOpen] = useState(false)
   const [editingUrl, setEditingUrl] = useState<string | null>(null)
   const [editUrlValue, setEditUrlValue] = useState('')
   const [zoom, setZoom] = useState(1)
+  /** Degrees counterclockwise from the stored file orientation. */
+  const [rotationDeg, setRotationDeg] = useState(0)
   const [naturalSize, setNaturalSize] = useState({ w: 0, h: 0 })
   const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 })
   const viewportRef = useRef<HTMLDivElement>(null)
@@ -143,6 +160,7 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
     setNewUrl('')
     setRelatedOpen(false)
     setZoom(1)
+    setRotationDeg(0)
     setNaturalSize({ w: 0, h: 0 })
   }, [mediaId])
 
@@ -176,15 +194,25 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
     return () => ro.disconnect()
   }, [expanded, mediaId])
 
-  const ids = mediaIds
-  const idx = ids.indexOf(mediaId)
-  const canPrev = idx > 0
-  const canNext = idx >= 0 && idx < ids.length - 1
+  const step = useCallback(
+    async (direction: 'prev' | 'next') => {
+      if (navBusy) return
+      if (direction === 'prev' && !canPrev) return
+      if (direction === 'next' && !canNext) return
+      setNavBusy(true)
+      try {
+        await onNavigateAdjacent(direction)
+      } finally {
+        setNavBusy(false)
+      }
+    },
+    [navBusy, canPrev, canNext, onNavigateAdjacent],
+  )
   const goPrev = () => {
-    if (canPrev) onNavigate(ids[idx - 1])
+    void step('prev')
   }
   const goNext = () => {
-    if (canNext) onNavigate(ids[idx + 1])
+    void step('next')
   }
 
   useEffect(() => {
@@ -227,28 +255,25 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
         if (!target) return
         e.preventDefault()
         // Soft single-step; key-repeat stays instant so queued smooth scrolls don't fight.
-        const step = Math.max(48, Math.floor(target.clientHeight * (e.repeat ? 0.12 : 0.18)))
+        const delta = Math.max(48, Math.floor(target.clientHeight * (e.repeat ? 0.12 : 0.18)))
         target.scrollBy({
-          top: e.key === 'ArrowUp' ? -step : step,
+          top: e.key === 'ArrowUp' ? -delta : delta,
           behavior: e.repeat ? 'auto' : 'smooth',
         })
         return
       }
-      const list = mediaIds
-      const i = list.indexOf(mediaId)
-      if (i < 0) return
-      if (e.key === 'ArrowLeft' && i > 0) {
+      if (e.key === 'ArrowLeft' && canPrev && !navBusy) {
         e.preventDefault()
-        onNavigate(list[i - 1])
+        void step('prev')
       }
-      if (e.key === 'ArrowRight' && i < list.length - 1) {
+      if (e.key === 'ArrowRight' && canNext && !navBusy) {
         e.preventDefault()
-        onNavigate(list[i + 1])
+        void step('next')
       }
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [mediaIds, mediaId, onNavigate])
+  }, [canPrev, canNext, onNavigateAdjacent, navBusy, expanded, step])
 
   const fitScale =
     naturalSize.w > 0 && naturalSize.h > 0 && viewportSize.w > 0 && viewportSize.h > 0
@@ -340,10 +365,14 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
     replaceUrls(sourceUrls.filter((u) => u !== url))
   }
 
-  const mediaStyle =
-    expanded && displayW != null && displayH != null
-      ? { width: displayW, height: displayH, maxWidth: 'none', maxHeight: 'none' }
-      : undefined
+  const rotated = ((rotationDeg % 360) + 360) % 360
+  const mediaStyle = {
+    ...(expanded && displayW != null && displayH != null
+      ? { width: displayW, height: displayH, maxWidth: 'none' as const, maxHeight: 'none' as const }
+      : null),
+    // CSS positive angles are clockwise; store counterclockwise turns.
+    transform: rotated ? `rotate(-${rotated}deg)` : undefined,
+  }
 
   const mediaControls = (
     <div className="modal-media-controls" onClick={(e) => e.stopPropagation()}>
@@ -351,7 +380,7 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
         type="button"
         className="btn btn-small modal-nav-btn"
         onClick={goPrev}
-        disabled={!canPrev}
+        disabled={!canPrev || navBusy}
         title="Previous"
         aria-label="Previous media"
       >
@@ -427,7 +456,7 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
         type="button"
         className="btn btn-small modal-nav-btn"
         onClick={goNext}
-        disabled={!canNext}
+        disabled={!canNext || navBusy}
         title="Next"
         aria-label="Next media"
       >
@@ -442,6 +471,12 @@ export default function MediaDetailModal({ mediaId, mediaIds, onClose, onNavigat
       onClick={onClose}
     >
       {mediaControls}
+      <MediaViewerChrome
+        media={media}
+        index={fileIndex}
+        total={fileTotal}
+        onRotate={() => setRotationDeg((deg) => (deg + 90) % 360)}
+      />
       <div className="modal-stage">
         {/* Empty stage/backdrop closes; only the panel and control bar keep the click. */}
         <div ref={modalRef} className="modal" onClick={(e) => e.stopPropagation()}>
