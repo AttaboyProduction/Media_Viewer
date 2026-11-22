@@ -6,6 +6,7 @@ import {
   clampPaginationPage,
   paginationItemCount,
   paginationTotalPages,
+  parseGoToPage,
 } from './pagination'
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -19,6 +20,13 @@ assert(paginationTotalPages(12, 0) === 1, 'non-paged/all mode has one page')
 assert(clampPaginationPage(0, 5) === 1, 'page clamps at lower bound')
 assert(clampPaginationPage(7, 5) === 5, 'page clamps at upper bound')
 assert(clampPaginationPage(3, 5) === 3, 'valid page remains unchanged')
+
+assert(parseGoToPage('3', 10) === 3, 'go-to accepts a valid page')
+assert(parseGoToPage(' 12 ', 10) === 10, 'go-to clamps above total pages')
+assert(parseGoToPage('0', 10) === null, 'go-to rejects zero')
+assert(parseGoToPage('', 10) === null, 'go-to rejects empty')
+assert(parseGoToPage('2.5', 10) === null, 'go-to rejects decimals')
+assert(parseGoToPage('abc', 10) === null, 'go-to rejects non-digits')
 
 assert(
   paginationItemCount(18, 47) === '18 out of 47 items',

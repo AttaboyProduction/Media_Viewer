@@ -1,4 +1,5 @@
-import { paginationItemCount } from '../../utils/pagination'
+import { useEffect, useState } from 'react'
+import { paginationItemCount, parseGoToPage } from '../../utils/pagination'
 
 export interface PageSizeOption {
   value: number
@@ -37,6 +38,21 @@ export default function PaginationBar({
   const pages = Math.max(1, totalPages)
   const showPageSize =
     pageSize !== undefined && pageSizeOptions?.length && onPageSizeChange
+  const [goToDraft, setGoToDraft] = useState(String(page))
+
+  useEffect(() => {
+    setGoToDraft(String(page))
+  }, [page])
+
+  const commitGoTo = () => {
+    const next = parseGoToPage(goToDraft, pages)
+    if (next === null) {
+      setGoToDraft(String(page))
+      return
+    }
+    setGoToDraft(String(next))
+    if (next !== page) onPageChange(next)
+  }
 
   return (
     <div className={['pagination', className].filter(Boolean).join(' ')}>
@@ -48,9 +64,32 @@ export default function PaginationBar({
       >
         Previous
       </button>
-      <span>
-        Page {page} of {pages}
-      </span>
+      <label className="pagination-go-to">
+        <span className="pagination-go-to-label">Page</span>
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          className="pagination-go-to-input"
+          value={goToDraft}
+          aria-label={`Go to page (1–${pages})`}
+          size={Math.max(2, String(pages).length)}
+          onChange={(event) => setGoToDraft(event.target.value)}
+          onBlur={commitGoTo}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              commitGoTo()
+              ;(event.target as HTMLInputElement).blur()
+            } else if (event.key === 'Escape') {
+              event.preventDefault()
+              setGoToDraft(String(page))
+              ;(event.target as HTMLInputElement).blur()
+            }
+          }}
+        />
+        <span className="pagination-go-to-of">of {pages}</span>
+      </label>
       <button
         type="button"
         className="btn"

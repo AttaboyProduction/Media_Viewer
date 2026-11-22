@@ -7,6 +7,16 @@ export function clampPaginationPage(page: number, totalPages: number): number {
   return Math.max(1, Math.min(page, Math.max(1, totalPages)))
 }
 
+/** Parse a typed page number; empty/invalid returns null (caller restores current). */
+export function parseGoToPage(raw: string, totalPages: number): number | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  if (!/^\d+$/.test(trimmed)) return null
+  const n = Number(trimmed)
+  if (!Number.isSafeInteger(n) || n < 1) return null
+  return clampPaginationPage(n, totalPages)
+}
+
 export function paginationItemCount(
   shown: number,
   total: number,

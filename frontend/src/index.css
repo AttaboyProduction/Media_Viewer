@@ -2417,6 +2417,38 @@ tr.selected {
   color: var(--text-secondary);
 }
 
+.pagination-go-to {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.pagination-go-to-label,
+.pagination-go-to-of {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.pagination-go-to-input {
+  width: 3.25rem;
+  min-width: 2.5rem;
+  box-sizing: border-box;
+  text-align: center;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  padding: 0.3rem 0.35rem;
+  font: inherit;
+}
+
+.pagination-go-to-input:focus {
+  outline: 2px solid var(--accent, #5b8def);
+  outline-offset: 1px;
+}
+
 .form-field {
   display: flex;
   flex-direction: column;
