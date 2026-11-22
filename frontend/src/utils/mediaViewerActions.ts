@@ -83,6 +83,142 @@ export async function copyMediaToClipboard(
   throw new Error('Could not copy this file to the clipboard')
 }
 
+export type ShareMediaResult = 'shared' | 'cancelled' | 'unsupported' | 'downloaded_fallback'
+
+type ShareFileCache = { key: string; file: File }
+let shareFileCache: ShareFileCache | null = null
+
+/** True when this browser exposes ``navigator.share`` (file support checked at share time). */
+export function canOfferWebShare(): boolean {
+  return typeof navigator !== 'undefined' && typeof navigator.share === 'function'
+}
+
+function shareCacheKey(url: string, filename: string, mediaType: string): string {
+  return `${url}\0${filename}\0${mediaType}`
+}
+
+function isShareAbort(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError'
+}
+
+function isShareGestureLost(err: unknown): boolean {
+  return (
+    err instanceof DOMException &&
+    (err.name === 'NotAllowedError' || err.name === 'InvalidStateError')
+  )
+}
+
+async function buildShareFile(url: string, filename: string, mediaType: string): Promise<File> {
+  const res = await fetch(url)
+  if (!res.ok) throw new Error(`Share failed (${res.status})`)
+  const blob = await res.blob()
+  // iOS Safari rejects empty MIME; always set a concrete type.
+  const mime = (blob.type && blob.type !== 'application/octet-stream'
+    ? blob.type
+    : guessMime(mediaType, url)) || guessMime(mediaType, url)
+  return new File([blob], filename, { type: mime })
+}
+
+/**
+ * Prefetch the share ``File`` while the ⋮ menu is open so the Share click can
+ * call ``navigator.share`` without an await first (keeps the user gesture on iOS).
+ */
+export async function prefetchShareFile(
+  url: string,
+  filename: string,
+  mediaType: string,
+): Promise<void> {
+  if (!canOfferWebShare()) return
+  const key = shareCacheKey(url, filename, mediaType)
+  if (shareFileCache?.key === key) return
+  const file = await buildShareFile(url, filename, mediaType)
+  shareFileCache = { key, file }
+}
+
+export function clearShareFileCache(): void {
+  shareFileCache = null
+}
+
+/** Short hint after downloading when the OS share sheet is unavailable. */
+export function shareDownloadFallbackMessage(): string {
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : ''
+  if (/iPhone|iPad|iPod/i.test(ua)) return 'Downloaded — share from Files or Photos'
+  if (/Android/i.test(ua)) return 'Downloaded — share from Files or Downloads'
+  return 'Downloaded — open the file to share it'
+}
+
+/**
+ * Open the OS share sheet with the full-resolution media file.
+ * Uses a prefetched file when possible (Android Chrome + iOS Safari).
+ * Returns ``cancelled`` when the user dismisses the sheet; ``unsupported`` when
+ * Web Share / file sharing is missing (e.g. insecure ``http://LAN`` context).
+ */
+export async function shareMediaFile(
+  url: string,
+  filename: string,
+  mediaType: string,
+): Promise<'shared' | 'cancelled' | 'unsupported'> {
+  if (typeof navigator.share !== 'function') return 'unsupported'
+
+  const key = shareCacheKey(url, filename, mediaType)
+  let file = shareFileCache?.key === key ? shareFileCache.file : null
+  if (!file) {
+    file = await buildShareFile(url, filename, mediaType)
+    shareFileCache = { key, file }
+  }
+
+  // Prefer files-only first — iOS Safari is picky about title+files payloads.
+  const filesOnly: ShareData = { files: [file] }
+  const withTitle: ShareData = { files: [file], title: filename }
+
+  if (typeof navigator.canShare === 'function') {
+    if (!navigator.canShare(filesOnly) && !navigator.canShare(withTitle)) {
+      return 'unsupported'
+    }
+  }
+
+  const tryShare = async (data: ShareData) => {
+    await navigator.share(data)
+    return 'shared' as const
+  }
+
+  try {
+    if (typeof navigator.canShare !== 'function' || navigator.canShare(filesOnly)) {
+      return await tryShare(filesOnly)
+    }
+    return await tryShare(withTitle)
+  } catch (err) {
+    if (isShareAbort(err)) return 'cancelled'
+    if (isShareGestureLost(err)) return 'unsupported'
+    try {
+      return await tryShare(withTitle)
+    } catch (retryErr) {
+      if (isShareAbort(retryErr)) return 'cancelled'
+      if (isShareGestureLost(retryErr) || retryErr instanceof TypeError) return 'unsupported'
+      throw retryErr
+    }
+  }
+}
+
+/**
+ * Share via the OS sheet when possible; otherwise download so phone users can
+ * share from Files / Downloads / Photos (common when the page is not a secure context).
+ */
+export async function shareMediaFileOrDownload(
+  url: string,
+  filename: string,
+  mediaType: string,
+): Promise<ShareMediaResult> {
+  try {
+    const result = await shareMediaFile(url, filename, mediaType)
+    if (result !== 'unsupported') return result
+  } catch {
+    // Fall through to download.
+  }
+  await downloadMediaFile(url, filename)
+  return 'downloaded_fallback'
+}
+
 function guessMime(mediaType: string, url: string): string {
   const path = url.split('?')[0].toLowerCase()
   if (path.endsWith('.png')) return 'image/png'

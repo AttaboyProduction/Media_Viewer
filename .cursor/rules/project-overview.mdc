@@ -19,7 +19,7 @@ Local Windows web app: scrape configured gallery sources or link local media, SQ
 
 ## Layout
 
-`Run.bat`, `Restart.bat`, `Update.bat`, `VERSION`, `versioning.py`, `launcher.py`, `adapters/example/` (sample package; other `adapters/*` gitignored), `extension/` (Chrome/Opera MV3 extension, plain JS, Load unpacked), local `TODO.md` (gitignored; selection UI is the Project TODO canvas), `requirements.txt`, `backend/`, `frontend/`, `tests/`, `scripts/`, gitignored `data/` (incl. `data/adapters/`) + `media/`.
+`Run.bat`, `Restart.bat`, `RunLan.bat` (LAN/`0.0.0.0` uvicorn for phone testing), `Update.bat`, `VERSION`, `versioning.py`, `launcher.py`, `adapters/example/` (sample package; other `adapters/*` gitignored), `extension/` (Chrome/Opera MV3 extension, plain JS, Load unpacked), local `TODO.md` (gitignored; selection UI is the Project TODO canvas), `requirements.txt`, `backend/`, `frontend/`, `tests/`, `scripts/`, gitignored `data/` (incl. `data/adapters/`) + `media/`.
 
 ## Run / verify
 

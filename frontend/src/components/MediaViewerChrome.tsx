@@ -2,11 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import type { MediaItem } from '../types'
 import { registerEscapeHandler } from '../utils/escapeStack'
 import {
+  clearShareFileCache,
   copyMediaToClipboard,
   downloadMediaFile,
   formatFileSize,
   formatViewerStamp,
+  prefetchShareFile,
   saveMediaAs,
+  shareDownloadFallbackMessage,
+  shareMediaFileOrDownload,
   suggestedMediaFilename,
 } from '../utils/mediaViewerActions'
 
@@ -22,48 +26,70 @@ export default function MediaViewerChrome({ media, index, total, onRotate }: Pro
   const [menuOpen, setMenuOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
+  const [statusMs, setStatusMs] = useState(1800)
   const menuRef = useRef<HTMLDivElement>(null)
+
+  const filename = suggestedMediaFilename(media)
 
   useEffect(() => {
     setMenuOpen(false)
     setStatus('')
+    clearShareFileCache()
   }, [media.id])
 
   useEffect(() => {
     if (!menuOpen) return
-    const onDoc = (event: MouseEvent) => {
+    const onDoc = (event: PointerEvent) => {
       if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false)
     }
-    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('pointerdown', onDoc)
     const unregister = registerEscapeHandler(() => setMenuOpen(false))
     return () => {
-      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('pointerdown', onDoc)
       unregister()
     }
   }, [menuOpen])
 
+  // Prefetch while the menu is open so Share keeps the user gesture on iOS/Android.
+  useEffect(() => {
+    if (!menuOpen) return
+    let cancelled = false
+    void prefetchShareFile(media.media_url, filename, media.media_type).catch(() => {
+      if (!cancelled) {
+        /* Prefetch is best-effort; Share click will fetch again. */
+      }
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [menuOpen, media.media_url, media.media_type, filename])
+
   useEffect(() => {
     if (!status) return
-    const t = window.setTimeout(() => setStatus(''), 1800)
+    const t = window.setTimeout(() => setStatus(''), statusMs)
     return () => window.clearTimeout(t)
-  }, [status])
+  }, [status, statusMs])
 
-  const filename = suggestedMediaFilename(media)
   const stamp = formatViewerStamp(media.scraped_at)
   const size = formatFileSize(media.file_size)
   const title =
     total > 0 && index >= 0 ? `File ${index + 1} of ${total}` : `File #${media.source_post_id}`
   const subtitle = [stamp, size].filter(Boolean).join(' · ')
 
+  const showStatus = (message: string, ms = 1800) => {
+    setStatusMs(ms)
+    setStatus(message)
+  }
+
   const run = async (action: () => Promise<void>, okMessage?: string) => {
     if (busy) return
     setBusy(true)
     try {
       await action()
-      if (okMessage) setStatus(okMessage)
+      if (okMessage) showStatus(okMessage)
       setMenuOpen(false)
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : 'Action failed')
+      showStatus(err instanceof Error ? err.message : 'Action failed', 2800)
     } finally {
       setBusy(false)
     }
@@ -136,8 +162,35 @@ export default function MediaViewerChrome({ media, index, total, onRotate }: Pro
                 disabled={busy}
                 onClick={() =>
                   void run(async () => {
+                    const result = await shareMediaFileOrDownload(
+                      media.media_url,
+                      filename,
+                      media.media_type,
+                    )
+                    if (result === 'cancelled' || result === 'shared') return
+                    if (result === 'downloaded_fallback') {
+                      showStatus(shareDownloadFallbackMessage(), 4000)
+                    }
+                  })
+                }
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"
+                  />
+                </svg>
+                Share…
+              </button>
+              <button
+                type="button"
+                className="modal-viewer-menu-item"
+                role="menuitem"
+                disabled={busy}
+                onClick={() =>
+                  void run(async () => {
                     const kind = await copyMediaToClipboard(media.media_url, media.media_type)
-                    setStatus(kind === 'file' ? 'Copied file' : 'Copied image')
+                    showStatus(kind === 'file' ? 'Copied file' : 'Copied image')
                   })
                 }
               >
