@@ -397,12 +397,13 @@ def delete_media_endpoint(media_id: int, db: Session = Depends(get_db)) -> None:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.delete("/{media_id}/local-file", status_code=204)
-def delete_media_local_file(media_id: int, db: Session = Depends(get_db)) -> None:
-    """Delete a linked PC file from disk and remove its library row."""
+@router.delete("/{media_id}/local-file", response_model=MediaSummary)
+def delete_media_local_file(media_id: int, db: Session = Depends(get_db)) -> MediaSummary:
+    """Copy a linked file into the library and delete only the folder original."""
     try:
-        delete_linked_media_file(db, media_id)
+        media = delete_linked_media_file(db, media_id)
         db.commit()
+        return build_media_summary(db, media)
     except ValueError as exc:
         detail = str(exc)
         status = 404 if "not found" in detail.lower() else 400

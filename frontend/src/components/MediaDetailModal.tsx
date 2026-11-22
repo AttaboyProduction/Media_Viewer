@@ -153,10 +153,10 @@ export default function MediaDetailModal({
   })
   const deleteLocalFileMutation = useMutation({
     mutationFn: () => deleteLinkedMediaFile(mediaId),
-    onSuccess: () => {
+    onSuccess: (updated) => {
+      queryClient.setQueryData(['media', mediaId], updated)
       queryClient.invalidateQueries({ queryKey: ['media'] })
       queryClient.invalidateQueries({ queryKey: ['duplicates'] })
-      onClose()
     },
   })
   const isLinked = media?.storage_kind === 'linked'
@@ -355,8 +355,9 @@ export default function MediaDetailModal({
     deleteLocalFileMutation.isPending ||
     refreshTagsMutation.isPending ||
     urlsMutation.isPending
-  const sourceUrls =
+  const sourceUrls = (
     media.source_urls && media.source_urls.length > 0 ? media.source_urls : [media.source_url]
+  ).filter((url) => !isLinked || !url.toLowerCase().startsWith('file:'))
   const displayNumber = numbering === 'db' ? String(media.id) : media.source_post_id
   const addUrl = () => {
     const trimmed = newUrl.trim()
@@ -384,7 +385,7 @@ export default function MediaDetailModal({
   }
 
   const removeSourceUrl = (url: string) => {
-    if (sourceUrls.length <= 1) return
+    if (!isLinked && sourceUrls.length <= 1) return
     replaceUrls(sourceUrls.filter((u) => u !== url))
   }
 
@@ -569,12 +570,14 @@ export default function MediaDetailModal({
                 Show hidden content
               </button>
             </div>
-          ) : isLinked ? null : (
+          ) : (
             <>
+              {sourceUrls.length > 0 ? (
               <ul className="source-url-list">
                 {(() => {
-                  const primaryUrl = media.source_url
-                  const extraUrls = sourceUrls.filter((url) => url !== primaryUrl)
+                  const primaryUrl = sourceUrls[0]
+                  const extraUrls = sourceUrls.slice(1)
+                  const canRemoveUrl = isLinked ? sourceUrls.length >= 1 : sourceUrls.length > 1
                   const renderUrlRow = (url: string) =>
                     editingUrl === url ? (
                       <div className="source-url-add">
@@ -652,10 +655,10 @@ export default function MediaDetailModal({
                           <button
                             type="button"
                             className="btn btn-small btn-danger"
-                            disabled={busy || sourceUrls.length <= 1}
-                            aria-hidden={sourceUrls.length <= 1}
-                            tabIndex={sourceUrls.length <= 1 ? -1 : 0}
-                            style={{ visibility: sourceUrls.length <= 1 ? 'hidden' : 'visible' }}
+                            disabled={busy || !canRemoveUrl}
+                            aria-hidden={!canRemoveUrl}
+                            tabIndex={canRemoveUrl ? 0 : -1}
+                            style={{ visibility: canRemoveUrl ? 'visible' : 'hidden' }}
                             onClick={() => removeSourceUrl(url)}
                           >
                             Remove
@@ -688,6 +691,7 @@ export default function MediaDetailModal({
                   )
                 })()}
               </ul>
+              ) : null}
               {!urlAddOpen ? (
                 <button
                   type="button"
@@ -784,7 +788,7 @@ export default function MediaDetailModal({
           </div>
         )}
         <div className="actions">
-          {scrapeEnabled && !isLinked && (
+          {scrapeEnabled && (!isLinked || sourceUrls.length > 0) && (
             <>
               <button
                 type="button"
@@ -857,7 +861,7 @@ export default function MediaDetailModal({
                 const ok = await confirm({
                   title: 'Delete from local folder',
                   message:
-                    'Delete the file from its folder on this PC and remove it from the library? This cannot be undone.',
+                    'Delete the file from its folder and keep a copy in the library, like a scraped file? The folder file cannot be restored.',
                   confirmLabel: 'Delete file',
                   danger: true,
                 })

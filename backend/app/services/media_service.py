@@ -1,3 +1,4 @@
+import shutil
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -8,7 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 from backend.app.config import settings
 from backend.app.db.models import MediaItem, MediaSourceUrl, MediaTag, Rating, Tag, TagAlias, TagGroup, TagGroupLink, User
 from backend.app.schemas import MediaSummary, MediaTagOut, RatingOut, TagGroupOut
-from backend.app.services.local_media import STORAGE_LINKED, STORAGE_MANAGED
+from backend.app.services.local_media import STORAGE_LINKED, STORAGE_MANAGED, file_uri_for_path
 from backend.app.services.tag_service import (
     adjust_usage_count,
     get_or_create_tag_by_name,
@@ -358,6 +359,13 @@ def update_media_urls(
             if url not in remaining:
                 remaining.append(url)
 
+    if media_storage_kind(media) == STORAGE_LINKED:
+        http_urls = [url for url in remaining if not url.lower().startswith("file:")]
+        if http_urls:
+            remaining = http_urls
+        else:
+            remaining = [file_uri_for_path(Path(media.local_path))]
+
     if not remaining:
         raise ValueError("At least one source URL is required")
 
@@ -565,8 +573,36 @@ def delete_media(db: Session, media_id: int) -> None:
         unlink_media_files([path])
 
 
-def delete_linked_media_file(db: Session, media_id: int) -> None:
-    """Delete a linked PC file from disk and remove its library row."""
+def _managed_copy_destination(media: MediaItem, source: Path) -> Path:
+    folder = settings.media_dir / (media.media_type or "image")
+    folder.mkdir(parents=True, exist_ok=True)
+    ext = source.suffix.lower() or ".bin"
+    stem = media.source_post_id or f"media_{media.id}"
+    dest = folder / f"{stem}{ext}"
+    n = 2
+    while dest.exists():
+        dest = folder / f"{stem}-{n}{ext}"
+        n += 1
+    return dest
+
+
+def _drop_file_urls(db: Session, media: MediaItem) -> None:
+    """Keep http(s) source URLs. A linked file:// URL is only a path stand-in."""
+    urls = [url for url in list_media_source_urls(media) if not url.lower().startswith("file:")]
+    if not urls:
+        return
+    media.source_url = urls[0]
+    for row in list(media.source_url_rows):
+        db.delete(row)
+    for url in urls[1:]:
+        db.add(MediaSourceUrl(media_id=media.id, url=url))
+
+
+def delete_linked_media_file(db: Session, media_id: int) -> MediaItem:
+    """Copy a linked file into the library, then delete only the folder original.
+
+    The row stays, stored like a scraped file (managed under ``media/``).
+    """
     media = (
         db.query(MediaItem)
         .options(joinedload(MediaItem.source_url_rows))
@@ -578,10 +614,24 @@ def delete_linked_media_file(db: Session, media_id: int) -> None:
     if media_storage_kind(media) != STORAGE_LINKED:
         raise ValueError("Media is not a linked local file")
 
-    path = absolute_path_for_media(media)
-    _delete_media_rows(db, media)
-    db.flush()
-    unlink_media_files([path])
+    source = absolute_path_for_media(media)
+    if not source.is_file():
+        raise ValueError("Local file is already gone")
+
+    dest = _managed_copy_destination(media, source)
+    shutil.copy2(source, dest)
+    try:
+        media.local_path = dest.relative_to(settings.media_dir.parent).as_posix()
+        media.storage_kind = STORAGE_MANAGED
+        media.file_size = dest.stat().st_size
+        _drop_file_urls(db, media)
+        db.flush()
+        source.unlink()
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
+    db.refresh(media)
+    return media
 
 
 def bulk_media_action(

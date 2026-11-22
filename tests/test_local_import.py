@@ -118,16 +118,31 @@ class LocalImportDbTests(unittest.TestCase):
         self.assertTrue(path.is_file())
         self.assertIsNone(self.db.query(MediaItem).filter(MediaItem.id == media_id).first())
 
-    def test_delete_linked_media_file_removes_disk(self) -> None:
-        path = self._make_jpg("gone.jpg")
+    def test_delete_linked_media_file_keeps_library_copy(self) -> None:
+        from unittest.mock import patch
+
+        from backend.app.services import media_service
+        from backend.app.services.media_service import update_media_urls
+
+        path = self._make_jpg("gone.jpg", b"keep-these-bytes")
         media, _ = link_one_file(self.db, path)
         self.db.commit()
         assert media is not None
-        media_id = media.id
-        delete_linked_media_file(self.db, media_id)
+        update_media_urls(self.db, media.id, ["https://example.com/post/1"], [])
         self.db.commit()
-        self.assertFalse(path.exists())
-        self.assertIsNone(self.db.query(MediaItem).filter(MediaItem.id == media_id).first())
+        media_id = media.id
+        library = self.root / "library"
+        with patch.object(media_service.settings, "media_dir", library):
+            kept = delete_linked_media_file(self.db, media_id)
+            self.db.commit()
+            self.assertFalse(path.exists())
+            self.assertEqual(kept.id, media_id)
+            self.assertEqual(kept.storage_kind, STORAGE_MANAGED)
+            self.assertEqual(kept.source_url, "https://example.com/post/1")
+            stored = absolute_path_for_media(kept)
+            self.assertTrue(stored.is_file())
+            self.assertEqual(stored.read_bytes(), b"keep-these-bytes")
+            self.assertTrue(str(stored.resolve()).startswith(str(library.resolve())))
 
     def test_find_missing_linked_under_synced_folders(self) -> None:
         kept = self._make_jpg("kept.jpg", b"kept-bytes")

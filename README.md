@@ -334,7 +334,7 @@ Base URL: `http://127.0.0.1:8000/api`
 | POST | `/media/{id}/rescrape` | Re-download file and metadata from primary URL |
 | GET | `/media/{id}/file` | Serve file bytes by id (linked local files; also works for managed) |
 | DELETE | `/media/{id}` | Delete library row; unlinks managed files only (linked PC files stay on disk) |
-| DELETE | `/media/{id}/local-file` | Linked only: delete PC file and library row |
+| DELETE | `/media/{id}/local-file` | Linked only: copy into the library, then delete the folder file |
 | PATCH | `/media/{id}/discard` | Soft hide/restore |
 | PUT | `/media/{id}/rating` | Set half-star rating (0.5–5) |
 | GET | `/media/duplicates` | Identical and similar groups for review |

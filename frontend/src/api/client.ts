@@ -126,7 +126,7 @@ export function deleteMedia(id: number) {
 }
 
 export function deleteLinkedMediaFile(id: number) {
-  return request<void>(`/media/${id}/local-file`, { method: 'DELETE' })
+  return request<MediaItem>(`/media/${id}/local-file`, { method: 'DELETE' })
 }
 
 export function bulkMediaAction(ids: number[], action: 'discard' | 'delete') {
