@@ -995,7 +995,9 @@ tr.drop-guide-after td {
   z-index: 1200;
   overflow: hidden;
   background: rgba(0, 0, 0, 0.92);
-  padding: 1rem;
+  padding: 0;
+  /* Parent gutter would stay reserved under overflow:hidden and inset the right edge. */
+  scrollbar-gutter: auto;
 }
 
 .modal-backdrop-expanded .modal-media-controls {
@@ -1035,8 +1037,8 @@ tr.drop-guide-after td {
   width: 100%;
   overflow: hidden;
   box-sizing: border-box;
-  /* Margin around the media; size is measured here so inner scrollbars do not resize it. */
-  padding: 16px;
+  /* Edge to edge: Fill pins the covering side to this box. */
+  padding: 0;
 }
 
 .modal-media-scroll {
@@ -1048,6 +1050,18 @@ tr.drop-guide-after td {
   align-items: center;
   justify-content: center;
   overflow: hidden;
+}
+
+/* Scroll stays available; the bar itself stays hidden so it does not inset the picture. */
+.modal-backdrop-expanded .modal-media-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.modal-backdrop-expanded .modal-media-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
 }
 
 .modal-media-scroll.modal-media-scroll-x {
@@ -1073,6 +1087,19 @@ tr.drop-guide-after td {
   max-height: 100%;
   margin-inline: auto;
   box-sizing: border-box;
+}
+
+/*
+ * Full view: the wrapper follows the image's pixel size. A max-width/height
+ * cap painted the overflow without growing the scroller, which clipped edges.
+ */
+.modal-backdrop-expanded .modal-media-scroll .content-hide-media,
+.modal-backdrop-expanded .modal-media-scroll .content-hide-media-fill {
+  width: max-content;
+  height: max-content;
+  max-width: none;
+  max-height: none;
+  margin: 0;
 }
 
 .modal-media-scroll .content-hide-media > img,

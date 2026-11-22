@@ -40,16 +40,20 @@ interface Props {
 const ZOOM_MIN = 1
 const ZOOM_MAX = 8
 const ZOOM_STEP = 0.25
-/** Keep Fill/Fit slightly inside the media viewport to avoid edge overflow flicker. */
-const VIEWPORT_FILL_SLACK = 0.98
+/** Keep Fit slightly inside the media viewport to avoid edge overflow flicker. */
+const VIEWPORT_FIT_SLACK = 0.98
 
 function clampZoom(z: number) {
-  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z / ZOOM_STEP) * ZOOM_STEP))
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z))
 }
 
-/** Round up to the zoom step so Fill always covers (never snaps back down to Fit). */
-function ceilZoom(z: number) {
-  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.ceil(z / ZOOM_STEP - 1e-9) * ZOOM_STEP))
+/** Step zoom and keep moving when the current value is between the 0.25 stops. */
+function stepZoom(z: number, delta: number) {
+  const direction = delta < 0 ? -1 : 1
+  let next = Math.round((z + delta) / ZOOM_STEP) * ZOOM_STEP
+  if (direction > 0 && next <= z + 1e-6) next = z + ZOOM_STEP
+  if (direction < 0 && next >= z - 1e-6) next = z - ZOOM_STEP
+  return clampZoom(next)
 }
 
 export default function MediaDetailModal({
@@ -76,8 +80,8 @@ export default function MediaDetailModal({
   const [rotationDeg, setRotationDeg] = useState(0)
   const [naturalSize, setNaturalSize] = useState({ w: 0, h: 0 })
   const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 })
-  const viewportRef = useRef<HTMLDivElement>(null)
   const mediaScrollRef = useRef<HTMLDivElement>(null)
+  const scrollMediaToStartRef = useRef(false)
   const modalRef = useRef<HTMLDivElement>(null)
 
   const { data: appSettings } = useQuery({
@@ -169,7 +173,9 @@ export default function MediaDetailModal({
   }, [expanded])
 
   useEffect(() => {
-    const el = viewportRef.current
+    // Measure the scroller (not the padded outer frame) so width already excludes
+    // scrollbar-gutter; Fill then matches what is actually visible.
+    const el = mediaScrollRef.current
     if (!el || !expanded) return
     const measure = (width: number, height: number) => {
       const w = Math.max(1, Math.floor(width))
@@ -182,12 +188,8 @@ export default function MediaDetailModal({
     const ro = new ResizeObserver((entries) => {
       const entry = entries[0]
       if (!entry) return
-      const box = entry.contentBoxSize?.[0]
-      if (box) {
-        measure(box.inlineSize, box.blockSize)
-        return
-      }
-      measure(entry.contentRect.width, entry.contentRect.height)
+      // clientWidth/Height exclude the classic scrollbar and stable gutter.
+      measure(el.clientWidth, el.clientHeight)
     })
     ro.observe(el)
     measure(el.clientWidth, el.clientHeight)
@@ -278,24 +280,19 @@ export default function MediaDetailModal({
   const fitScale =
     naturalSize.w > 0 && naturalSize.h > 0 && viewportSize.w > 0 && viewportSize.h > 0
       ? Math.min(viewportSize.w / naturalSize.w, viewportSize.h / naturalSize.h) *
-        VIEWPORT_FILL_SLACK
+        VIEWPORT_FIT_SLACK
       : 1
   const fillZoom =
     naturalSize.w > 0 && naturalSize.h > 0 && viewportSize.w > 0 && viewportSize.h > 0 && fitScale > 0
-      ? (Math.max(viewportSize.w / naturalSize.w, viewportSize.h / naturalSize.h) *
-          VIEWPORT_FILL_SLACK) /
-        fitScale
+      ? Math.max(viewportSize.w / naturalSize.w, viewportSize.h / naturalSize.h) / fitScale
       : 1
-  // Floor so fill/fit sizes stay inside the padded viewport.
   const displayW =
-    naturalSize.w > 0 ? Math.max(1, Math.floor(naturalSize.w * fitScale * zoom)) : undefined
+    naturalSize.w > 0 ? Math.max(1, Math.round(naturalSize.w * fitScale * zoom)) : undefined
   const displayH =
-    naturalSize.h > 0 ? Math.max(1, Math.floor(naturalSize.h * fitScale * zoom)) : undefined
-  // Pan only on axes that actually overflow (avoids a useless horizontal bar).
-  const allowScrollX =
-    expanded && displayW != null && displayW > viewportSize.w + 1
-  const allowScrollY =
-    expanded && displayH != null && displayH > viewportSize.h + 1
+    naturalSize.h > 0 ? Math.max(1, Math.round(naturalSize.h * fitScale * zoom)) : undefined
+  // Pan only on axes that actually overflow. Anything past the screen stays reachable.
+  const allowScrollX = expanded && displayW != null && displayW > viewportSize.w
+  const allowScrollY = expanded && displayH != null && displayH > viewportSize.h
   const mediaScrollClass = [
     allowScrollX ? 'modal-media-scroll-x' : '',
     allowScrollY ? 'modal-media-scroll-y' : '',
@@ -303,9 +300,23 @@ export default function MediaDetailModal({
     .filter(Boolean)
     .join(' ')
 
-  const bumpZoom = (delta: number) => setZoom((z) => clampZoom(z + delta))
+  const bumpZoom = (delta: number) => setZoom((z) => stepZoom(z, delta))
   const setFit = () => setZoom(1)
-  const setFill = () => setZoom(ceilZoom(Math.max(fillZoom, 1)))
+  const setFill = () => {
+    // Exact cover (not the next 0.25 step) so the short edges meet the screen
+    // and +/− still move away from that size.
+    scrollMediaToStartRef.current = true
+    setZoom(clampZoom(Math.max(fillZoom, 1)))
+  }
+
+  useEffect(() => {
+    if (!scrollMediaToStartRef.current) return
+    scrollMediaToStartRef.current = false
+    const scroller = mediaScrollRef.current
+    if (!scroller) return
+    scroller.scrollTop = 0
+    scroller.scrollLeft = 0
+  }, [zoom])
 
   const onMediaWheel = (e: WheelEvent) => {
     if (!expanded || !(e.ctrlKey || e.metaKey)) return
@@ -481,7 +492,7 @@ export default function MediaDetailModal({
         {/* Empty stage/backdrop closes; only the panel and control bar keep the click. */}
         <div ref={modalRef} className="modal" onClick={(e) => e.stopPropagation()}>
           <div className="modal-media-wrap">
-            <div ref={viewportRef} className="modal-media" onWheel={onMediaWheel}>
+            <div className="modal-media" onWheel={onMediaWheel}>
               <div
                 ref={mediaScrollRef}
                 className={`modal-media-scroll${mediaScrollClass ? ` ${mediaScrollClass}` : ''}`}
