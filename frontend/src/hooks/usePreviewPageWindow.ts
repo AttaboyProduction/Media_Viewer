@@ -26,8 +26,8 @@ function browserWindow(scope: string) {
   return existing
 }
 
-function urlsFor(items: Pick<MediaItem, 'id'>[], size: PreviewSize): string[] {
-  return items.map((item) => mediaPreviewUrl(item.id, size))
+function urlsFor(items: Pick<MediaItem, 'id' | 'file_size'>[], size: PreviewSize): string[] {
+  return items.map((item) => mediaPreviewUrl(item.id, size, item.file_size))
 }
 
 /**
@@ -42,9 +42,9 @@ export function usePreviewPageWindow(options: {
   sessionKey: string
   page: number
   totalPages: number
-  currentItems: Pick<MediaItem, 'id'>[] | undefined
+  currentItems: Pick<MediaItem, 'id' | 'file_size'>[] | undefined
   previewSize: PreviewSize
-  fetchPage: (page: number) => Promise<{ items: Pick<MediaItem, 'id'>[] }>
+  fetchPage: (page: number) => Promise<{ items: Pick<MediaItem, 'id' | 'file_size'>[] }>
 }) {
   const { scope, enabled, sessionKey, page, totalPages, currentItems, previewSize, fetchPage } = options
 
@@ -65,7 +65,7 @@ export function usePreviewPageWindow(options: {
         if (cancelled) return
         if (target === page) continue
         if (cache.warmPages().has(target)) continue
-        let items: Pick<MediaItem, 'id'>[]
+        let items: Pick<MediaItem, 'id' | 'file_size'>[]
         try {
           const result = await fetchPage(target)
           items = result.items

@@ -305,7 +305,11 @@ def get_media_preview(
         preview = ensure_preview(media.id, path, media.media_type or "image", size)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return FileResponse(preview, media_type="image/jpeg")
+    return FileResponse(
+        preview,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @router.get("/{media_id}/file")

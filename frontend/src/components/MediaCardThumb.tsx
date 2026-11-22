@@ -15,7 +15,7 @@ export default function MediaCardThumb({
   alt?: string
 }) {
   const [failed, setFailed] = useState(false)
-  const preview = mediaPreviewUrl(item.id, size)
+  const preview = mediaPreviewUrl(item.id, size, item.file_size)
 
   if (item.media_type === 'video' && (playVideo || failed)) {
     return (

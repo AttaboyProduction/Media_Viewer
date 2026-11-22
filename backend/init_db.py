@@ -164,6 +164,111 @@ def _backfill_known_tag_group_orders(db) -> None:
     return
 
 
+def _media_items_uses_autoincrement(conn) -> bool:
+    row = conn.execute(
+        text("SELECT sql FROM sqlite_master WHERE type='table' AND name='media_items'")
+    ).fetchone()
+    sql = (row[0] if row else "") or ""
+    return "AUTOINCREMENT" in sql.upper()
+
+
+def _ensure_media_items_autoincrement() -> None:
+    """Rebuild media_items with INTEGER PRIMARY KEY AUTOINCREMENT so deleted ids stay retired.
+
+    Plain SQLite INTEGER PRIMARY KEY reuses the largest deleted ROWID. That reused the
+    preview cache key and mixed up cards after a delete. Existing libraries are rebuilt
+    once; sqlite_sequence is seeded to the current max id.
+    """
+    inspector = inspect(engine)
+    if "media_items" not in inspector.get_table_names():
+        return
+    with engine.begin() as conn:
+        if _media_items_uses_autoincrement(conn):
+            return
+        columns = [column["name"] for column in inspector.get_columns("media_items")]
+        if "id" not in columns:
+            return
+        col_list = ", ".join(columns)
+        conn.execute(text("PRAGMA foreign_keys=OFF"))
+        conn.execute(
+            text(
+                """
+                CREATE TABLE media_items__autoinc (
+                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                    source_post_id VARCHAR(32) NOT NULL,
+                    source_url VARCHAR(512) NOT NULL,
+                    local_path VARCHAR(1024) NOT NULL,
+                    storage_kind VARCHAR(16) NOT NULL DEFAULT 'managed',
+                    media_type VARCHAR(16) NOT NULL,
+                    is_discarded BOOLEAN NOT NULL DEFAULT 0,
+                    content_hash VARCHAR(64),
+                    phash VARCHAR(64),
+                    file_size INTEGER,
+                    source_posted_at DATETIME,
+                    duplicate_of_id INTEGER,
+                    duplicate_kind VARCHAR(16),
+                    scraped_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE (source_post_id)
+                )
+                """
+            )
+        )
+        # Only copy columns that already exist on the live table.
+        preferred = [
+            "id",
+            "source_post_id",
+            "source_url",
+            "local_path",
+            "storage_kind",
+            "media_type",
+            "is_discarded",
+            "content_hash",
+            "phash",
+            "file_size",
+            "source_posted_at",
+            "duplicate_of_id",
+            "duplicate_kind",
+            "scraped_at",
+        ]
+        copy_cols = [name for name in preferred if name in columns]
+        listed = ", ".join(copy_cols)
+        conn.execute(
+            text(
+                f"INSERT INTO media_items__autoinc ({listed}) "
+                f"SELECT {listed} FROM media_items"
+            )
+        )
+        max_id = conn.execute(text("SELECT COALESCE(MAX(id), 0) FROM media_items__autoinc")).scalar()
+        conn.execute(text("DROP TABLE media_items"))
+        conn.execute(text("ALTER TABLE media_items__autoinc RENAME TO media_items"))
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_media_items_source_post_id "
+                "ON media_items (source_post_id)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_media_items_content_hash "
+                "ON media_items (content_hash)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_media_items_duplicate_of_id "
+                "ON media_items (duplicate_of_id)"
+            )
+        )
+        seq = int(max_id or 0)
+        conn.execute(text("DELETE FROM sqlite_sequence WHERE name='media_items'"))
+        if seq > 0:
+            conn.execute(
+                text("INSERT INTO sqlite_sequence(name, seq) VALUES ('media_items', :seq)"),
+                {"seq": seq},
+            )
+        conn.execute(text("PRAGMA foreign_keys=ON"))
+
+
 def _ensure_ratings_score_float() -> None:
     """Migrate ratings.score INTEGER → REAL so half-star values are not truncated."""
     inspector = inspect(engine)
@@ -224,6 +329,7 @@ def _clear_stale_duplicate_marks_on_discarded(db) -> None:
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_media_item_columns()
+    _ensure_media_items_autoincrement()
     _ensure_tag_group_columns()
     _ensure_tag_columns()
     _ensure_ratings_score_float()

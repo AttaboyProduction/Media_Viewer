@@ -10,6 +10,12 @@ export function previewSizeForTile(tilePx: number): PreviewSize {
   return 'large'
 }
 
-export function mediaPreviewUrl(id: number, size: PreviewSize): string {
-  return `/api/media/${id}/preview?size=${size}`
+export function mediaPreviewUrl(
+  id: number,
+  size: PreviewSize,
+  fileSize?: number | null,
+): string {
+  const base = `/api/media/${id}/preview?size=${size}`
+  if (fileSize == null) return base
+  return `${base}&v=${fileSize}`
 }

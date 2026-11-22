@@ -25,10 +25,13 @@ from backend.app.services.local_media import (
 )
 from backend.app.services.media_service import (
     absolute_path_for_media,
+    build_media_summary,
     delete_linked_media_file,
     delete_media,
+    list_media_source_urls,
     media_file_url_for,
     media_storage_kind,
+    update_media_urls,
 )
 
 
@@ -98,6 +101,12 @@ class LocalImportDbTests(unittest.TestCase):
             stored = absolute_path_for_media(media)
             self.assertTrue(stored.is_file())
             self.assertEqual(stored.read_bytes(), b"copy-these-bytes")
+            summary = build_media_summary(self.db, media)
+            self.assertEqual(summary.source_urls, [])
+            update_media_urls(self.db, media.id, ["https://example.com/post/9"], [])
+            self.db.commit()
+            self.db.refresh(media)
+            self.assertEqual(list_media_source_urls(media), ["https://example.com/post/9"])
         self.assertEqual(path.read_bytes(), b"copy-these-bytes")
 
     def test_link_one_file_inserts_linked_row(self) -> None:
@@ -109,6 +118,9 @@ class LocalImportDbTests(unittest.TestCase):
         self.assertEqual(media.storage_kind, STORAGE_LINKED)
         self.assertEqual(Path(media.local_path), path.resolve())
         self.assertTrue(media.source_url.startswith("file:"))
+        summary = build_media_summary(self.db, media)
+        self.assertEqual(summary.source_urls, [])
+        self.assertEqual(summary.source_url, "")
         self.assertEqual(media_file_url_for(media), f"/api/media/{media.id}/file")
         self.assertEqual(absolute_path_for_media(media), path.resolve())
 

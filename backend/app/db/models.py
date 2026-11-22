@@ -101,6 +101,8 @@ class TagAlias(Base):
 
 class MediaItem(Base):
     __tablename__ = "media_items"
+    # SQLite without AUTOINCREMENT reuses the highest deleted id; keep media ids unique forever.
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source_post_id: Mapped[str] = mapped_column(String(32), unique=True, nullable=False, index=True)

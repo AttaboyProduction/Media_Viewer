@@ -138,6 +138,11 @@ def list_media_source_urls(media: MediaItem) -> list[str]:
     return _dedupe_urls(media.source_url, (row.url for row in media.source_url_rows))
 
 
+def visible_source_urls(primary: str | None, extras: Iterable[str]) -> list[str]:
+    """Source URLs for the viewer. A local file path is not a source URL."""
+    return [url for url in _dedupe_urls(primary, extras) if not url.lower().startswith("file:")]
+
+
 def build_media_tag_out(db: Session, link: MediaTag) -> MediaTagOut:
     tag = resolve_canonical_tag(db, link.tag)
     groups = [
@@ -253,6 +258,7 @@ def build_media_summaries(db: Session, items: Sequence[MediaItem]) -> list[Media
     summaries: list[MediaSummary] = []
     for media in items:
         file_url = media_file_url_for(media)
+        shown_urls = visible_source_urls(media.source_url, extra_urls.get(media.id, []))
         tag_outs: list[MediaTagOut] = []
         for link in links_by_media.get(media.id, []):
             canon = canonical.get(link.tag_id, link.tag)
@@ -267,8 +273,8 @@ def build_media_summaries(db: Session, items: Sequence[MediaItem]) -> list[Media
             MediaSummary(
                 id=media.id,
                 source_post_id=media.source_post_id,
-                source_url=media.source_url,
-                source_urls=_dedupe_urls(media.source_url, extra_urls.get(media.id, [])),
+                source_url=shown_urls[0] if shown_urls else "",
+                source_urls=shown_urls,
                 media_type=media.media_type,
                 storage_kind=media_storage_kind(media),
                 is_discarded=media.is_discarded,
@@ -359,12 +365,22 @@ def update_media_urls(
             if url not in remaining:
                 remaining.append(url)
 
-    if media_storage_kind(media) == STORAGE_LINKED:
-        http_urls = [url for url in remaining if not url.lower().startswith("file:")]
-        if http_urls:
-            remaining = http_urls
-        else:
-            remaining = [file_uri_for_path(Path(media.local_path))]
+    http_urls = [url for url in remaining if not url.lower().startswith("file:")]
+    file_urls = [url for url in remaining if url.lower().startswith("file:")]
+    is_local = (
+        media_storage_kind(media) == STORAGE_LINKED
+        or str(media.source_post_id).startswith("loc_")
+        or (media.source_url or "").lower().startswith("file:")
+    )
+    if http_urls:
+        remaining = http_urls
+    elif is_local:
+        placeholder = file_urls[0] if file_urls else None
+        if placeholder is None and (media.source_url or "").lower().startswith("file:"):
+            placeholder = media.source_url
+        if placeholder is None and media_storage_kind(media) == STORAGE_LINKED:
+            placeholder = file_uri_for_path(Path(media.local_path))
+        remaining = [placeholder] if placeholder else [""]
 
     if not remaining:
         raise ValueError("At least one source URL is required")
@@ -422,7 +438,7 @@ def refresh_media_tags(db: Session, media_id: int) -> MediaItem:
     if not media:
         raise ValueError("Media not found")
 
-    urls = list_media_source_urls(media)
+    urls = visible_source_urls(media.source_url, (row.url for row in media.source_url_rows))
     if not urls:
         raise ValueError("Media has no source URLs")
 
@@ -462,15 +478,28 @@ def rescrape_media(db: Session, media_id: int) -> MediaItem:
         download_media,
     )
 
-    media = db.query(MediaItem).filter(MediaItem.id == media_id).first()
+    media = (
+        db.query(MediaItem)
+        .options(joinedload(MediaItem.source_url_rows))
+        .filter(MediaItem.id == media_id)
+        .first()
+    )
     if not media:
         raise ValueError("Media not found")
-    if not media.source_url:
+    page_url = next(
+        (
+            url
+            for url in [media.source_url, *(row.url for row in media.source_url_rows)]
+            if url and not url.lower().startswith("file:")
+        ),
+        "",
+    )
+    if not page_url:
         raise ValueError("Media has no source URL")
 
     with PlaywrightClient() as client:
         page = client.new_page()
-        post = scrape_post(page, media.source_url)
+        post = scrape_post(page, page_url)
     if not post:
         raise RuntimeError("Could not scrape post from source URL")
 
@@ -548,6 +577,9 @@ def _delete_media_rows(db: Session, media: MediaItem) -> Path | None:
         synchronize_session=False,
     )
     db.delete(media)
+    from backend.app.services.preview_cache import delete_previews
+
+    delete_previews(media.id)
     return path if kind == STORAGE_MANAGED else None
 
 

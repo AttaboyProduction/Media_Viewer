@@ -355,9 +355,9 @@ export default function MediaDetailModal({
     deleteLocalFileMutation.isPending ||
     refreshTagsMutation.isPending ||
     urlsMutation.isPending
-  const sourceUrls = (
-    media.source_urls && media.source_urls.length > 0 ? media.source_urls : [media.source_url]
-  ).filter((url) => !isLinked || !url.toLowerCase().startsWith('file:'))
+  const sourceUrls = (media.source_urls ?? (media.source_url ? [media.source_url] : [])).filter(
+    (url) => url && !url.toLowerCase().startsWith('file:'),
+  )
   const sourceNumber = (() => {
     if (!media.source_post_id.startsWith('loc_')) return media.source_post_id
     for (const url of sourceUrls) {
@@ -796,7 +796,7 @@ export default function MediaDetailModal({
           </div>
         )}
         <div className="actions">
-          {scrapeEnabled && (!isLinked || sourceUrls.length > 0) && (
+          {scrapeEnabled && sourceUrls.length > 0 && (
             <>
               <button
                 type="button"

@@ -49,13 +49,40 @@ def preview_file(media_id: int, size: str) -> Path:
     return settings.data_dir / "previews" / size / f"{media_id}.jpg"
 
 
+def _stamp_file(cache: Path) -> Path:
+    return cache.with_suffix(".stamp")
+
+
+def _source_stamp(source: Path) -> str:
+    stat = source.stat()
+    return f"{stat.st_mtime_ns} {stat.st_size}"
+
+
 def _fresh(cache: Path, source: Path) -> bool:
-    if not cache.is_file():
+    """True when this cache was built from this exact source file.
+
+    Comparing the cache's own mtime to the source is not enough: a copied local
+    file keeps its original (often older) timestamp, and a deleted media id can
+    be reused. The stamp records the source size and timestamp from the build.
+    """
+    stamp = _stamp_file(cache)
+    if not cache.is_file() or not stamp.is_file():
         return False
     try:
-        return cache.stat().st_mtime >= source.stat().st_mtime
+        return stamp.read_text(encoding="ascii") == _source_stamp(source)
     except OSError:
         return False
+
+
+def delete_previews(media_id: int) -> None:
+    """Remove every cached card for this id (all sizes)."""
+    for size in PREVIEW_EDGES:
+        cache = preview_file(media_id, size)
+        for path in (cache, _stamp_file(cache), cache.with_suffix(".jpg.part")):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _cover_square(image: Image.Image, edge: int) -> Image.Image:
@@ -132,4 +159,5 @@ def ensure_preview(media_id: int, source: Path, media_type: str, size: str = "no
         temporary = dest.with_suffix(".jpg.part")
         temporary.write_bytes(payload.getvalue())
         temporary.replace(dest)
+        _stamp_file(dest).write_text(_source_stamp(source), encoding="ascii")
         return dest

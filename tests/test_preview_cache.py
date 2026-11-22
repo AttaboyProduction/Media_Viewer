@@ -53,3 +53,20 @@ class PreviewCacheTests(unittest.TestCase):
     def test_unknown_size_is_rejected(self) -> None:
         with self.assertRaises(ValueError):
             preview_cache.ensure_preview(1, self._source, "image", "huge")
+
+    def test_older_replacement_rebuilds_the_preview(self) -> None:
+        import os
+
+        first = preview_cache.ensure_preview(7, self._source, "image", "compact")
+        before = first.read_bytes()
+        Image.new("RGB", (30, 30), (0, 180, 0)).save(self._source)
+        past = time.time() - 3600
+        os.utime(self._source, (past, past))
+        second = preview_cache.ensure_preview(7, self._source, "image", "compact")
+        self.assertNotEqual(second.read_bytes(), before)
+
+    def test_delete_previews_removes_the_cache(self) -> None:
+        cache = preview_cache.ensure_preview(7, self._source, "image", "normal")
+        preview_cache.delete_previews(7)
+        self.assertFalse(cache.exists())
+        self.assertFalse(cache.with_suffix(".stamp").exists())
