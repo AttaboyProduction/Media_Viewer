@@ -11,6 +11,7 @@ import { SettingsNumberInput } from '../components/SettingsNumberInput'
 import { SettingsOption } from '../components/SettingsOption'
 import { SettingsPageSizeListEditor } from '../components/SettingsPageSizeListEditor'
 import { useSaveFeedback, withSavedFeedback } from '../context/SaveFeedbackContext'
+import { useDevicePref } from '../hooks/useDevicePref'
 
 import { applyDisplayMode, syncDisplayModeFromServer } from '../utils/displayMode'
 
@@ -48,6 +49,14 @@ export default function AppSettingsPage() {
   })
 
   const settings = { ...DEFAULT_APP_SETTINGS, ...data }
+  const settingsReady = Boolean(data)
+  const [tagLayout, setTagLayout] = useDevicePref('viewer_tag_layout', {
+    ready: settingsReady,
+  })
+  const [gridThumbnailSize, setGridThumbnailSize] = useDevicePref('grid_thumbnail_size', {
+    ready: settingsReady,
+    seed: data?.grid_thumbnail_size,
+  })
 
   const mutation = useMutation({
     mutationFn: patchAppSettings,
@@ -68,6 +77,11 @@ export default function AppSettingsPage() {
 
   const save = async (patch: Partial<AppSettings>) => {
     await withSavedFeedback(notifySaved, () => mutation.mutateAsync(patch))
+  }
+
+  const saveOnThisDevice = (apply: () => void) => {
+    apply()
+    notifySaved()
   }
 
   const recalc = useMutation({
@@ -234,7 +248,7 @@ export default function AppSettingsPage() {
         </label>
         <SettingsPageSizeListEditor
           label="Tags per page options"
-          hint="Numbers shown in the Tags page dropdown. All is always available and is not listed here."
+          hint="Numbers shown in the Tags page dropdown. All is always available and is not listed here. The live size is chosen on Tags and saved on that device only."
           values={settings.tags_page_sizes}
           min={TAGS_PAGE_SIZE_MIN}
           max={TAGS_PAGE_SIZE_MAX}
@@ -310,18 +324,18 @@ export default function AppSettingsPage() {
               <h3 className="settings-subpanel-title">UI</h3>
               <SettingsOption
                 label="Tag layout"
-                hint="Chips keeps the tag filter above the grid. Sidebar lists current-page tags on the left."
+                hint="Chips keeps the tag filter above the grid. Sidebar lists current-page tags on the left. Saved on this device only."
               >
                 <select
-                  value={settings.viewer_tag_layout}
+                  value={tagLayout}
                   onChange={(e) =>
-                    save({
-                      viewer_tag_layout: e.target.value as AppSettings['viewer_tag_layout'],
-                    })
+                    saveOnThisDevice(() =>
+                      setTagLayout(e.target.value as AppSettings['viewer_tag_layout']),
+                    )
                   }
                 >
-                  <option value="chips">Chips above the grid</option>
                   <option value="sidebar">Left sidebar</option>
+                  <option value="chips">Chips above the grid</option>
                 </select>
               </SettingsOption>
             </div>
@@ -349,13 +363,18 @@ export default function AppSettingsPage() {
                   Include discarded media by default
                 </label>
               </SettingsOption>
-              <SettingsOption label="Grid thumbnail size">
+              <SettingsOption
+                label="Grid thumbnail size"
+                hint="Saved on this device only."
+              >
                 <select
-                  value={settings.grid_thumbnail_size}
+                  value={gridThumbnailSize}
                   onChange={(e) =>
-                    save({
-                      grid_thumbnail_size: e.target.value as AppSettings['grid_thumbnail_size'],
-                    })
+                    saveOnThisDevice(() =>
+                      setGridThumbnailSize(
+                        e.target.value as AppSettings['grid_thumbnail_size'],
+                      ),
+                    )
                   }
                 >
                   <option value="compact">Compact</option>
@@ -417,7 +436,7 @@ export default function AppSettingsPage() {
               </SettingsOption>
               <SettingsPageSizeListEditor
                 label="Items per page options"
-                hint="Numbers shown in the Viewer page-size dropdown. The live size is still chosen on the Viewer."
+                hint="Numbers shown in the Viewer page-size dropdown. The live size is chosen on the Viewer and saved on that device only."
                 values={settings.viewer_page_sizes}
                 min={VIEWER_PAGE_SIZE_MIN}
                 max={VIEWER_PAGE_SIZE_MAX}

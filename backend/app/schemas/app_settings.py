@@ -39,7 +39,7 @@ class AppSettingsOut(BaseModel):
     tags_sort_mode: Literal["name", "order"] = "order"
     tags_auto_order_mode: Literal["end", "by_name"] = "by_name"
     tags_select_display_mode: Literal["highlight", "front", "panel"] = "panel"
-    viewer_tag_layout: Literal["chips", "sidebar"] = "chips"
+    viewer_tag_layout: Literal["chips", "sidebar"] = "sidebar"
     launch_on_startup: bool = False
     start_minimized: bool = True
     viewer_media_numbering: Literal["source", "db"] = "source"

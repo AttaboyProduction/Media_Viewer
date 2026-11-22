@@ -137,7 +137,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   tags_sort_mode: 'order',
   tags_auto_order_mode: 'by_name',
   tags_select_display_mode: 'panel',
-  viewer_tag_layout: 'chips',
+  viewer_tag_layout: 'sidebar',
   launch_on_startup: false,
   start_minimized: true,
   viewer_media_numbering: 'source',

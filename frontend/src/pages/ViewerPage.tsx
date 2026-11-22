@@ -7,6 +7,7 @@ import { useMediaMultiSelect } from '../hooks/useMediaMultiSelect'
 import { usePageClamp } from '../hooks/usePageClamp'
 import { usePreviewPageWindow } from '../hooks/usePreviewPageWindow'
 import { useSuppressPageSwitchDim } from '../hooks/useSuppressPageSwitchDim'
+import { useDevicePref } from '../hooks/useDevicePref'
 import { usePersistedPageSize } from '../hooks/usePersistedPageSize'
 import ContentHideMedia from '../components/ContentHideMedia'
 import MediaDetailModal from '../components/MediaDetailModal'
@@ -180,6 +181,12 @@ export default function ViewerPage() {
     fallback: DEFAULT_APP_SETTINGS.viewer_page_size,
     onResetPage: resetBrowseSession,
     allowedSizes: viewerPageSizeOptions,
+  })
+  // Tag layout defaults to sidebar on each new device (not the old shared chips value).
+  const [tagLayout] = useDevicePref('viewer_tag_layout', { ready: Boolean(appSettings) })
+  const [gridThumbnailSize] = useDevicePref('grid_thumbnail_size', {
+    ready: Boolean(appSettings),
+    seed: appSettings?.grid_thumbnail_size,
   })
 
   const [gridEl, setGridEl] = useState<HTMLDivElement | null>(null)
@@ -469,11 +476,11 @@ export default function ViewerPage() {
     )
   }
 
-  const sidebarLayout = (prefs.viewer_tag_layout ?? 'chips') === 'sidebar'
+  const sidebarLayout = tagLayout === 'sidebar'
   const showLoading = !mediaQueryEnabled || isLoading || (isFetching && !data)
   usePageClamp(page, data ? totalPages : page, goToPage)
   const dimGrid = useSuppressPageSwitchDim(page, data?.page, isFetching)
-  const gridClass = `media-grid media-grid-${prefs.grid_thumbnail_size}${
+  const gridClass = `media-grid media-grid-${gridThumbnailSize}${
     dimGrid ? ' media-grid-refreshing' : ''
   }${selectMode ? ' recent-scrape-selecting' : ''}`
   const itemCount = data?.items.length ?? 0
@@ -481,7 +488,7 @@ export default function ViewerPage() {
     gridWidth > 0 && pageSize !== null && itemCount > 0
       ? columnCountForViewerGrid({
           width: gridWidth,
-          minTile: TILE_MIN[prefs.grid_thumbnail_size],
+          minTile: TILE_MIN[gridThumbnailSize],
           gap: gridGap,
           pageSize,
           availableHeight: gridAvailHeight,
@@ -490,7 +497,7 @@ export default function ViewerPage() {
   const tilePx =
     gridColumns && gridWidth > 0
       ? (gridWidth - gridGap * (gridColumns - 1)) / gridColumns
-      : TILE_MIN[prefs.grid_thumbnail_size]
+      : TILE_MIN[gridThumbnailSize]
   const previewSize = previewSizeForTile(tilePx)
   const previewSessionKey = useMemo(
     () =>

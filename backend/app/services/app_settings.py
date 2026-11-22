@@ -45,8 +45,8 @@ _DEFAULTS: dict = {
     "tags_auto_order_mode": "by_name",
     # highlight | front | panel — how selected tags/groups show in pickers and viewer filter.
     "tags_select_display_mode": "panel",
-    # chips = filter chips above the grid; sidebar = left tag column on the viewer.
-    "viewer_tag_layout": "chips",
+    # chips = filter chips above the grid; sidebar = left tag column on the viewer (default).
+    "viewer_tag_layout": "sidebar",
     "launch_on_startup": False,
     "start_minimized": True,
     "viewer_media_numbering": "source",

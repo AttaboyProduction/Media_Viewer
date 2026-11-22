@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { patchAppSettings } from '../api/client'
-import type { AppSettings } from '../types/appSettings'
+import { readDevicePref, writeDevicePref } from '../utils/devicePrefs'
 
 export type PageSizeSettingKey =
   | 'viewer_page_size'
@@ -9,11 +7,12 @@ export type PageSizeSettingKey =
   | 'tags_page_size'
 
 interface Options {
-  settings: AppSettings | undefined
+  /** Shared app settings (used once to seed this browser if nothing is stored yet). */
+  settings: { [K in PageSizeSettingKey]?: number } | undefined
   settingKey: PageSizeSettingKey
   fallback: number
   onResetPage: () => void
-  /** When the option list shrinks, re-sync from settings if local value is gone. */
+  /** When the option list shrinks, re-sync if the local value is gone. */
   allowedSizes?: readonly number[]
 }
 
@@ -24,33 +23,34 @@ export function usePersistedPageSize({
   onResetPage,
   allowedSizes,
 }: Options) {
-  const queryClient = useQueryClient()
   const applied = useRef(false)
   const [pageSize, setPageSize] = useState<number | null>(null)
 
   useEffect(() => {
-    if (!settings) return
-    const fromSettings = settings[settingKey] ?? fallback
-    if (!applied.current) {
-      applied.current = true
-      setPageSize(fromSettings)
+    if (!settings || applied.current) return
+    applied.current = true
+    const seed = settings[settingKey]
+    const stored = readDevicePref(
+      settingKey,
+      fallback,
+      typeof seed === 'number' ? seed : null,
+    )
+    setPageSize(typeof stored === 'number' ? stored : fallback)
+  }, [fallback, settingKey, settings])
+
+  useEffect(() => {
+    if (
+      pageSize === null ||
+      !allowedSizes ||
+      allowedSizes.length === 0 ||
+      allowedSizes.includes(pageSize)
+    ) {
       return
     }
-    if (
-      pageSize !== null &&
-      allowedSizes &&
-      allowedSizes.length > 0 &&
-      !allowedSizes.includes(pageSize) &&
-      fromSettings !== pageSize
-    ) {
-      setPageSize(fromSettings)
-    }
-  }, [allowedSizes, fallback, pageSize, settingKey, settings])
-
-  const { mutate, isPending } = useMutation({
-    mutationFn: (size: number) => patchAppSettings({ [settingKey]: size }),
-    onSuccess: (next) => queryClient.setQueryData(['app-settings'], next),
-  })
+    const next = allowedSizes.includes(fallback) ? fallback : allowedSizes[0]
+    setPageSize(next)
+    writeDevicePref(settingKey, next)
+  }, [allowedSizes, fallback, pageSize, settingKey])
 
   const onResetPageRef = useRef(onResetPage)
   onResetPageRef.current = onResetPage
@@ -59,16 +59,16 @@ export function usePersistedPageSize({
     (size: number) => {
       if (pageSize === null || size === pageSize) return
       setPageSize(size)
+      writeDevicePref(settingKey, size)
       onResetPageRef.current()
-      mutate(size)
     },
-    [mutate, pageSize],
+    [pageSize, settingKey],
   )
 
   return {
     pageSize,
     ready: pageSize !== null,
-    pending: isPending,
+    pending: false,
     changePageSize,
   }
 }
