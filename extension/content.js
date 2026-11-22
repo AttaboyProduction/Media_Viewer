@@ -15,17 +15,34 @@
           page: { code: "Home", key: "Home", alt: null },
         };
 
+  function modsToken(part) {
+    if (typeof ScrapHotkeySettings !== "undefined" && ScrapHotkeySettings.modsToken) {
+      return ScrapHotkeySettings.modsToken(part);
+    }
+    if (!part) return "";
+    const bits = [];
+    if (part.ctrl) bits.push("ctrl");
+    if (part.shift) bits.push("shift");
+    if (part.altMod) bits.push("alt");
+    if (part.meta) bits.push("meta");
+    return bits.join("+");
+  }
+
   function applyHotkeyDataset() {
     const root = document.documentElement;
     if (!root) return;
     root.dataset.scrapHotkeyFileCode = hotkeys.file.code || "";
     root.dataset.scrapHotkeyFileKey = hotkeys.file.key || "";
+    root.dataset.scrapHotkeyFileMods = modsToken(hotkeys.file);
     root.dataset.scrapHotkeyFileAltCode = (hotkeys.file.alt && hotkeys.file.alt.code) || "";
     root.dataset.scrapHotkeyFileAltKey = (hotkeys.file.alt && hotkeys.file.alt.key) || "";
+    root.dataset.scrapHotkeyFileAltMods = modsToken(hotkeys.file.alt);
     root.dataset.scrapHotkeyPageCode = hotkeys.page.code || "";
     root.dataset.scrapHotkeyPageKey = hotkeys.page.key || "";
+    root.dataset.scrapHotkeyPageMods = modsToken(hotkeys.page);
     root.dataset.scrapHotkeyPageAltCode = (hotkeys.page.alt && hotkeys.page.alt.code) || "";
     root.dataset.scrapHotkeyPageAltKey = (hotkeys.page.alt && hotkeys.page.alt.key) || "";
+    root.dataset.scrapHotkeyPageAltMods = modsToken(hotkeys.page.alt);
   }
 
   function partIsMouse(part) {
@@ -201,15 +218,37 @@
     }, 1600);
   }
 
+  function partModsMatch(event, part) {
+    if (typeof ScrapHotkeySettings !== "undefined" && ScrapHotkeySettings.modifiersMatchEvent) {
+      return ScrapHotkeySettings.modifiersMatchEvent(event, part);
+    }
+    return (
+      Boolean(event.ctrlKey) === Boolean(part && part.ctrl) &&
+      Boolean(event.shiftKey) === Boolean(part && part.shift) &&
+      Boolean(event.altKey) === Boolean(part && part.altMod) &&
+      Boolean(event.metaKey) === Boolean(part && part.meta)
+    );
+  }
+
   function matchesBinding(event, binding) {
     if (typeof ScrapHotkeySettings !== "undefined" && ScrapHotkeySettings.eventMatches) {
       return ScrapHotkeySettings.eventMatches(event, binding);
     }
-    if (!binding || event.ctrlKey || event.altKey || event.metaKey || event.repeat) return false;
-    const parts = [{ code: binding.code, key: binding.key, button: binding.button }];
-    if (binding.alt) parts.push(binding.alt);
+    if (!binding || event.repeat) return false;
+    const primary = {
+      code: binding.code,
+      key: binding.key,
+      button: binding.button,
+      ctrl: binding.ctrl,
+      shift: binding.shift,
+      altMod: binding.altMod,
+      meta: binding.meta,
+    };
+    const parts = [primary];
+    if (binding.alt && typeof binding.alt === "object") parts.push(binding.alt);
     const isMouse = typeof event.button === "number" && (!event.type || event.type.indexOf("key") !== 0);
     for (const part of parts) {
+      if (!partModsMatch(event, part)) continue;
       if (partIsMouse(part)) {
         if (!isMouse) continue;
         const m = /^Mouse(\d+)$/i.exec(part.code || part.key || "");
@@ -284,10 +323,11 @@
     const isMouse =
       (event.type === "mousedown" || event.type === "auxclick") && typeof event.button === "number";
     if (event.type !== "keydown" && !isMouse) return;
-    // In a text field the letter must type; skip the extension for that press.
+    // In a text field plain letters must type; Ctrl/Alt/Meta chords still run.
     // Video/audio focus (and hidden player traps) still fire shortcuts.
     // Mouse shortcuts still run over media (skip typing check for pure mouse).
-    if (!isMouse && shouldSkipHotkey(event)) return;
+    const commandMod = Boolean(event.ctrlKey || event.altKey || event.metaKey);
+    if (!isMouse && shouldSkipHotkey(event) && !commandMod) return;
     const pressedFile = matchesBinding(event, hotkeys.file);
     const pressedPage = matchesBinding(event, hotkeys.page);
     if (!pressedFile && !pressedPage) return;
@@ -297,13 +337,14 @@
     ) {
       return;
     }
-    // Mouse + browser nav keys cancel defaults; normal keys still type / keep their job.
+    // Mouse, browser-nav keys, and modifier chords cancel defaults; bare keys keep their job.
     const navKey =
       event.code === "BrowserBack" ||
       event.code === "BrowserForward" ||
       event.key === "BrowserBack" ||
       event.key === "BrowserForward";
-    if (isMouse || navKey) {
+    const chord = Boolean(event.ctrlKey || event.shiftKey || event.altKey || event.metaKey);
+    if (isMouse || navKey || chord) {
       event.preventDefault();
       event.stopPropagation();
     }

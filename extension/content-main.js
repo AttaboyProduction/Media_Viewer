@@ -1,7 +1,7 @@
 // Page world, so shortcuts still arrive when a video player is focused.
 // The isolated content script does the actual queue.
-// Keyboard: never preventDefault — the key keeps its normal function.
-// Mouse bindings: preventDefault so back/forward / context menu do not navigate.
+// Bare keyboard bindings: never preventDefault — the key keeps its normal function.
+// Mouse bindings and Ctrl/Shift/Alt/Meta chords: preventDefault so the browser does not also handle them.
 (function () {
   if (window.__scrapDownloadHotkeysMain) return;
   window.__scrapDownloadHotkeysMain = true;
@@ -11,8 +11,33 @@
     return m ? Number(m[1]) : null;
   }
 
-  function matchPart(event, code, keyName) {
+  function parseMods(token) {
+    const parts = String(token || "")
+      .toLowerCase()
+      .split("+")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    return {
+      ctrl: parts.indexOf("ctrl") >= 0,
+      shift: parts.indexOf("shift") >= 0,
+      alt: parts.indexOf("alt") >= 0,
+      meta: parts.indexOf("meta") >= 0,
+    };
+  }
+
+  function modsMatch(event, token) {
+    const want = parseMods(token);
+    return (
+      Boolean(event.ctrlKey) === want.ctrl &&
+      Boolean(event.shiftKey) === want.shift &&
+      Boolean(event.altKey) === want.alt &&
+      Boolean(event.metaKey) === want.meta
+    );
+  }
+
+  function matchPart(event, code, keyName, modsToken) {
     if (!code && !keyName) return false;
+    if (!modsMatch(event, modsToken)) return false;
     const mouseBtn = mouseButtonFromCode(code) ?? mouseButtonFromCode(keyName);
     if (mouseBtn != null) {
       if (typeof event.button !== "number") return false;
@@ -115,14 +140,28 @@
     const root = document.documentElement;
     const fileCode = (root && root.dataset.scrapHotkeyFileCode) || "Insert";
     const fileKey = (root && root.dataset.scrapHotkeyFileKey) || "Insert";
+    const fileMods = (root && root.dataset.scrapHotkeyFileMods) || "";
     const fileAltCode = (root && root.dataset.scrapHotkeyFileAltCode) || "";
     const fileAltKey = (root && root.dataset.scrapHotkeyFileAltKey) || "";
+    const fileAltMods = (root && root.dataset.scrapHotkeyFileAltMods) || "";
     const pageCode = (root && root.dataset.scrapHotkeyPageCode) || "Home";
     const pageKey = (root && root.dataset.scrapHotkeyPageKey) || "Home";
+    const pageMods = (root && root.dataset.scrapHotkeyPageMods) || "";
     const pageAltCode = (root && root.dataset.scrapHotkeyPageAltCode) || "";
     const pageAltKey = (root && root.dataset.scrapHotkeyPageAltKey) || "";
-    if (matchPart(event, fileCode, fileKey) || matchPart(event, fileAltCode, fileAltKey)) return "f";
-    if (matchPart(event, pageCode, pageKey) || matchPart(event, pageAltCode, pageAltKey)) return "p";
+    const pageAltMods = (root && root.dataset.scrapHotkeyPageAltMods) || "";
+    if (
+      matchPart(event, fileCode, fileKey, fileMods) ||
+      matchPart(event, fileAltCode, fileAltKey, fileAltMods)
+    ) {
+      return "f";
+    }
+    if (
+      matchPart(event, pageCode, pageKey, pageMods) ||
+      matchPart(event, pageAltCode, pageAltKey, pageAltMods)
+    ) {
+      return "p";
+    }
     return "";
   }
 
@@ -143,11 +182,10 @@
     const isMouse =
       (event.type === "mousedown" || event.type === "auxclick") && typeof event.button === "number";
     if (event.type === "keydown") {
-      if (event.repeat || event.ctrlKey || event.altKey || event.metaKey) return;
-      if (shouldSkipHotkey(event)) return;
-    } else if (isMouse) {
-      if (event.ctrlKey || event.altKey || event.metaKey) return;
-    } else {
+      if (event.repeat) return;
+      const commandMod = Boolean(event.ctrlKey || event.altKey || event.metaKey);
+      if (shouldSkipHotkey(event) && !commandMod) return;
+    } else if (!isMouse) {
       return;
     }
 
@@ -160,7 +198,8 @@
       event.code === "BrowserForward" ||
       event.key === "BrowserBack" ||
       event.key === "BrowserForward";
-    if (isMouse || navKey) {
+    const chord = Boolean(event.ctrlKey || event.shiftKey || event.altKey || event.metaKey);
+    if (isMouse || navKey || chord) {
       event.preventDefault();
       event.stopPropagation();
     }

@@ -55,24 +55,31 @@ function startCapture(which) {
     pageAlt: "second page",
   };
   setStatus(
-    `Press any key or mouse button for the ${labels[which]} shortcut (Esc cancels). Side buttons and uncommon keys work.`
+    `Press a key or mouse button for the ${labels[which]} shortcut (Esc cancels). Hold Ctrl / Shift / Alt (or Meta) with it if you want a chord.`
   );
   render();
+}
+
+function clonePart(part) {
+  if (!part) return null;
+  const out = { code: part.code, key: part.key };
+  if (typeof part.button === "number") out.button = part.button;
+  if (part.ctrl) out.ctrl = true;
+  if (part.shift) out.shift = true;
+  if (part.altMod) out.altMod = true;
+  if (part.meta) out.meta = true;
+  return out;
 }
 
 function cloneActions() {
   return {
     file: {
-      code: hotkeys.file.code,
-      key: hotkeys.file.key,
-      button: hotkeys.file.button,
-      alt: hotkeys.file.alt ? { ...hotkeys.file.alt } : null,
+      ...clonePart(hotkeys.file),
+      alt: clonePart(hotkeys.file.alt),
     },
     page: {
-      code: hotkeys.page.code,
-      key: hotkeys.page.key,
-      button: hotkeys.page.button,
-      alt: hotkeys.page.alt ? { ...hotkeys.page.alt } : null,
+      ...clonePart(hotkeys.page),
+      alt: clonePart(hotkeys.page.alt),
     },
   };
 }
@@ -89,11 +96,9 @@ function isAltSlot(which) {
 function stripBinding(action, binding) {
   if (!action || !binding) return action;
   const next = {
-    code: action.code,
-    key: action.key,
-    alt: action.alt ? { ...action.alt } : null,
+    ...clonePart(action),
+    alt: clonePart(action.alt),
   };
-  if (typeof action.button === "number") next.button = action.button;
   if (next.alt && ScrapHotkeySettings.sameBinding(binding, next.alt)) next.alt = null;
   return next;
 }
@@ -122,17 +127,11 @@ function applyCapturedBinding(which, binding) {
         if (ScrapHotkeySettings.sameBinding(binding, next[other])) {
           // Taking the other primary — swap primaries when setting a primary.
           if (!isAltSlot(which)) {
-            const stolen = {
-              code: next[other].code,
-              key: next[other].key,
-            };
-            if (typeof next[other].button === "number") stolen.button = next[other].button;
+            const stolen = clonePart(next[other]);
             next[other] = {
-              code: next[action].code,
-              key: next[action].key,
+              ...clonePart(next[action]),
               alt: stripBinding(next[other], binding).alt,
             };
-            if (typeof next[action].button === "number") next[other].button = next[action].button;
             next[action] = { ...stolen, alt: next[action].alt };
             next[action] = stripBinding(next[action], next[other]);
             await persist(next);
@@ -155,14 +154,12 @@ function applyCapturedBinding(which, binding) {
     }
 
     if (isAltSlot(which)) {
-      next[action].alt = binding;
+      next[action].alt = clonePart(binding);
     } else {
       next[action] = {
-        code: binding.code,
-        key: binding.key,
+        ...clonePart(binding),
         alt: next[action].alt,
       };
-      if (typeof binding.button === "number") next[action].button = binding.button;
     }
 
     await persist(next);
@@ -189,7 +186,7 @@ function onCaptureInput(event) {
   const binding = ScrapHotkeySettings.bindingFromEvent(event);
   if (!binding) {
     if (event.type === "keydown") {
-      setStatus("Use a normal key or mouse button (not only Shift/Ctrl/Alt).", true);
+      setStatus("Hold Ctrl/Shift/Alt with a key, or press a key / mouse button alone.", true);
     }
     return;
   }
