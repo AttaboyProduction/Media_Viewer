@@ -33,5 +33,9 @@ Ignore unselected and already-done items.
 
 1. In `todo.canvas.data.json`, set that id’s flags to `{ "work": false, "done": true }` (create the file / `itemFlags` object if needed, preserving other keys).
 2. Update the matching line in `TODO.md`: Work `[ ]`, Done `[x]`, wrap text (and continuation lines) in `~~…~~`.
+3. When shipping the finishing commit, bump tracked `VERSION` from that item’s **Version** field in the sidecar (`itemVersions[id]`, e.g. `"0.3"`):
+   - **Empty / missing / invalid** → bump only the patch (third number), same as today (`0.2.31` → `0.2.32`).
+   - **Valid `major.minor`** (two numeric parts, e.g. `0.3`) → if current `VERSION` is already `major.minor.x`, bump that patch (`0.3.4` → `0.3.5`); otherwise start the line at `major.minor.1` (`0.2.31` + field `0.3` → `0.3.1`).
+   - Do not bump `VERSION` while implementing; only in the commit that ships the finished item (see `git-workflow.mdc`).
 
 Do not start other backlog items unless the user selects them.

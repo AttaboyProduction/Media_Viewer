@@ -22,7 +22,12 @@ If this workspace is not a Git repository, ask whether to initialize Git and cre
 
 ## Version bumps
 
-Do not change tracked `VERSION` or the extension `manifest.json` version while implementing. Bump them only as part of the commit that ships the change. For the app, change only the third number (patch) unless the user asks for a different bump.
+Do not change tracked `VERSION` or the extension `manifest.json` version while implementing. Bump them only as part of the commit that ships the change.
+
+For the app, default to bumping only the third number (patch) unless the user asks for a different bump, **or** the finished Project TODO item has a **Version** field in `todo.canvas.data.json` → `itemVersions[id]`:
+
+- Empty / missing / invalid → patch bump current `VERSION` (`A.B.C` → `A.B.(C+1)`).
+- Valid `major.minor` (e.g. `0.3`) → if current is already `major.minor.x`, next patch on that line (`0.3.4` → `0.3.5`); else set `major.minor.1` (`0.3.1`).
 
 ## When to commit
 
