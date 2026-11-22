@@ -16,15 +16,20 @@ def _run_tk(fn):
 
     with _dialog_lock:
         root = tk.Tk()
-        root.withdraw()
+        # A withdrawn root makes Windows folder dialogs return an empty path on OK.
+        root.overrideredirect(True)
+        root.geometry("0x0+0+0")
         try:
+            root.attributes("-alpha", 0)
             root.attributes("-topmost", True)
         except tk.TclError:
             pass
+        root.update()
         try:
             return fn(root)
         finally:
             try:
+                root.update()
                 root.destroy()
             except tk.TclError:
                 pass
@@ -43,8 +48,12 @@ def pick_files() -> list[str]:
         ("All files", "*.*"),
     ]
 
-    def _open(_root) -> tuple[str, ...] | str:
-        return filedialog.askopenfilenames(title="Select media files", filetypes=filetypes)
+    def _open(root) -> tuple[str, ...] | str:
+        return filedialog.askopenfilenames(
+            title="Select media files",
+            filetypes=filetypes,
+            parent=root,
+        )
 
     result = _run_tk(_open)
     if not result:
@@ -67,8 +76,9 @@ def pick_folder(*, title: str = "Select a media folder", initial_dir: str | Path
         if candidate.is_dir():
             start = str(candidate.resolve())
 
-    def _open(_root) -> str:
-        kwargs: dict = {"title": title, "mustexist": True}
+    def _open(root) -> str:
+        # mustexist makes Windows return "" after the user clicks OK.
+        kwargs: dict = {"title": title, "parent": root}
         if start:
             kwargs["initialdir"] = start
         return filedialog.askdirectory(**kwargs)
