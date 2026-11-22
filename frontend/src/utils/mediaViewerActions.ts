@@ -10,6 +10,33 @@ export function suggestedMediaFilename(
   return `${media.source_post_id || 'media'}.${ext}`
 }
 
+function uniqueFilename(filename: string, used: Set<string>): string {
+  if (!used.has(filename)) {
+    used.add(filename)
+    return filename
+  }
+  const dot = filename.lastIndexOf('.')
+  const base = dot > 0 ? filename.slice(0, dot) : filename
+  const ext = dot > 0 ? filename.slice(dot) : ''
+  let n = 2
+  let next = `${base} (${n})${ext}`
+  while (used.has(next)) {
+    n += 1
+    next = `${base} (${n})${ext}`
+  }
+  used.add(next)
+  return next
+}
+
+export async function downloadMediaFiles(
+  files: { url: string; filename: string }[],
+): Promise<void> {
+  const used = new Set<string>()
+  for (const file of files) {
+    await downloadMediaFile(file.url, uniqueFilename(file.filename, used))
+  }
+}
+
 export async function downloadMediaFile(url: string, filename: string): Promise<void> {
   const res = await fetch(url)
   if (!res.ok) throw new Error(`Download failed (${res.status})`)
@@ -204,6 +231,41 @@ export async function shareMediaFile(
  * Share via the OS sheet when possible; otherwise download so phone users can
  * share from Files / Downloads / Photos (common when the page is not a secure context).
  */
+/** Share every file in one OS sheet, or download them when sharing is unavailable. */
+export async function shareMediaFiles(
+  files: { url: string; filename: string; mediaType: string }[],
+): Promise<ShareMediaResult> {
+  if (files.length === 0) return 'cancelled'
+  if (files.length === 1) {
+    const file = files[0]
+    return shareMediaFileOrDownload(file.url, file.filename, file.mediaType)
+  }
+  if (typeof navigator.share !== 'function') {
+    await downloadMediaFiles(files)
+    return 'downloaded_fallback'
+  }
+  const used = new Set<string>()
+  const built: File[] = []
+  for (const file of files) {
+    built.push(
+      await buildShareFile(file.url, uniqueFilename(file.filename, used), file.mediaType),
+    )
+  }
+  const payload: ShareData = { files: built }
+  if (typeof navigator.canShare === 'function' && !navigator.canShare(payload)) {
+    await downloadMediaFiles(files)
+    return 'downloaded_fallback'
+  }
+  try {
+    await navigator.share(payload)
+    return 'shared'
+  } catch (err) {
+    if (isShareAbort(err)) return 'cancelled'
+    await downloadMediaFiles(files)
+    return 'downloaded_fallback'
+  }
+}
+
 export async function shareMediaFileOrDownload(
   url: string,
   filename: string,

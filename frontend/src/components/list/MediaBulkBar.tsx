@@ -13,6 +13,9 @@ interface Props {
   onMark: (kind: 'identical' | 'similar') => void
   /** When set, shows Add tags for the current selection. */
   onAddTags?: (tagNames: string[]) => void | Promise<void>
+  onDownload?: () => void
+  onShare?: () => void
+  transferMessage?: string | null
   deletePending?: boolean
   markError?: string | null
   /** Library grids link the selection to itself and need two files. */
@@ -27,6 +30,9 @@ export default function MediaBulkBar({
   onDelete,
   onMark,
   onAddTags,
+  onDownload,
+  onShare,
+  transferMessage,
   deletePending = false,
   markError,
   markMin = 2,
@@ -60,6 +66,27 @@ export default function MediaBulkBar({
     <div className="recent-scrape-bulk-bar-wrap">
       <div className="recent-scrape-bulk-bar">
         <span>{selectedCount} selected</span>
+        {onDownload && (
+          <button
+            type="button"
+            className="btn btn-small"
+            disabled={selectedCount === 0 || busy}
+            onClick={onDownload}
+          >
+            Download
+          </button>
+        )}
+        {onShare && (
+          <button
+            type="button"
+            className="btn btn-small"
+            disabled={selectedCount === 0 || busy}
+            onClick={onShare}
+          >
+            Share
+          </button>
+        )}
+        {transferMessage && <span className="settings-hint">{transferMessage}</span>}
         {onDiscard && (
           <button
             type="button"

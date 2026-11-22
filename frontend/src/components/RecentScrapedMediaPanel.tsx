@@ -261,8 +261,12 @@ export default function RecentScrapedMediaPanel() {
     handleBulkDelete,
     handleBulkMark,
     handleBulkAddTags,
+    handleBulkDownload,
+    handleBulkShare,
+    transferMessage,
   } = useMediaBulkActions({
       selectedIds,
+      items,
       clearSelectedIds: () => setSelectedIds([]),
       onSettled: () => {
         queryClient.invalidateQueries({ queryKey: ['scrape-recent-media'] })
@@ -499,6 +503,9 @@ export default function RecentScrapedMediaPanel() {
               onDelete={() => void handleBulkDelete()}
               onMark={(kind) => void handleBulkMark(kind)}
               onAddTags={(names) => handleBulkAddTags(names)}
+              onDownload={() => void handleBulkDownload()}
+              onShare={() => void handleBulkShare()}
+              transferMessage={transferMessage}
             />
           ) : undefined
         }

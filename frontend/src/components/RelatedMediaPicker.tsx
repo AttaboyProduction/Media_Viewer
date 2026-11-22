@@ -15,6 +15,7 @@ import { paginationTotalPages } from '../utils/pagination'
 import ContentHideMedia from './ContentHideMedia'
 import MediaCardThumb from './MediaCardThumb'
 import MediaBulkBar from './list/MediaBulkBar'
+import { useMediaBulkActions } from '../hooks/useMediaBulkActions'
 import MediaCollectionView from './list/MediaCollectionView'
 
 const PAGE_SIZE = 6
@@ -241,7 +242,17 @@ export default function RelatedMediaPicker({
   })
 
   const parsedId = /^\d+$/.test(localId) ? Number(localId) : null
-  const markBusy = addMutation.isPending || markMutation.isPending
+  const {
+    bulkBusy: transferBusy,
+    handleBulkDownload,
+    handleBulkShare,
+    transferMessage,
+  } = useMediaBulkActions({
+    selectedIds,
+    items,
+    clearSelectedIds: () => setSelectedIds([]),
+  })
+  const markBusy = addMutation.isPending || markMutation.isPending || transferBusy
 
   const openPicker = () => {
     setPickerOpen(true)
@@ -375,6 +386,9 @@ export default function RelatedMediaPicker({
               markError={markError}
               markMin={1}
               onMark={(markKind) => void handleMarkSelected(markKind)}
+              onDownload={() => void handleBulkDownload()}
+              onShare={() => void handleBulkShare()}
+              transferMessage={transferMessage}
             />
           }
           empty={

@@ -1,23 +1,50 @@
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { bulkAddMediaTags, bulkMediaAction, markRelatedMany } from '../api/client'
 import { useConfirm } from '../context/ConfirmContext'
+import type { MediaItem } from '../types'
+import {
+  downloadMediaFiles,
+  shareDownloadFallbackMessage,
+  shareMediaFiles,
+  suggestedMediaFilename,
+} from '../utils/mediaViewerActions'
 
 type BulkAction = 'discard' | 'delete' | 'mark' | 'add_tags'
 
-/** Discard, permanent delete, Mark as, and Add tags for a media grid selection. */
+/** Discard, permanent delete, Mark as, Add tags, download, and share for a media grid selection. */
 export function useMediaBulkActions({
   selectedIds,
+  items,
   clearSelectedIds,
   onSettled,
   onFinished,
 }: {
   selectedIds: number[]
+  /** Current page items; selection is cleared when the page changes. */
+  items: readonly MediaItem[]
   clearSelectedIds: () => void
   onSettled?: () => void
   onFinished?: (action: BulkAction, ids: number[]) => void
 }) {
   const queryClient = useQueryClient()
   const { confirm } = useConfirm()
+  const [transferBusy, setTransferBusy] = useState(false)
+  const [transferMessage, setTransferMessage] = useState<string | null>(null)
+
+  const selectedItems = useMemo(
+    () =>
+      selectedIds
+        .map((id) => items.find((item) => item.id === id))
+        .filter((item): item is MediaItem => Boolean(item)),
+    [items, selectedIds],
+  )
+
+  useEffect(() => {
+    if (!transferMessage) return
+    const timer = window.setTimeout(() => setTransferMessage(null), 4000)
+    return () => window.clearTimeout(timer)
+  }, [transferMessage])
 
   const settle = () => {
     queryClient.invalidateQueries({ queryKey: ['media'] })
@@ -56,7 +83,48 @@ export function useMediaBulkActions({
   })
 
   const bulkBusy =
-    bulkMutation.isPending || markMutation.isPending || addTagsMutation.isPending
+    bulkMutation.isPending ||
+    markMutation.isPending ||
+    addTagsMutation.isPending ||
+    transferBusy
+
+  const transferFiles = () =>
+    selectedItems.map((item) => ({
+      url: item.media_url,
+      filename: suggestedMediaFilename(item),
+      mediaType: item.media_type,
+    }))
+
+  const handleBulkDownload = async () => {
+    const files = transferFiles()
+    if (files.length === 0 || transferBusy) return
+    setTransferBusy(true)
+    setTransferMessage(null)
+    try {
+      await downloadMediaFiles(files)
+      setTransferMessage(files.length === 1 ? 'Downloaded' : `Downloaded ${files.length} files`)
+    } catch (err) {
+      setTransferMessage(err instanceof Error ? err.message : 'Download failed')
+    } finally {
+      setTransferBusy(false)
+    }
+  }
+
+  const handleBulkShare = async () => {
+    const files = transferFiles()
+    if (files.length === 0 || transferBusy) return
+    setTransferBusy(true)
+    setTransferMessage(null)
+    try {
+      const result = await shareMediaFiles(files)
+      if (result === 'downloaded_fallback') setTransferMessage(shareDownloadFallbackMessage())
+      else if (result === 'shared') setTransferMessage(files.length === 1 ? 'Shared' : `Shared ${files.length} files`)
+    } catch (err) {
+      setTransferMessage(err instanceof Error ? err.message : 'Share failed')
+    } finally {
+      setTransferBusy(false)
+    }
+  }
 
   const handleBulkDiscard = async () => {
     if (selectedIds.length === 0) return
@@ -109,5 +177,8 @@ export function useMediaBulkActions({
     handleBulkDelete,
     handleBulkMark,
     handleBulkAddTags,
+    handleBulkDownload,
+    handleBulkShare,
+    transferMessage,
   }
 }

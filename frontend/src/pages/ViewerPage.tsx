@@ -464,8 +464,12 @@ export default function ViewerPage() {
     handleBulkDelete,
     handleBulkMark,
     handleBulkAddTags,
+    handleBulkDownload,
+    handleBulkShare,
+    transferMessage,
   } = useMediaBulkActions({
     selectedIds,
+    items: data?.items ?? [],
     clearSelectedIds: () => setSelectedIds([]),
   })
 
@@ -733,6 +737,9 @@ export default function ViewerPage() {
                 onDelete={() => void handleBulkDelete()}
                 onMark={(kind) => void handleBulkMark(kind)}
                 onAddTags={(names) => handleBulkAddTags(names)}
+                onDownload={() => void handleBulkDownload()}
+                onShare={() => void handleBulkShare()}
+                transferMessage={transferMessage}
               />
             )}
             <MediaCollectionView
@@ -824,6 +831,9 @@ export default function ViewerPage() {
                 onDelete={() => void handleBulkDelete()}
                 onMark={(kind) => void handleBulkMark(kind)}
                 onAddTags={(names) => handleBulkAddTags(names)}
+                onDownload={() => void handleBulkDownload()}
+                onShare={() => void handleBulkShare()}
+                transferMessage={transferMessage}
               />
             ) : undefined
           }
