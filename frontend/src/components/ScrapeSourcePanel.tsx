@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
+import type { ScrapeListName } from '../api/client'
 import type { ScrapeSourcePanel as ScrapeSourcePanelData } from '../types'
 
 function statusMessageParts(
@@ -38,6 +39,68 @@ function queueListClass(count: number): string {
     : 'scrape-skipped-list'
 }
 
+function QueueSection({
+  title,
+  count,
+  open,
+  onToggle,
+  clearDisabled,
+  clearTitle,
+  onClear,
+  retryDisabled,
+  retryTitle,
+  onRetry,
+  children,
+}: {
+  title: string
+  count: number
+  open: boolean
+  onToggle: () => void
+  clearDisabled: boolean
+  clearTitle: string
+  onClear: () => void
+  retryDisabled?: boolean
+  retryTitle?: string
+  onRetry?: () => void
+  children: ReactNode
+}) {
+  return (
+    <div className="scrape-queue">
+      <div className="scrape-queue-bar">
+        <button
+          type="button"
+          className="scrape-queue-toggle"
+          aria-expanded={open}
+          onClick={onToggle}
+        >
+          {title} ({count})
+        </button>
+        {onRetry ? (
+          <button
+            type="button"
+            className="btn btn-small"
+            onClick={onRetry}
+            disabled={retryDisabled}
+            title={retryTitle}
+          >
+            Retry
+          </button>
+        ) : null}
+        <button
+          type="button"
+          className="btn btn-small"
+          onClick={onClear}
+          disabled={clearDisabled}
+          title={clearTitle}
+        >
+          Clear
+        </button>
+      </div>
+      {open ? children : null}
+    </div>
+  )
+}
+
 interface Props {
   panel: ScrapeSourcePanelData
   /** The Source/Site chosen in the shared form: this panel's Run uses it. */
@@ -52,6 +115,8 @@ interface Props {
   onRun: () => void
   onStop: () => void
   onClear: () => void
+  onClearList: (which: ScrapeListName) => void
+  onRetry: () => void
   neverAutoRun: boolean
   onNeverAutoRunChange: (value: boolean) => void
 }
@@ -68,6 +133,8 @@ export default function ScrapeSourcePanel({
   onRun,
   onStop,
   onClear,
+  onClearList,
+  onRetry,
   neverAutoRun,
   onNeverAutoRunChange,
 }: Props) {
@@ -173,80 +240,108 @@ export default function ScrapeSourcePanel({
             {cancelledUrls.length > 0 && ` · cancelled ${cancelledUrls.length}`}
           </div>
           {cancelledUrls.length > 0 && (
-            <details
-              className="scrape-skipped"
+            <QueueSection
+              title="Cancelled"
+              count={cancelledUrls.length}
               open={cancelledOpen}
-              onToggle={(e) => {
-                if (e.target !== e.currentTarget) return
-                setCancelledOpen((e.currentTarget as HTMLDetailsElement).open)
-              }}
+              onToggle={() => setCancelledOpen((open) => !open)}
+              clearDisabled={panel.running}
+              clearTitle={
+                panel.running
+                  ? 'Stop the running job before clearing this list'
+                  : `Empty ${panel.label} Cancelled`
+              }
+              onClear={() => onClearList('cancelled')}
             >
-              <summary>Cancelled ({cancelledUrls.length})</summary>
-              {cancelledOpen && (
-                <ul className={queueListClass(cancelledUrls.length)}>
-                  {cancelledUrls.map((url) => (
-                    <li key={url}>
-                      <UrlLine url={url} />
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </details>
+              <ul className={queueListClass(cancelledUrls.length)}>
+                {cancelledUrls.map((url) => (
+                  <li key={url}>
+                    <UrlLine url={url} />
+                  </li>
+                ))}
+              </ul>
+            </QueueSection>
           )}
           {skippedItems.length > 0 && (
-            <details
-              className="scrape-skipped"
+            <QueueSection
+              title="Skipped"
+              count={skippedItems.length}
               open={skippedOpen}
-              onToggle={(e) => {
-                if (e.target !== e.currentTarget) return
-                setSkippedOpen((e.currentTarget as HTMLDetailsElement).open)
-              }}
+              onToggle={() => setSkippedOpen((open) => !open)}
+              clearDisabled={panel.running}
+              clearTitle={
+                panel.running
+                  ? 'Stop the running job before clearing this list'
+                  : `Empty ${panel.label} Skipped, including files with errors`
+              }
+              onClear={() => onClearList('skipped')}
+              retryDisabled={anyRunning}
+              retryTitle={
+                anyRunning
+                  ? `Wait for the running ${runningLabel} job, or press Stop`
+                  : 'Try the skipped and error files again. Queue to scrape and Cancelled stay.'
+              }
+              onRetry={onRetry}
             >
-              <summary>Skipped ({skippedItems.length})</summary>
-              {skippedOpen && (
-                <ul className={queueListClass(skippedItems.length)}>
-                  {skippedItems.map((item) => (
-                    <li key={`${item.url}:${item.reason}:${item.detail || ''}`}>
-                      <UrlLine url={item.url} />
-                      <span className="scrape-skipped-reason">{item.reason}</span>
-                      {item.detail ? (
-                        <details
-                          className="scrape-skipped-error"
-                          onToggle={(e) => e.stopPropagation()}
-                        >
-                          <summary>Error</summary>
-                          <pre>{item.detail}</pre>
-                        </details>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </details>
+              <ul className={queueListClass(skippedItems.length)}>
+                {skippedItems.map((item) => (
+                  <li key={`${item.url}:${item.reason}:${item.detail || ''}`}>
+                    <UrlLine url={item.url} />
+                    <span className="scrape-skipped-reason">{item.reason}</span>
+                    {item.detail ? (
+                      <details className="scrape-skipped-error">
+                        <summary>Error</summary>
+                        <pre>{item.detail}</pre>
+                      </details>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </QueueSection>
           )}
           {queueUrls.length > 0 && (
-            <details
-              className="scrape-skipped"
+            <QueueSection
+              title="Queue to scrape"
+              count={queueUrls.length}
               open={queueOpen}
-              onToggle={(e) => {
-                if (e.target !== e.currentTarget) return
-                setQueueOpen((e.currentTarget as HTMLDetailsElement).open)
-              }}
+              onToggle={() => setQueueOpen((open) => !open)}
+              clearDisabled={panel.running}
+              clearTitle={
+                panel.running
+                  ? 'Stop the running job before clearing this list'
+                  : `Empty ${panel.label} Queue to scrape`
+              }
+              onClear={() => onClearList('queue')}
             >
-              <summary>Queue to scrape ({queueUrls.length})</summary>
-              {queueOpen && (
-                <ul className={queueListClass(queueUrls.length)}>
-                  {queueUrls.map((url) => (
-                    <li key={url}>
-                      <UrlLine url={url} />
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </details>
+              <ul className={queueListClass(queueUrls.length)}>
+                {queueUrls.map((url) => (
+                  <li key={url}>
+                    <UrlLine url={url} />
+                  </li>
+                ))}
+              </ul>
+            </QueueSection>
           )}
           {panel.errors.length > 0 && (
             <div className="error">
+              {skippedItems.length === 0 && (
+                <div className="scrape-queue-bar">
+                  <span>Errors ({panel.errors.length})</span>
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    onClick={onRetry}
+                    disabled={anyRunning}
+                    title={
+                      anyRunning
+                        ? `Wait for the running ${runningLabel} job, or press Stop`
+                        : 'Try the error files again. Queue to scrape and Cancelled stay.'
+                    }
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
               {panel.errors.slice(-5).map((item) => (
                 <div key={item}>{item}</div>
               ))}

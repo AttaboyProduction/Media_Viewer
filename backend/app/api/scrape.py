@@ -30,6 +30,8 @@ from backend.scraper.pipeline import (
     _release_queue,
     abandon_running_job,
     append_leftover_urls,
+    _mark_retry_already_in_total,
+    begin_remote_retry,
     begin_scrape_queue,
     run_job,
     scrape_lock,
@@ -246,6 +248,7 @@ def start_scrape_run(
     *,
     continue_counts: bool = False,
     include_leftovers: bool = False,
+    only_urls: list[str] | None = None,
 ) -> ScrapeStatusOut:
     """Start a scrape job in the background (409 if one is running).
 
@@ -263,6 +266,12 @@ def start_scrape_run(
         if before_start is not None:
             before_start()
         site = get_selected_site()
+        if only_urls is not None and panel_key == scrape_panels.SOURCE_UNSUPPORTED:
+            ordered = list(dict.fromkeys(url.strip() for url in only_urls if url and url.strip()))
+            if not ordered:
+                raise HTTPException(status_code=400, detail="Nothing to retry.")
+            begin_remote_retry(ordered)
+            return _status_out()
         if panel_key == scrape_panels.SOURCE_UNSUPPORTED:
             # Raw-file panel: no gallery, only that panel's stored URLs.
             unfinished, queued = scrape_leftovers.snapshot(panel_key)
@@ -274,6 +283,28 @@ def start_scrape_run(
                     status_code=400, detail="Nothing is queued or skipped for Unsupported."
                 )
             remote_only = True
+        elif only_urls is not None:
+            ordered = list(dict.fromkeys(url.strip() for url in only_urls if url and url.strip()))
+            if not ordered:
+                raise HTTPException(status_code=400, detail="Nothing to retry.")
+            if site is None or site["id"] != panel_key:
+                raise HTTPException(
+                    status_code=400,
+                    detail="That panel's source is not the selected Source.",
+                )
+            from backend.app.schemas import ScrapeFilterIn
+
+            payload = ScrapeRunRequest(
+                filters=[ScrapeFilterIn(type="url", value="\n".join(ordered))],
+                limit=0,
+                exclude_tags=[],
+                source_key=panel_key,
+            )
+            _mark_retry_already_in_total(ordered)
+            scrape_status.ran_this_session = True
+            continue_counts = True
+            retries = list(ordered)
+            include_leftovers = False
         elif panel_key is not None and (site is None or site["id"] != panel_key):
             raise HTTPException(
                 status_code=400,
@@ -411,21 +442,71 @@ def post_clear_recent() -> ScrapeStatusOut:
 
 
 @router.post("/clear-queues", response_model=ScrapeStatusOut)
-def post_clear_queues(source: str | None = None) -> ScrapeStatusOut:
+def post_clear_queues(source: str | None = None, which: str | None = None) -> ScrapeStatusOut:
     """Empty Queue to scrape, Skipped, and Cancelled. Session downloads stay.
 
-    ``source`` (a panel key) clears only that source's lists; omitted clears every panel.
+    ``source`` (a panel key) clears only that source; omitted clears every panel.
+    ``which`` is ``queue``, ``skipped``, or ``cancelled``; omitted clears all three.
     """
     key = (source or "").strip() or None
+    kind = (which or "").strip() or None
+    if kind not in (None, "queue", "skipped", "cancelled"):
+        raise HTTPException(
+            status_code=400,
+            detail="which must be queue, skipped, or cancelled.",
+        )
     with scrape_lock:
         if scrape_status.running and (key is None or key == scrape_status.source_key):
             raise HTTPException(
                 status_code=409,
                 detail="A scrape or import is running. Stop it before clearing the queues.",
             )
-        scrape_leftovers.clear_queues(key)
-        scrape_panels.clear_panel(scrape_status, key)
+        scrape_leftovers.clear_queues(key, which=kind)
+        scrape_panels.clear_panel(scrape_status, key, which=kind)
     return _status_out()
+
+
+@router.post("/retry", response_model=ScrapeStatusOut, dependencies=[Depends(require_scrape_page)])
+def post_retry_skipped(source: str) -> ScrapeStatusOut:
+    """Run only this panel's skipped and error files. Queue and Cancelled stay."""
+    key = (source or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="source is required.")
+    local = False
+    urls: list[str] = []
+    with scrape_lock:
+        if scrape_status.running:
+            raise HTTPException(
+                status_code=409,
+                detail="A scrape or import is running. Stop it before retrying.",
+            )
+        urls = scrape_panels.retry_targets(scrape_status, key)
+        if not urls:
+            raise HTTPException(status_code=400, detail="Nothing skipped or failed to retry.")
+        local = key == scrape_panels.SOURCE_LOCAL
+        if local:
+            from backend.app.services.local_import import run_local_import
+
+            scrape_panels.activate(scrape_status, scrape_panels.SOURCE_LOCAL)
+            scrape_status.job_id += 1
+            job_id = scrape_status.job_id
+            scrape_status.kind = "import"
+            scrape_status.queue_open = False
+            scrape_status.site_id = None
+            scrape_status.running = True
+            scrape_status.cancel = False
+            scrape_status.message = "Queued"
+            threading.Thread(
+                target=run_local_import,
+                kwargs={"paths": urls, "recursive": False, "job_id": job_id},
+                daemon=True,
+            ).start()
+    if local:
+        return _status_out()
+    return start_scrape_run(
+        ScrapeRunRequest(filters=[], limit=0, source_key=key),
+        only_urls=urls,
+    )
 
 
 def _split_csv(raw: str | None) -> list[str]:

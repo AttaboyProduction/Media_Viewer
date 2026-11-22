@@ -724,6 +724,150 @@ class ScrapeLeftoverTests(unittest.TestCase):
         compile_job.assert_not_called()
         claim.assert_called_once_with(raw)
 
+    def test_clear_one_list_leaves_the_others(self) -> None:
+        queued = "https://cdn.example/q.jpg"
+        failed = "https://gallery.test/post/20"
+        stopped = "https://gallery.test/post/21"
+        kept = "https://gallery.test/post/22"
+        scrape_leftovers.add_queue([queued], source="site_a")
+        scrape_leftovers.remember_unfinished(failed, "error", "boom", "site_a")
+        scrape_leftovers.remember_unfinished(stopped, "cancelled", "", "site_a")
+        scrape_leftovers.remember_unfinished(kept, "error", "nope", "site_b")
+        scrape_leftovers.restore_into_status()
+        pipeline.scrape_status.errors = [f"{failed}: boom"]
+
+        out = scrape_api.post_clear_queues("site_a", which="queue")
+        panel = self._panel(out, "site_a")
+        self.assertEqual(panel.queue_urls, [])
+        self.assertEqual(panel.cancelled_urls, [stopped])
+        self.assertIn(failed, [item.url for item in panel.skipped_items])
+        self.assertEqual(scrape_leftovers.queue_urls(), [])
+        self.assertEqual(scrape_leftovers.queue_urls("site_b"), [])
+        self.assertEqual(
+            [item["url"] for item in scrape_leftovers.unfinished_items()],
+            [failed, stopped, kept],
+        )
+
+        out = scrape_api.post_clear_queues("site_a", which="cancelled")
+        panel = self._panel(out, "site_a")
+        self.assertEqual(panel.cancelled_urls, [])
+        self.assertEqual([item.url for item in panel.skipped_items], [failed])
+        self.assertEqual(
+            [item["url"] for item in scrape_leftovers.unfinished_items("site_a")],
+            [failed],
+        )
+        self.assertEqual(
+            [item["url"] for item in scrape_leftovers.unfinished_items("site_b")],
+            [kept],
+        )
+
+        out = scrape_api.post_clear_queues("site_a", which="skipped")
+        panel = self._panel(out, "site_a")
+        self.assertEqual(panel.skipped_items, [])
+        self.assertEqual(panel.errors, [])
+        self.assertEqual(scrape_leftovers.unfinished_items("site_a"), [])
+        self.assertEqual(
+            [item["url"] for item in scrape_leftovers.unfinished_items()],
+            [kept],
+        )
+
+    def test_clear_rejects_an_unknown_list(self) -> None:
+        with self.assertRaises(HTTPException) as ctx:
+            scrape_api.post_clear_queues(which="nope")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_retry_runs_only_skipped_and_errors(self) -> None:
+        queued = "https://gallery.test/post/1"
+        failed = "https://gallery.test/post/2"
+        skipped = "https://gallery.test/post/3"
+        stopped = "https://gallery.test/post/4"
+        scrape_leftovers.add_queue([queued], source="site_a")
+        scrape_leftovers.remember_unfinished(failed, "error", "boom", "site_a")
+        scrape_leftovers.remember_unfinished(stopped, "cancelled", "", "site_a")
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "site_a", "Site A")
+        status.ran_this_session = True
+        status.total = 4
+        status.processed = 4
+        status.processed_urls = {queued, failed, skipped, stopped}
+        status.counted_urls = set(status.processed_urls)
+        status.skipped_items = [
+            SkippedItem(url=failed, reason="error", detail="boom"),
+            SkippedItem(url=skipped, reason="already_have"),
+            SkippedItem(url=stopped, reason="cancelled"),
+        ]
+        status.cancelled_urls = [stopped]
+        status.errors = [f"{failed}: boom"]
+
+        def _compiled(payload: ScrapeRunRequest) -> ScrapeJob:
+            urls: list[str] = []
+            for item in payload.filters:
+                urls.extend(part for part in item.value.split("\n") if part)
+            return _job(urls)
+
+        with (
+            patch.object(
+                scrape_api, "get_selected_site", return_value={"id": "site_a", "name": "Site A"}
+            ),
+            patch.object(scrape_api, "compile_scrape_job", side_effect=_compiled),
+            patch.object(scrape_api.threading, "Thread"),
+        ):
+            scrape_api.post_retry_skipped("site_a")
+        self.assertEqual(status.pending_urls, [failed, skipped])
+        self.assertNotIn(stopped, status.pending_urls)
+        self.assertNotIn(queued, status.pending_urls)
+        self.assertEqual(status.processed, 2)
+        self.assertEqual(status.total, 4)
+        self.assertEqual(scrape_leftovers.queue_urls("site_a"), [queued])
+        self.assertEqual(
+            [item["url"] for item in scrape_leftovers.unfinished_items("site_a")],
+            [failed, stopped],
+        )
+
+    def test_retry_unsupported_skips_the_queue_and_cancelled(self) -> None:
+        raw_q = "https://cdn.example/q.jpg"
+        raw_err = "https://cdn.example/e.jpg"
+        raw_cancel = "https://cdn.example/c.jpg"
+        scrape_leftovers.add_queue([raw_q], source="unsupported")
+        scrape_leftovers.remember_unfinished(raw_err, "error", "x", "unsupported")
+        scrape_leftovers.remember_unfinished(raw_cancel, "cancelled", "", "unsupported")
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "unsupported", "Unsupported")
+        status.ran_this_session = True
+        status.processed = 2
+        status.total = 2
+        status.processed_urls = {raw_err, raw_cancel}
+        status.counted_urls = {raw_err, raw_cancel}
+        status.skipped_items = [
+            SkippedItem(url=raw_err, reason="error", detail="x"),
+            SkippedItem(url=raw_cancel, reason="cancelled"),
+        ]
+        status.cancelled_urls = [raw_cancel]
+        with patch.object(pipeline.threading, "Thread"):
+            scrape_api.post_retry_skipped("unsupported")
+        self.assertEqual(status.pending_urls, [raw_err])
+        self.assertEqual(status.processed, 1)
+        self.assertEqual(scrape_leftovers.queue_urls(), [raw_q])
+        self.assertEqual(
+            [item["url"] for item in scrape_leftovers.unfinished_items()],
+            [raw_err, raw_cancel],
+        )
+
+    def test_retry_local_imports_only_skipped_paths(self) -> None:
+        failed = r"D:\pics\a.jpg"
+        stopped = r"D:\pics\b.jpg"
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "local", "Local")
+        status.skipped_items = [
+            SkippedItem(url=failed, reason="error", detail="x"),
+            SkippedItem(url=stopped, reason="cancelled"),
+        ]
+        status.cancelled_urls = [stopped]
+        with patch.object(scrape_api.threading, "Thread") as thread:
+            scrape_api.post_retry_skipped("local")
+        self.assertEqual(thread.call_args.kwargs["kwargs"]["paths"], [failed])
+        self.assertFalse(thread.call_args.kwargs["kwargs"]["recursive"])
+
     def test_remote_download_uses_the_unsupported_panel(self) -> None:
         status = pipeline.scrape_status
         scrape_panels.activate(status, "site_a", "Site A")

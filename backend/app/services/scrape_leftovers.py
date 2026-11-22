@@ -375,25 +375,49 @@ def adopt_open_as_unfinished() -> None:
         _save(data)
 
 
-def clear_queues(source: str | None = None) -> None:
-    """Forget the queue, unfinished (Skipped / Cancelled), open list, and page links.
+def clear_queues(source: str | None = None, *, which: str | None = None) -> None:
+    """Forget stored leftovers.
 
-    With ``source`` only that panel's rows go; the in-flight (open) list is left alone.
+    ``which`` is ``queue``, ``skipped`` (every unfinished reason except cancelled),
+    or ``cancelled``. Omitted clears all three. ``source`` limits that to one panel.
+    A full clear also drops the in-flight (open) list; a partial clear leaves it.
     """
     with _lock:
-        if source is None:
+        if source is None and which is None:
             _save(_empty())
             return
         data = _load()
-        gone = _queue_for(data, source) + [
-            item["url"] for item in _resolved_unfinished(data, source)
-        ]
-        gone_keys = {identity(url) for url in gone}
-        data["queue"] = [url for url in data["queue"] if identity(url) not in gone_keys]
-        data["unfinished"] = [
-            item for item in data["unfinished"] if identity(item["url"]) not in gone_keys
-        ]
+        gone_keys: set[str] = set()
+        if which in (None, "queue"):
+            for url in _queue_for(data, source):
+                key = identity(url)
+                if key:
+                    gone_keys.add(key)
+            data["queue"] = [url for url in data["queue"] if identity(url) not in gone_keys]
+        if which in (None, "skipped", "cancelled"):
+            kept: list[dict] = []
+            for item in data["unfinished"]:
+                src = _source_of(data, item["url"], item.get("source", ""))
+                if source is not None and src != source:
+                    kept.append(item)
+                    continue
+                reason = item.get("reason") or "error"
+                drop = which is None or (
+                    (which == "cancelled" and reason == "cancelled")
+                    or (which == "skipped" and reason != "cancelled")
+                )
+                if drop:
+                    key = identity(item["url"])
+                    if key:
+                        gone_keys.add(key)
+                else:
+                    kept.append(item)
+            data["unfinished"] = kept
+        still = {identity(url) for url in data["queue"]}
+        still.update(identity(item["url"]) for item in data["unfinished"])
         for key in gone_keys:
+            if key in still:
+                continue
             data["page_urls"].pop(key, None)
             data["sources"].pop(key, None)
         _save(data)

@@ -113,23 +113,104 @@ def activate(status, key: str, label: str = "") -> None:
     status.source_label = name
 
 
-def clear_panel(status, key: str | None = None) -> None:
-    """Empty Skipped / Cancelled for one source (``None`` = every source)."""
+def _without_skipped(items, *, drop_cancelled: bool, drop_other: bool):
+    kept = []
+    for row in items:
+        cancelled = getattr(row, "reason", "") == "cancelled"
+        if cancelled and drop_cancelled:
+            continue
+        if not cancelled and drop_other:
+            continue
+        kept.append(row)
+    return kept, len(items) - len(kept)
+
+
+def clear_panel(status, key: str | None = None, *, which: str | None = None) -> None:
+    """Empty one list, or every list, for one source (``key`` omitted = every source).
+
+    ``which`` is ``queue``, ``skipped`` (non-cancelled skips and the error lines),
+    or ``cancelled``. Omitted clears all three. Downloaded counts stay.
+    """
+    drop_cancelled = which in (None, "cancelled")
+    drop_other = which in (None, "skipped")
+    drop_queue = which in (None, "queue")
+
+    def _apply_lists(skipped_items, cancelled_urls, skipped, errors):
+        next_items, removed = _without_skipped(
+            skipped_items, drop_cancelled=drop_cancelled, drop_other=drop_other
+        )
+        next_cancelled = [] if drop_cancelled else list(cancelled_urls)
+        next_errors = [] if drop_other else list(errors)
+        return next_items, next_cancelled, max(0, int(skipped) - removed), next_errors
+
     if key is None or key == status.source_key:
-        status.skipped_items = []
-        status.cancelled_urls = []
-        status.queue_urls = []
-        status.skipped = 0
-        status.pending_urls = []
-        status.retry_urls = set()
-        status.leftover_urls = set()
+        (
+            status.skipped_items,
+            status.cancelled_urls,
+            status.skipped,
+            status.errors,
+        ) = _apply_lists(
+            status.skipped_items, status.cancelled_urls, status.skipped, status.errors
+        )
+        if drop_queue:
+            status.queue_urls = []
+            status.pending_urls = []
+        if which is None:
+            status.retry_urls = set()
+            status.leftover_urls = set()
     targets = list(_archive) if key is None else ([key] if key in _archive else [])
     for name in targets:
         snap = _archive[name]
-        snap["skipped_items"] = []
-        snap["cancelled_urls"] = []
-        snap["skipped"] = 0
-        snap["retry_urls"] = set()
+        (
+            snap["skipped_items"],
+            snap["cancelled_urls"],
+            snap["skipped"],
+            snap["errors"],
+        ) = _apply_lists(
+            snap["skipped_items"],
+            snap["cancelled_urls"],
+            snap["skipped"],
+            snap.get("errors") or [],
+        )
+        if which is None:
+            snap["retry_urls"] = set()
+
+
+def retry_targets(status, key: str) -> list[str]:
+    """Skipped and error files for one panel. Cancelled and Queue to scrape stay out."""
+    key = (key or "").strip()
+    if not key:
+        return []
+    if key == status.source_key:
+        items = status.skipped_items
+        errors = status.errors
+    else:
+        snap = _archive.get(key)
+        if snap is None:
+            return []
+        items = snap.get("skipped_items") or []
+        errors = snap.get("errors") or []
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(url: str) -> None:
+        url = (url or "").strip()
+        if not url or url in seen:
+            return
+        seen.add(url)
+        out.append(url)
+
+    for row in items:
+        if getattr(row, "reason", "") == "cancelled":
+            continue
+        add(getattr(row, "url", ""))
+    for item in errors:
+        text = str(item or "").strip()
+        if not text:
+            continue
+        url, sep, _detail = text.partition(": ")
+        add(url if sep and url.strip() else text)
+    return out
 
 
 def restore(status, items: list[dict]) -> None:

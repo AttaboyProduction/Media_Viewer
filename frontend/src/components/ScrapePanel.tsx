@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   cancelScrape,
   clearScrapeQueues,
+  retryScrapeSkipped,
   fetchAdapters,
   fetchAppSettings,
   fetchScrapeSession,
@@ -20,6 +21,7 @@ import {
 import { useConfirm } from '../context/ConfirmContext'
 import { useApplyAppDefaults } from '../hooks/useAppDefaults'
 import { DEFAULT_APP_SETTINGS } from '../types/appSettings'
+import type { ScrapeListName } from '../api/client'
 import type { ScrapeFilter, ScrapeFilterType, ScrapeSourcePanel as ScrapeSourcePanelData } from '../types'
 import ExcludeTagsPicker from './ExcludeTagsPicker'
 import ScrapeSourcePanel from './ScrapeSourcePanel'
@@ -399,20 +401,34 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     queryClient.setQueryData(['scrape-status'], next)
   }
 
-  const clearQueues = async (panel: ScrapeSourcePanelData) => {
+  const clearQueues = async (panel: ScrapeSourcePanelData, which?: ScrapeListName) => {
+    const listName =
+      which === 'queue' ? 'Queue to scrape' : which === 'skipped' ? 'Skipped' : which === 'cancelled' ? 'Cancelled' : null
     const ok = await confirm({
-      title: `Clear ${panel.label} queues?`,
-      message: `Remove everything from ${panel.label}'s Queue to scrape, Skipped, and Cancelled? Downloaded files, the Downloaded previously list, and other sources stay.`,
-      confirmLabel: 'Clear queues',
+      title: listName ? `Clear ${panel.label} ${listName}?` : `Clear ${panel.label} queues?`,
+      message: listName
+        ? `Remove everything from ${panel.label}'s ${listName}? The other lists, downloaded files, and other sources stay.`
+        : `Remove everything from ${panel.label}'s Queue to scrape, Skipped, and Cancelled? Downloaded files, the Downloaded previously list, and other sources stay.`,
+      confirmLabel: listName ? 'Clear' : 'Clear queues',
       danger: true,
     })
     if (!ok) return
     setError(null)
     try {
-      const next = await clearScrapeQueues(panel.key)
+      const next = await clearScrapeQueues(panel.key, which)
       queryClient.setQueryData(['scrape-status'], next)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to clear queues')
+    }
+  }
+
+  const retrySkipped = async (panel: ScrapeSourcePanelData) => {
+    setError(null)
+    try {
+      const next = await retryScrapeSkipped(panel.key)
+      queryClient.setQueryData(['scrape-status'], next)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to retry skipped files')
     }
   }
 
@@ -941,6 +957,8 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                 onRun={() => void start(panel.key)}
                 onStop={stop}
                 onClear={() => void clearQueues(panel)}
+                onClearList={(which) => void clearQueues(panel, which)}
+                onRetry={() => void retrySkipped(panel)}
                 neverAutoRun={appSettings?.never_auto_run_scrape ?? false}
                 onNeverAutoRunChange={(value) => {
                   queryClient.setQueryData(['app-settings'], (prev: typeof appSettings) =>

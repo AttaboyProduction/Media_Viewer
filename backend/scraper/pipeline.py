@@ -901,6 +901,58 @@ def _finish_queue(
             lanes.close()
 
 
+def _mark_retry_already_in_total(urls: list[str]) -> None:
+    """Reload parks every leftover in ``total`` with ``processed`` at 0.
+
+    Those URLs are not in ``counted_urls`` yet. Mark the ones this retry is
+    about to add so the queue length is not counted a second time. A session
+    that already counted them is left alone so they can leave ``processed``
+    and be counted again when they settle.
+    """
+    if scrape_status.processed != 0 or scrape_status.finished_urls:
+        return
+    for url in urls:
+        if url and url not in scrape_status.counted_urls:
+            scrape_status.counted_urls.add(url)
+
+
+def begin_remote_retry(urls: list[str]) -> None:
+    """Download exactly these raw files again. Caller holds ``scrape_lock``.
+
+    Does not take Queue to scrape or Cancelled. Counters stay; each retried
+    file that was already settled leaves ``processed`` until it settles again.
+    """
+    from backend.app.services.scrape_panels import SOURCE_UNSUPPORTED, activate
+
+    ordered = list(dict.fromkeys(url for url in urls if url))
+    activate(scrape_status, SOURCE_UNSUPPORTED)
+    _mark_retry_already_in_total(ordered)
+    scrape_status.job_id += 1
+    job_id = scrape_status.job_id
+    scrape_status.running = True
+    scrape_status.cancel = False
+    scrape_status.kind = "download"
+    scrape_status.site_id = None
+    scrape_status.queue_open = True
+    scrape_status.pending_urls = list(ordered)
+    scrape_status.message = "Queued"
+    scrape_status.current_url = ordered[0] if ordered else None
+    scrape_status.ran_this_session = True
+    added = 0
+    for url in ordered:
+        scrape_status.accepted_urls.add(url)
+        if url in scrape_status.counted_urls:
+            scrape_status.retry_urls.add(url)
+            _reopen_skipped_or_error(url)
+            continue
+        added += 1
+        _hold_download_slot(url)
+    scrape_status.total = max(scrape_status.total, scrape_status.processed) + added
+    scrape_status.continue_counts = True
+    _sync_open_urls()
+    threading.Thread(target=_run_remote_downloads, args=(job_id,), daemon=True).start()
+
+
 def begin_remote_download(url: str) -> str:
     """Queue one file URL the gallery scrapers don't know.
 

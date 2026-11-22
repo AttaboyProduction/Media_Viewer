@@ -1930,6 +1930,41 @@ tr.selected {
   margin: 0.6rem 0 0;
 }
 
+.scrape-queue {
+  margin-top: 0.5rem;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+}
+
+.scrape-queue-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.scrape-queue-toggle {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.scrape-queue-toggle::before {
+  content: '▸ ';
+}
+
+.scrape-queue-toggle[aria-expanded='true']::before {
+  content: '▾ ';
+}
+
+.scrape-queue .btn-small {
+  margin-left: 0.15rem;
+}
+
 .scrape-skipped {
   margin-top: 0.5rem;
   font-size: 0.82rem;

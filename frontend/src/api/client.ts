@@ -283,10 +283,23 @@ export function clearRecentScrapedMedia() {
   return request<ScrapeStatus>('/scrape/clear-recent', { method: 'POST' })
 }
 
-/** Clear one source panel's lists (`source`), or every panel when omitted. */
-export function clearScrapeQueues(source?: string) {
-  const query = source ? `?source=${encodeURIComponent(source)}` : ''
-  return request<ScrapeStatus>(`/scrape/clear-queues${query}`, { method: 'POST' })
+export type ScrapeListName = 'queue' | 'skipped' | 'cancelled'
+
+/** Clear one source panel's lists (`source`), or every panel when omitted.
+ * `which` clears only that list; omitted clears Queue, Skipped, and Cancelled.
+ */
+export function clearScrapeQueues(source?: string, which?: ScrapeListName) {
+  const params = new URLSearchParams()
+  if (source) params.set('source', source)
+  if (which) params.set('which', which)
+  const query = params.toString()
+  return request<ScrapeStatus>(`/scrape/clear-queues${query ? `?${query}` : ''}`, { method: 'POST' })
+}
+
+/** Run only this panel's skipped and error files. Queue and Cancelled stay. */
+export function retryScrapeSkipped(source: string) {
+  const params = new URLSearchParams({ source })
+  return request<ScrapeStatus>(`/scrape/retry?${params}`, { method: 'POST' })
 }
 
 export function fetchRecentScrapedMedia(
