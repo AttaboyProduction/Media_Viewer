@@ -1,4 +1,5 @@
-import { Fragment, type CSSProperties, type ReactNode, type Ref } from 'react'
+import { Fragment, useRef, type CSSProperties, type ReactNode, type Ref } from 'react'
+import { useHorizontalWheelNav } from '../../hooks/useHorizontalWheelNav'
 import type { MediaItem } from '../../types'
 import TagFilterPanel from '../TagFilterPanel'
 import PaginationBar, { type PageSizeOption } from './PaginationBar'
@@ -52,6 +53,12 @@ export default function MediaCollectionView({
   pagination,
   fillHeight = false,
 }: Props) {
+  const rootRef = useRef<HTMLDivElement>(null)
+  useHorizontalWheelNav(rootRef, (direction) => {
+    const pages = Math.max(1, pagination.totalPages)
+    if (direction === 'prev' && pagination.page > 1) pagination.onPageChange(pagination.page - 1)
+    if (direction === 'next' && pagination.page < pages) pagination.onPageChange(pagination.page + 1)
+  })
   const showTagFilter =
     tagFilter &&
     (items.length > 0 ||
@@ -102,15 +109,15 @@ export default function MediaCollectionView({
 
   if (!fillHeight) {
     return (
-      <>
+      <div ref={rootRef}>
         {body}
         {paginationBar}
-      </>
+      </div>
     )
   }
 
   return (
-    <div className="media-collection-fill">
+    <div ref={rootRef} className="media-collection-fill">
       <div className="media-collection-scroll">{body}</div>
       {paginationBar}
     </div>

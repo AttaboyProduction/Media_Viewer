@@ -23,6 +23,7 @@ import { useContentHide } from '../hooks/useContentHide'
 import { useKeyboardRating } from '../hooks/useKeyboardRating'
 import { DEFAULT_APP_SETTINGS } from '../types/appSettings'
 import { registerEscapeHandler } from '../utils/escapeStack'
+import { useHorizontalWheelNav } from '../hooks/useHorizontalWheelNav'
 import { shouldSkipKeyboardShortcut } from '../utils/keyboardTarget'
 
 interface Props {
@@ -81,6 +82,7 @@ export default function MediaDetailModal({
   const [naturalSize, setNaturalSize] = useState({ w: 0, h: 0 })
   const [viewportSize, setViewportSize] = useState({ w: 0, h: 0 })
   const mediaScrollRef = useRef<HTMLDivElement>(null)
+  const backdropRef = useRef<HTMLDivElement>(null)
   const scrollMediaToStartRef = useRef(false)
   const modalRef = useRef<HTMLDivElement>(null)
 
@@ -276,6 +278,16 @@ export default function MediaDetailModal({
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
   }, [canPrev, canNext, onNavigateAdjacent, navBusy, expanded, step])
+
+  useHorizontalWheelNav(
+    backdropRef,
+    (direction) => {
+      if (navBusy) return
+      if (direction === 'prev' && canPrev) void step('prev')
+      if (direction === 'next' && canNext) void step('next')
+    },
+    Boolean(media),
+  )
 
   const fitScale =
     naturalSize.w > 0 && naturalSize.h > 0 && viewportSize.w > 0 && viewportSize.h > 0
@@ -478,6 +490,7 @@ export default function MediaDetailModal({
 
   return (
     <div
+      ref={backdropRef}
       className={`modal-backdrop${expanded ? ' modal-backdrop-expanded' : ''}`}
       onClick={onClose}
     >

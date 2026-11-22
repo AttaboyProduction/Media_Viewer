@@ -9,6 +9,7 @@ import {
   patchTag,
   renameTag,
 } from '../api/client'
+import { useHorizontalWheelNav } from '../hooks/useHorizontalWheelNav'
 import { usePageClamp } from '../hooks/usePageClamp'
 import { usePersistedPageSize } from '../hooks/usePersistedPageSize'
 import { useTagSearch } from '../hooks/useTagSearch'
@@ -108,6 +109,11 @@ export default function TagsPage() {
   }, [search, matchMode, groupFilterIds])
 
   usePageClamp(page, totalPages, setPage)
+  const pageRef = useRef<HTMLDivElement>(null)
+  useHorizontalWheelNav(pageRef, (direction) => {
+    if (direction === 'prev' && page > 1) setPage(page - 1)
+    if (direction === 'next' && page < totalPages) setPage(page + 1)
+  })
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['tags'] })
@@ -164,7 +170,7 @@ export default function TagsPage() {
   })
 
   return (
-    <div className="page">
+    <div ref={pageRef} className="page">
       <div className="page-header">
         <h2 className="page-title">Tags</h2>
         <div className="page-header-actions">

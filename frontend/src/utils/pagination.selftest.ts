@@ -2,6 +2,7 @@ import {
   SCRAPE_DOWNLOAD_PAGE_SIZES,
   VIEWER_PAGE_SIZES,
 } from '../types/appSettings'
+import { horizontalWheelDirection } from './horizontalWheelNav'
 import {
   clampPaginationPage,
   paginationItemCount,
@@ -27,6 +28,11 @@ assert(parseGoToPage('0', 10) === null, 'go-to rejects zero')
 assert(parseGoToPage('', 10) === null, 'go-to rejects empty')
 assert(parseGoToPage('2.5', 10) === null, 'go-to rejects decimals')
 assert(parseGoToPage('abc', 10) === null, 'go-to rejects non-digits')
+
+assert(horizontalWheelDirection(40, 0) === 'next', 'wheel tilt right is next')
+assert(horizontalWheelDirection(-40, 0) === 'prev', 'wheel tilt left is previous')
+assert(horizontalWheelDirection(4, 0) === null, 'tiny horizontal wheel is ignored')
+assert(horizontalWheelDirection(10, 40) === null, 'vertical wheel scroll is not navigation')
 
 assert(
   paginationItemCount(18, 47) === '18 out of 47 items',

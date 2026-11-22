@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { useHorizontalWheelNav } from '../hooks/useHorizontalWheelNav'
 import { useQuery } from '@tanstack/react-query'
 
 import { fetchDuplicates } from '../api/client'
@@ -12,6 +13,7 @@ const PAGE_SIZE = 5
 export default function DuplicatesPanel() {
   const [expanded, setExpanded] = useState(false)
   const [page, setPage] = useState(1)
+  const bodyRef = useRef<HTMLDivElement>(null)
   const { data, isLoading, error } = useQuery({
     queryKey: ['duplicates'],
     queryFn: fetchDuplicates,
@@ -26,6 +28,14 @@ export default function DuplicatesPanel() {
   ]
   const totalPages = paginationTotalPages(groups.length, PAGE_SIZE)
   usePageClamp(page, totalPages, setPage)
+  useHorizontalWheelNav(
+    bodyRef,
+    (direction) => {
+      if (direction === 'prev' && page > 1) setPage(page - 1)
+      if (direction === 'next' && page < totalPages) setPage(page + 1)
+    },
+    expanded,
+  )
   const pageGroups = groups.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   return (
@@ -42,7 +52,7 @@ export default function DuplicatesPanel() {
         </span>
       </button>
       {expanded && (
-        <div className="panel-collapse-body">
+        <div ref={bodyRef} className="panel-collapse-body">
           <p className="hint">
             Identical files look like the same picture or the same video (including different resolution).
             Similar files are close picture matches such as crops or watermarks. Exact byte matches
