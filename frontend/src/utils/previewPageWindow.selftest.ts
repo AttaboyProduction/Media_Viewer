@@ -4,21 +4,21 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message)
 }
 
-assert(previewWindowPages(1, 5).join() === '1,2', 'page 1 keeps itself and the next page')
-assert(previewWindowPages(3, 5).join() === '2,3,4', 'a middle page keeps one neighbor each side')
-assert(previewWindowPages(5, 5).join() === '4,5', 'the last page has no following page')
+assert(previewWindowPages(1, 5).join() === '1,2,3', 'page 1 keeps itself and two following pages')
+assert(previewWindowPages(3, 5).join() === '1,2,3,4,5', 'a middle page keeps two neighbors each side')
+assert(previewWindowPages(5, 5).join() === '3,4,5', 'the last page keeps two previous pages')
 assert(previewWindowPages(9, 2).join() === '1,2', 'a page past the end clamps into the window')
 
-assert(previewLoadOrder(1, 4, new Set()).join() === '1,2', 'first page loads itself, then the next')
+assert(previewLoadOrder(1, 4, new Set()).join() === '1,2,3', 'first page loads itself, then two after')
 assert(
-  previewLoadOrder(3, 5, new Set([2])).join() === '3,4',
-  'a warm previous page is kept and not loaded again',
+  previewLoadOrder(3, 5, new Set([2])).join() === '3,4,5,1',
+  'warm previous pages are kept and not loaded again',
 )
 assert(
-  previewLoadOrder(3, 5, new Set()).join() === '3,4,2',
-  'a cold previous page loads after the following page',
+  previewLoadOrder(3, 5, new Set()).join() === '3,4,5,1,2',
+  'cold previous pages load after the following pages',
 )
-assert(previewLoadOrder(4, 4, new Set([3])).join() === '4', 'last page does not ask for a next page')
+assert(previewLoadOrder(4, 4, new Set([3])).join() === '4,2', 'last page loads a cold page two back')
 
 assert(previewWindowPages(3, 8, 2).join() === '1,2,3,4,5', 'radius 2 keeps two pages each side')
 assert(previewWindowPages(1, 8, 2).join() === '1,2,3', 'radius 2 on page 1 has no pages before')

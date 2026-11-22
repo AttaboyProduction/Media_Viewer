@@ -305,10 +305,11 @@ def get_media_preview(
         preview = ensure_preview(media.id, path, media.media_type or "image", size)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    # Browser keeps the card JPEG ~1 day; ``v={file_size}`` on the URL busts a replaced file.
     return FileResponse(
         preview,
         media_type="image/jpeg",
-        headers={"Cache-Control": "no-cache"},
+        headers={"Cache-Control": "public, max-age=86400"},
     )
 
 

@@ -2,7 +2,7 @@
  * Pages of card previews kept decoded on each side of the open page.
  * `1` keeps the previous page and the next page. `2` keeps two before and two after.
  */
-export const PREVIEW_PAGE_RADIUS = 1
+export const PREVIEW_PAGE_RADIUS = 2
 
 function pageRadius(radius: number): number {
   if (!Number.isFinite(radius) || radius < 0) return 0
