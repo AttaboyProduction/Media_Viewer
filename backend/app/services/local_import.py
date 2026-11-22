@@ -1,17 +1,20 @@
-"""Link local PC media into the library (no copy, no tags)."""
+"""Import local PC media: link in place, or copy into the app media folder."""
 
 from __future__ import annotations
 
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
+from backend.app.config import settings
 from backend.app.db.models import MediaItem
 from backend.app.db.session import SessionLocal
 from backend.app.services.hash_service import find_earlier_phash_match, perceptual_hash, sha256_file
 from backend.app.services.local_media import (
     STORAGE_LINKED,
+    STORAGE_MANAGED,
     file_uri_for_path,
     iter_media_files,
     linked_source_post_id,
@@ -138,6 +141,68 @@ def link_one_file(db: Session, path: Path) -> tuple[MediaItem | None, str | None
     return media, None
 
 
+def _copy_destination(source: Path, media_type: str, post_id: str) -> Path:
+    folder = settings.media_dir / media_type
+    folder.mkdir(parents=True, exist_ok=True)
+    ext = source.suffix.lower() or ".bin"
+    dest = folder / f"{post_id}{ext}"
+    n = 2
+    while dest.exists():
+        dest = folder / f"{post_id}-{n}{ext}"
+        n += 1
+    return dest
+
+
+def copy_one_file(db: Session, path: Path) -> tuple[MediaItem | None, str | None]:
+    """Copy one file into ``media/`` and insert a managed row. Returns (media, skip_reason)."""
+    resolved = normalize_absolute_path(path)
+    if not resolved.is_file():
+        return None, "missing"
+    media_type = media_type_for_path(resolved)
+    if not media_type:
+        return None, "unsupported"
+
+    post_id = linked_source_post_id(resolved)
+    by_post = db.query(MediaItem).filter(MediaItem.source_post_id == post_id).first()
+    if by_post is not None:
+        return by_post, "already_have"
+
+    content_hash = sha256_file(resolved)
+    exact = db.query(MediaItem).filter(MediaItem.content_hash == content_hash).first()
+    if exact is not None:
+        return exact, "duplicate_hash"
+
+    dest = _copy_destination(resolved, media_type, post_id)
+    shutil.copy2(resolved, dest)
+    try:
+        phash = perceptual_hash(dest, media_type)
+        media = MediaItem(
+            source_post_id=post_id,
+            source_url=file_uri_for_path(resolved),
+            local_path=dest.relative_to(settings.media_dir.parent).as_posix(),
+            storage_kind=STORAGE_MANAGED,
+            media_type=media_type,
+            content_hash=content_hash,
+            phash=phash,
+            file_size=dest.stat().st_size,
+            scraped_at=datetime.now(timezone.utc).replace(tzinfo=None),
+        )
+        db.add(media)
+        db.flush()
+        _apply_visual_match(db, media, phash)
+        db.flush()
+    except Exception:
+        dest.unlink(missing_ok=True)
+        raise
+    return media, None
+
+
+def local_import_copies() -> bool:
+    from backend.app.services.app_settings import load_app_settings
+
+    return load_app_settings().get("local_import_storage") == "copy"
+
+
 def run_local_import(paths: list[str], *, recursive: bool, job_id: int = 0) -> None:
     """Background job: scan paths, hash, insert linked rows; updates scrape_status.
 
@@ -165,6 +230,7 @@ def run_local_import(paths: list[str], *, recursive: bool, job_id: int = 0) -> N
     try:
         files = iter_media_files(paths, recursive=recursive)
         scrape_status.total = len(files)
+        copy_into_library = local_import_copies()
         db = SessionLocal()
         try:
             cancelled = False
@@ -178,7 +244,11 @@ def run_local_import(paths: list[str], *, recursive: bool, job_id: int = 0) -> N
                     scrape_status.message = f"Importing {path.name}"
                     scrape_status.current_url = str(path)
                     try:
-                        media, skip = link_one_file(db, path)
+                        media, skip = (
+                            copy_one_file(db, path)
+                            if copy_into_library
+                            else link_one_file(db, path)
+                        )
                         scrape_status.processed += 1
                         if skip:
                             scrape_status.skipped += 1

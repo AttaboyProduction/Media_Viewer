@@ -47,6 +47,7 @@ class AppSettingsOut(BaseModel):
     scrape_downloads_show_all: bool = False
     scrape_downloads_page_size: int = 18
     scrape_skip_identical: bool = False
+    local_import_storage: Literal["link", "copy"] = "link"
     never_auto_run_scrape: bool = False
     scrape_concurrency: int = 2
     scrape_browser: Literal["auto", "obscura", "playwright"] = "auto"
@@ -91,6 +92,7 @@ class AppSettingsPatch(BaseModel):
     scrape_downloads_show_all: bool | None = None
     scrape_downloads_page_size: int | None = None
     scrape_skip_identical: bool | None = None
+    local_import_storage: Literal["link", "copy"] | None = None
     never_auto_run_scrape: bool | None = None
     scrape_concurrency: int | None = None
     scrape_browser: Literal["auto", "obscura", "playwright"] | None = None

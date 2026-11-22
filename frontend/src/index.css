@@ -2022,9 +2022,21 @@ tr.selected {
   margin-bottom: 0.75rem;
 }
 
-.scrape-local-recursive {
+.scrape-local-recursive,
+.scrape-local-storage {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   font-size: 0.9rem;
   color: var(--text-secondary);
+}
+
+.scrape-local-storage select {
+  background: var(--bg-input);
+  color: var(--text-primary);
+  border: 1px solid var(--border-input);
+  border-radius: 6px;
+  padding: 0.3rem 0.45rem;
 }
 
 .scrape-local-section {

@@ -56,6 +56,8 @@ _DEFAULTS: dict = {
     "scrape_downloads_page_size": 18,
     # Skip a new download when its picture or video frames match an earlier file (identical band).
     "scrape_skip_identical": False,
+    # Local import: "link" leaves the file in its folder; "copy" stores a copy under media/.
+    "local_import_storage": "link",
     # On: extension links wait in Queue to scrape until Run scrape. Off (default) starts them immediately.
     "never_auto_run_scrape": False,
     # How many media files download at once. Clamped to 1–6.
@@ -214,6 +216,8 @@ def _normalize_settings(data: dict) -> dict:
     merged["media_detail_tags_collapsed"] = bool(merged.get("media_detail_tags_collapsed", True))
     merged["scrape_downloads_show_all"] = bool(merged.get("scrape_downloads_show_all", False))
     merged["scrape_skip_identical"] = bool(merged.get("scrape_skip_identical", False))
+    if merged.get("local_import_storage") not in ("link", "copy"):
+        merged["local_import_storage"] = "link"
     merged["never_auto_run_scrape"] = bool(merged.get("never_auto_run_scrape", False))
     merged["scrape_concurrency"] = _clamp_int(merged.get("scrape_concurrency", 2), 1, 6, 2)
     scrape_dl_size = _clamp_int(merged.get("scrape_downloads_page_size", 18), 18, 90, 18)

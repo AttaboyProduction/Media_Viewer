@@ -494,6 +494,22 @@ export default function AppSettingsPage() {
                     </label>
                   </SettingsOption>
                   <SettingsOption
+                    label="Local files"
+                    hint="Where a Local scrape stores files. Keep in the original folder links them in place. Copy into the app folder saves a copy under media/ and leaves the original. Default is the original folder. The Local scrape page has the same choice."
+                  >
+                    <select
+                      value={settings.local_import_storage}
+                      onChange={(e) =>
+                        save({
+                          local_import_storage: e.target.value as AppSettings['local_import_storage'],
+                        })
+                      }
+                    >
+                      <option value="link">Keep in the original folder</option>
+                      <option value="copy">Copy into the app folder</option>
+                    </select>
+                  </SettingsOption>
+                  <SettingsOption
                     label="Skip identical files"
                     hint="A new post that matches a library file in the identical band is not downloaded. Its tags and URL are added to the kept file. Similar files are still downloaded."
                   >

@@ -10,7 +10,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.db.models import Base, MediaItem
-from backend.app.services.local_import import find_missing_linked, link_one_file, path_under_folder
+from backend.app.services.local_import import (
+    copy_one_file,
+    find_missing_linked,
+    link_one_file,
+    path_under_folder,
+)
 from backend.app.services.local_media import (
     STORAGE_LINKED,
     STORAGE_MANAGED,
@@ -75,6 +80,25 @@ class LocalImportDbTests(unittest.TestCase):
         path = self.root / name
         path.write_bytes(content)
         return path
+
+    def test_copy_one_file_stores_a_library_copy(self) -> None:
+        from unittest.mock import patch
+
+        from backend.app.services import local_import as local_import_mod
+
+        path = self._make_jpg("orig.jpg", b"copy-these-bytes")
+        library = self.root / "library"
+        with patch.object(local_import_mod.settings, "media_dir", library):
+            media, skip = copy_one_file(self.db, path)
+            self.db.commit()
+            self.assertIsNone(skip)
+            assert media is not None
+            self.assertEqual(media.storage_kind, STORAGE_MANAGED)
+            self.assertTrue(path.is_file())
+            stored = absolute_path_for_media(media)
+            self.assertTrue(stored.is_file())
+            self.assertEqual(stored.read_bytes(), b"copy-these-bytes")
+        self.assertEqual(path.read_bytes(), b"copy-these-bytes")
 
     def test_link_one_file_inserts_linked_row(self) -> None:
         path = self._make_jpg("one.jpg")

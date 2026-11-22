@@ -72,6 +72,8 @@ export interface AppSettings {
   scrape_downloads_page_size: number
   /** Do not download a new post when it is identical to a file already in the library. */
   scrape_skip_identical: boolean
+  /** Local import: link leaves the file in its folder; copy stores it under media/. */
+  local_import_storage: 'link' | 'copy'
   /** Extension links wait until Run scrape. Off starts them as soon as they arrive. */
   never_auto_run_scrape: boolean
   /** How many media files download at the same time. 1–6, default 2. */
@@ -145,6 +147,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   scrape_downloads_show_all: false,
   scrape_downloads_page_size: 18,
   scrape_skip_identical: false,
+  local_import_storage: 'link',
   never_auto_run_scrape: false,
   scrape_concurrency: 2,
   scrape_browser: 'auto',

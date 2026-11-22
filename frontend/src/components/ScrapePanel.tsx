@@ -731,6 +731,25 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
               />{' '}
               Include subfolders
             </label>
+            <label className="scrape-local-storage">
+              Store files
+              <select
+                value={appSettings?.local_import_storage ?? 'link'}
+                disabled={Boolean(status?.running) || !appSettings}
+                onChange={(e) => {
+                  const local_import_storage = e.target.value as 'link' | 'copy'
+                  queryClient.setQueryData(['app-settings'], (prev: typeof appSettings) =>
+                    prev ? { ...prev, local_import_storage } : prev,
+                  )
+                  patchAppSettings({ local_import_storage }).then((next) => {
+                    queryClient.setQueryData(['app-settings'], next)
+                  })
+                }}
+              >
+                <option value="link">In the original folder</option>
+                <option value="copy">Copy into the app folder</option>
+              </select>
+            </label>
           </div>
           {localFolders.length > 0 ? (
             <div className="scrape-local-section">
