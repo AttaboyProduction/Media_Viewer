@@ -5,6 +5,8 @@ import { useApplyAppDefaults } from '../hooks/useAppDefaults'
 import { useMediaBulkActions } from '../hooks/useMediaBulkActions'
 import { useMediaMultiSelect } from '../hooks/useMediaMultiSelect'
 import { usePageClamp } from '../hooks/usePageClamp'
+import { usePreviewPageWindow } from '../hooks/usePreviewPageWindow'
+import { useSuppressPageSwitchDim } from '../hooks/useSuppressPageSwitchDim'
 import { usePersistedPageSize } from '../hooks/usePersistedPageSize'
 import ContentHideMedia from '../components/ContentHideMedia'
 import MediaDetailModal from '../components/MediaDetailModal'
@@ -378,8 +380,9 @@ export default function ViewerPage() {
   const showLoading = !mediaQueryEnabled || isLoading || (isFetching && !data)
   const totalPages = data ? paginationTotalPages(data.total, data.page_size) : 1
   usePageClamp(page, data ? totalPages : page, goToPage)
+  const dimGrid = useSuppressPageSwitchDim(page, data?.page, isFetching)
   const gridClass = `media-grid media-grid-${prefs.grid_thumbnail_size}${
-    isFetching && data ? ' media-grid-refreshing' : ''
+    dimGrid ? ' media-grid-refreshing' : ''
   }${selectMode ? ' recent-scrape-selecting' : ''}`
   const itemCount = data?.items.length ?? 0
   const gridColumns =
@@ -397,6 +400,107 @@ export default function ViewerPage() {
       ? (gridWidth - gridGap * (gridColumns - 1)) / gridColumns
       : TILE_MIN[prefs.grid_thumbnail_size]
   const previewSize = previewSizeForTile(tilePx)
+  const previewSessionKey = useMemo(
+    () =>
+      JSON.stringify({
+        pageSize,
+        selectedTags,
+        tagMode,
+        mediaType,
+        minRating,
+        includeDiscarded,
+        hideExcluded,
+        hiddenTagNames,
+        hiddenGroupKeys,
+        mediaExcludeTags,
+        sort,
+        listCursor,
+        previewSize,
+      }),
+    [
+      pageSize,
+      selectedTags,
+      tagMode,
+      mediaType,
+      minRating,
+      includeDiscarded,
+      hideExcluded,
+      hiddenTagNames,
+      hiddenGroupKeys,
+      mediaExcludeTags,
+      sort,
+      listCursor,
+      previewSize,
+    ],
+  )
+  const fetchPreviewPage = useCallback(
+    (target: number) => {
+      const cursor =
+        target > 1 && listCursor != null && sort !== 'random' ? listCursor : undefined
+      return queryClient.fetchQuery({
+        queryKey: [
+          'media',
+          target,
+          pageSize,
+          selectedTags,
+          tagMode,
+          mediaType,
+          minRating,
+          includeDiscarded,
+          hideExcluded,
+          hiddenTagNames,
+          hiddenGroupKeys,
+          mediaExcludeTags,
+          sort,
+          cursor ?? null,
+        ],
+        queryFn: () =>
+          fetchMedia({
+            page: target,
+            page_size: pageSize!,
+            tags: selectedTags,
+            tag_mode: tagMode,
+            media_type: mediaType || undefined,
+            min_rating: minRating,
+            include_discarded: includeDiscarded!,
+            exclude_tags: mediaExcludeTags,
+            exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
+            sort: sort!,
+            cursor,
+          }),
+      })
+    },
+    [
+      queryClient,
+      pageSize,
+      selectedTags,
+      tagMode,
+      mediaType,
+      minRating,
+      includeDiscarded,
+      hideExcluded,
+      hiddenTagNames,
+      hiddenGroupKeys,
+      mediaExcludeTags,
+      sort,
+      listCursor,
+    ],
+  )
+  usePreviewPageWindow({
+    scope: 'viewer',
+    enabled:
+      mediaQueryEnabled &&
+      data?.page === page &&
+      pageSize != null &&
+      sort != null &&
+      includeDiscarded != null,
+    sessionKey: previewSessionKey,
+    page,
+    totalPages,
+    currentItems: data?.page === page ? data.items : undefined,
+    previewSize,
+    fetchPage: fetchPreviewPage,
+  })
 
   return (
     <div className="page viewer-page-fill">

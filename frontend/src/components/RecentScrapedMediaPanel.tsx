@@ -15,6 +15,8 @@ import MediaBulkBar from './list/MediaBulkBar'
 import { DEFAULT_APP_SETTINGS, SCRAPE_DOWNLOAD_PAGE_SIZES } from '../types/appSettings'
 import type { MediaItem } from '../types'
 import { usePageClamp } from '../hooks/usePageClamp'
+import { usePreviewPageWindow } from '../hooks/usePreviewPageWindow'
+import { useSuppressPageSwitchDim } from '../hooks/useSuppressPageSwitchDim'
 import { usePersistedPageSize } from '../hooks/usePersistedPageSize'
 import { useMediaMultiSelect } from '../hooks/useMediaMultiSelect'
 import { excludeTagsForMediaQuery } from '../utils/contentHide'
@@ -276,6 +278,47 @@ export default function RecentScrapedMediaPanel() {
     pageSize ?? DEFAULT_APP_SETTINGS.scrape_downloads_page_size,
   )
   usePageClamp(page, data || sessionEmpty ? totalPages : page, setPage)
+  const dimRecentGrid = useSuppressPageSwitchDim(page, data?.page, isFetching)
+  const fetchPreviewPage = useCallback(
+    (target: number) =>
+      queryClient.fetchQuery({
+        queryKey: [
+          'scrape-recent-media',
+          scope,
+          target,
+          pageSize,
+          selectedTags,
+          tagMode,
+          mediaExcludeTags,
+        ],
+        queryFn: () =>
+          fetchRecentScrapedMedia(
+            target,
+            pageSize!,
+            selectedTags,
+            scope,
+            tagMode,
+            mediaExcludeTags,
+          ),
+      }),
+    [queryClient, scope, pageSize, selectedTags, tagMode, mediaExcludeTags],
+  )
+  usePreviewPageWindow({
+    scope: 'scrape-recent',
+    enabled: pageSizeReady && !sessionEmpty && data?.page === page && pageSize != null,
+    sessionKey: JSON.stringify({
+      scope,
+      pageSize,
+      selectedTags,
+      tagMode,
+      mediaExcludeTags,
+    }),
+    page,
+    totalPages,
+    currentItems: data?.page === page ? data.items : undefined,
+    previewSize: 'compact',
+    fetchPage: fetchPreviewPage,
+  })
   // Whole-session navigation only when nothing is filtered out of the grid.
   const navIds =
     !showAll && selectedTags.length === 0 && status?.recent_media_ids
@@ -359,7 +402,7 @@ export default function RecentScrapedMediaPanel() {
       <MediaCollectionView
         items={items}
         gridClassName={`media-grid media-grid-compact${
-          isFetching ? ' media-grid-refreshing' : ''
+          dimRecentGrid ? ' media-grid-refreshing' : ''
         }${selectMode ? ' recent-scrape-selecting' : ''}`}
         tagFilter={{
           selectedTags,

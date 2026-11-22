@@ -35,7 +35,7 @@ export default function MediaCardThumb({
     <img
       src={failed ? item.media_url : preview}
       alt={alt}
-      loading="lazy"
+      loading="eager"
       draggable={false}
       onError={() => setFailed(true)}
     />

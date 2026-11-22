@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { fetchAppSettings, fetchMedia, markRelated, type TagMatchMode } from '../api/client'
 import { useConfirm } from '../context/ConfirmContext'
 import { useMediaMultiSelect } from '../hooks/useMediaMultiSelect'
 import { usePageClamp } from '../hooks/usePageClamp'
+import { usePreviewPageWindow } from '../hooks/usePreviewPageWindow'
+import { useSuppressPageSwitchDim } from '../hooks/useSuppressPageSwitchDim'
 import type { MediaItem } from '../types'
 import { excludeTagsForMediaQuery } from '../utils/contentHide'
 import { parseCommaSeparatedTags } from '../utils/tagList'
@@ -158,6 +160,63 @@ export default function RelatedMediaPicker({
 
   const totalPages = data ? paginationTotalPages(data.total, PAGE_SIZE) : 1
   usePageClamp(page, data ? totalPages : page, setPage)
+  const dimRelatedGrid = useSuppressPageSwitchDim(page, data?.page, isFetching)
+  const fetchPreviewPage = useCallback(
+    (target: number) =>
+      queryClient.fetchQuery({
+        queryKey: [
+          'related-pick',
+          sourceId,
+          target,
+          selectedTags,
+          tagMode,
+          hideExcluded,
+          hiddenTagNames,
+          hiddenGroupKeys,
+          mediaExcludeTags,
+        ],
+        queryFn: () =>
+          fetchMedia({
+            page: target,
+            page_size: PAGE_SIZE,
+            tags: selectedTags,
+            tag_mode: tagMode,
+            sort: 'date_desc',
+            include_discarded: true,
+            exclude_id: sourceId,
+            exclude_tags: mediaExcludeTags,
+            exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
+          }),
+      }),
+    [
+      queryClient,
+      sourceId,
+      selectedTags,
+      tagMode,
+      hideExcluded,
+      hiddenTagNames,
+      hiddenGroupKeys,
+      mediaExcludeTags,
+    ],
+  )
+  usePreviewPageWindow({
+    scope: 'related-pick',
+    enabled: pickerOpen && hideExcluded !== null && data?.page === page,
+    sessionKey: JSON.stringify({
+      sourceId,
+      selectedTags,
+      tagMode,
+      hideExcluded,
+      hiddenTagNames,
+      hiddenGroupKeys,
+      mediaExcludeTags,
+    }),
+    page,
+    totalPages,
+    currentItems: data?.page === page ? data.items : undefined,
+    previewSize: 'compact',
+    fetchPage: fetchPreviewPage,
+  })
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['duplicate-group'] })
@@ -259,7 +318,7 @@ export default function RelatedMediaPicker({
       {pickerOpen && (
         <MediaCollectionView
           items={items}
-          gridClassName={`media-grid media-grid-related${isFetching && data ? ' media-grid-refreshing' : ''}${
+          gridClassName={`media-grid media-grid-related${dimRelatedGrid ? ' media-grid-refreshing' : ''}${
             selectMode ? ' recent-scrape-selecting' : ''
           }`}
           tagFilter={{
