@@ -918,6 +918,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                     })
                   }
                   searchPlaceholder="Search library tags..."
+                  chipsOnlyWhileSearching
                 />
               </div>
             )}
@@ -995,7 +996,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
 
       <div className="scrape-exclude-tags">
         <span className="scrape-exclude-tags-label">Exclude tags</span>
-        <ExcludeTagsPicker value={excludeTags} onChange={setExcludeTags} />
+        <ExcludeTagsPicker value={excludeTags} onChange={setExcludeTags} chipsOnlyWhileSearching />
       </div>
         </>
       )}

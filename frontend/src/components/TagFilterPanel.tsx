@@ -63,6 +63,8 @@ interface Props {
   onClearSelected?: () => void
   tagMode: 'and' | 'or'
   onTagModeChange: (mode: 'and' | 'or') => void
+  /** Hide page tag chips until Search tags is open and the query is non-empty. */
+  chipsOnlyWhileSearching?: boolean
 }
 
 export default function TagFilterPanel({
@@ -75,6 +77,7 @@ export default function TagFilterPanel({
   onClearSelected,
   tagMode,
   onTagModeChange,
+  chipsOnlyWhileSearching = false,
 }: Props) {
   const { data: appSettings } = useQuery({
     queryKey: ['app-settings'],
@@ -134,7 +137,8 @@ export default function TagFilterPanel({
         onClearSelected={selectedTags.length > 0 ? onClearSelected : undefined}
         onSuggestPick={onToggle}
       >
-        {(filteredList, filtersActive) => {
+        {(filteredList, filtersActive, textActive) => {
+          if (chipsOnlyWhileSearching && !textActive) return null
           const shown = filtersActive
             ? arrangeBySelectDisplayMode(
                 withSelected(filteredList, selectedOnPage),

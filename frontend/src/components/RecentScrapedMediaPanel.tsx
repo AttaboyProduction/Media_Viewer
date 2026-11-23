@@ -478,6 +478,7 @@ export default function RecentScrapedMediaPanel() {
             setSelectedTags([])
           },
           tagMode,
+          chipsOnlyWhileSearching: true,
           onTagModeChange: (mode) => {
             setTagMode(mode)
             setPage(1)

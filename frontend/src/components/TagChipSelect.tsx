@@ -30,6 +30,8 @@ interface MultiProps {
    * List arrangement still follows tags_select_display_mode.
    */
   showSelectedPanel?: boolean
+  /** Hide the chip cloud until Search tags is open and the query is non-empty. */
+  chipsOnlyWhileSearching?: boolean
 }
 
 export function SearchableTagMultiSelect({
@@ -41,6 +43,7 @@ export function SearchableTagMultiSelect({
   emptyLabel = 'No matching tags',
   toolbarActions,
   showSelectedPanel = true,
+  chipsOnlyWhileSearching = false,
 }: MultiProps) {
   const { data: appSettings } = useQuery({
     queryKey: ['app-settings'],
@@ -92,19 +95,22 @@ export function SearchableTagMultiSelect({
           }
         }}
       >
-        {(filteredList, filtersActive) => (
-          <CollapsibleTagChipSelectList
-            mode="multi"
-            tags={filteredList}
-            selectedIds={selectedIds}
-            onChange={onChange}
-            emptyMessage={
-              panel.length > 0 && list.length === 0 && !filtersActive
-                ? 'All matching tags are selected'
-                : emptyLabel
-            }
-          />
-        )}
+        {(filteredList, filtersActive, textActive) => {
+          if (chipsOnlyWhileSearching && !textActive) return null
+          return (
+            <CollapsibleTagChipSelectList
+              mode="multi"
+              tags={filteredList}
+              selectedIds={selectedIds}
+              onChange={onChange}
+              emptyMessage={
+                panel.length > 0 && list.length === 0 && !filtersActive
+                  ? 'All matching tags are selected'
+                  : emptyLabel
+              }
+            />
+          )
+        }}
       </TagListSearch>
     </div>
   )
@@ -118,6 +124,8 @@ interface SingleProps {
   searchPlaceholder?: string
   emptyLabel?: string
   toolbarActions?: ReactNode
+  /** Hide the chip cloud until Search tags is open and the query is non-empty. */
+  chipsOnlyWhileSearching?: boolean
 }
 
 export function SearchableTagSingleSelect({
@@ -128,6 +136,7 @@ export function SearchableTagSingleSelect({
   searchPlaceholder = 'Search tags...',
   emptyLabel = 'No matching tags',
   toolbarActions,
+  chipsOnlyWhileSearching = false,
 }: SingleProps) {
   const { data: appSettings } = useQuery({
     queryKey: ['app-settings'],
@@ -176,19 +185,22 @@ export function SearchableTagSingleSelect({
           if (tag) onChange(tag.id)
         }}
       >
-        {(filteredList, filtersActive) => (
-          <CollapsibleTagChipSelectList
-            mode="single"
-            tags={filteredList}
-            selectedId={selectedId}
-            onChange={onChange}
-            emptyMessage={
-              panel.length > 0 && list.length === 0 && !filtersActive
-                ? 'All matching tags are selected'
-                : emptyLabel
-            }
-          />
-        )}
+        {(filteredList, filtersActive, textActive) => {
+          if (chipsOnlyWhileSearching && !textActive) return null
+          return (
+            <CollapsibleTagChipSelectList
+              mode="single"
+              tags={filteredList}
+              selectedId={selectedId}
+              onChange={onChange}
+              emptyMessage={
+                panel.length > 0 && list.length === 0 && !filtersActive
+                  ? 'All matching tags are selected'
+                  : emptyLabel
+              }
+            />
+          )
+        }}
       </TagListSearch>
     </div>
   )

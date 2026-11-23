@@ -13,6 +13,7 @@ interface TagFilterConfig {
   onClearSelected?: () => void
   tagMode: 'and' | 'or'
   onTagModeChange: (mode: 'and' | 'or') => void
+  chipsOnlyWhileSearching?: boolean
 }
 
 interface PaginationConfig {
@@ -93,6 +94,7 @@ export default function MediaCollectionView({
           onClearSelected={tagFilter.onClearSelected}
           tagMode={tagFilter.tagMode}
           onTagModeChange={tagFilter.onTagModeChange}
+          chipsOnlyWhileSearching={tagFilter.chipsOnlyWhileSearching}
         />
       )}
       {beforeGrid}

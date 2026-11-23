@@ -9,7 +9,7 @@ import TagSearchSuggest from './TagSearchSuggest'
 
 interface Props<T extends SearchableTag> {
   items: T[]
-  children: (filteredItems: T[], filtersActive: boolean) => ReactNode
+  children: (filteredItems: T[], filtersActive: boolean, textActive: boolean) => ReactNode
   placeholder?: string
   toolbarActions?: ReactNode
   disabled?: boolean
@@ -221,7 +221,7 @@ export default function TagListSearch<T extends SearchableTag>({
         </div>
       )}
 
-      {children(filteredItems, filtersActive)}
+      {children(filteredItems, filtersActive, textActive)}
     </>
   )
 }

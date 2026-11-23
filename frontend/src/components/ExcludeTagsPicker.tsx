@@ -14,9 +14,15 @@ import { SearchableTagMultiSelect } from './TagChipSelect'
 interface Props {
   value: string
   onChange: (next: string) => void
+  /** Hide the chip cloud until Search tags is open and the query is non-empty. */
+  chipsOnlyWhileSearching?: boolean
 }
 
-export default function ExcludeTagsPicker({ value, onChange }: Props) {
+export default function ExcludeTagsPicker({
+  value,
+  onChange,
+  chipsOnlyWhileSearching = false,
+}: Props) {
   const { data: allTags = [] } = useQuery({ queryKey: ['tags'], queryFn: fetchTags })
   const { data: appSettings } = useQuery({
     queryKey: ['app-settings'],
@@ -65,6 +71,7 @@ export default function ExcludeTagsPicker({ value, onChange }: Props) {
         onChange={updateIds}
         searchPlaceholder="Search tags to exclude..."
         emptyLabel="No matching tags"
+        chipsOnlyWhileSearching={chipsOnlyWhileSearching}
         toolbarActions={
           <button
             type="button"
