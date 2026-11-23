@@ -25,7 +25,7 @@ _DEFAULTS: dict = {
     "viewer_page_size": 36,
     "viewer_page_sizes": [12, 24, 36, 48, 60, 72, 84, 96],
     "viewer_include_discarded": False,
-    "scrape_default_limit": 10,
+    "scrape_default_limit": 0,
     "scrape_default_sort": "date_desc",
     "scrape_default_exclude_tags": "",
     "phash_threshold": 8,
@@ -242,7 +242,7 @@ def _normalize_settings(data: dict) -> dict:
 
     if merged["scrape_default_sort"] not in _SCRAPE_SORTS:
         merged["scrape_default_sort"] = "date_desc"
-    merged["scrape_default_limit"] = _clamp_int(merged["scrape_default_limit"], 0, 500, 10)
+    merged["scrape_default_limit"] = _clamp_int(merged["scrape_default_limit"], 0, 500, 0)
     merged["scrape_default_exclude_tags"] = str(merged.get("scrape_default_exclude_tags", ""))
     merged["viewer_exclude_tags"] = str(merged.get("viewer_exclude_tags", ""))
     merged["viewer_exclude_tag_groups"] = str(merged.get("viewer_exclude_tag_groups", ""))

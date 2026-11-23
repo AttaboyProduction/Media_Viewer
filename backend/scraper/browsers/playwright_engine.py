@@ -6,11 +6,6 @@ from playwright.sync_api import Playwright, sync_playwright
 
 from backend.scraper.browsers.base import BrowserEngine
 
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
-
 
 class PlaywrightChromiumEngine(BrowserEngine):
     engine_id = "playwright"
@@ -22,9 +17,6 @@ class PlaywrightChromiumEngine(BrowserEngine):
     def start(self) -> None:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=True)
-
-    def _context_options(self) -> dict:
-        return {**super()._context_options(), "user_agent": USER_AGENT}
 
     def _stop(self) -> None:
         if self._browser is not None:

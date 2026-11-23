@@ -125,7 +125,7 @@ def _is_transient_nav_error(exc: BaseException) -> bool:
     return any(marker in message for marker in _TRANSIENT_NAV_MARKERS)
 
 
-def goto_post(page: Page, post_url: str, *, attempts: int = 3) -> None:
+def goto_post(page: Page, post_url: str, *, attempts: int = 6) -> None:
     """Navigate to a post page, retrying flaky TLS/network failures (VPN / Cloudflare)."""
     last_error: BaseException | None = None
     for attempt in range(attempts):

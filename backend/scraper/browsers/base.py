@@ -5,6 +5,14 @@ from __future__ import annotations
 from playwright.sync_api import Browser, BrowserContext, Page
 
 BLOCKED_ASSETS = "**/*.{png,jpg,jpeg,gif,svg,webp,css,woff,woff2}"
+# First click on a gallery listing is stolen by this popunder (main frame leaves the site).
+POPUNDER_ROUTES = (
+    "**/*popunder*",
+    "**://admaze.exacdn.com/**",
+    "**://*.exacdn.com/**",
+    "**://s.smartfloralab.com/**",
+    "**://*.smartfloralab.com/**",
+)
 
 
 class BrowserEngine:
@@ -47,6 +55,8 @@ class BrowserEngine:
         page = context.new_page()
         try:
             page.route(BLOCKED_ASSETS, lambda route: route.abort())
+            for pattern in POPUNDER_ROUTES:
+                page.route(pattern, lambda route: route.abort())
         except Exception:
             pass
         return page

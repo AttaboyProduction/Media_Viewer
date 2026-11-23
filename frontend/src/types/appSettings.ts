@@ -114,7 +114,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   viewer_page_size: 36,
   viewer_page_sizes: [...VIEWER_PAGE_SIZES],
   viewer_include_discarded: false,
-  scrape_default_limit: 10,
+  scrape_default_limit: 0,
   scrape_default_sort: 'date_desc',
   scrape_default_exclude_tags: '',
   phash_threshold: 8,

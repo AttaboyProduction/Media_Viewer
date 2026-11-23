@@ -73,6 +73,19 @@ class GotoPostRetryTests(unittest.TestCase):
             post_mod.goto_post(page, "https://rule34.xyz/post/1", attempts=3)
         self.assertEqual(page.goto.call_count, 2)
 
+    def test_listing_retries_obscura_tls(self) -> None:
+        from backend.scraper.gallery import iter_post_urls
+
+        page = MagicMock()
+        page.url = "https://example.test/tag"
+        page.content.return_value = "Checking your browser"
+        with patch("backend.scraper.gallery.goto_post") as goto:
+            with self.assertRaises(RuntimeError):
+                list(iter_post_urls(page, "https://example.test/tag", limit=1))
+        goto.assert_called_once()
+        self.assertEqual(goto.call_args.args[1], "https://example.test/tag")
+        self.assertEqual(goto.call_args.kwargs["attempts"], 6)
+
 
 class FetchMediaBytesTests(unittest.TestCase):
     def test_retries_transient_tls_then_succeeds(self) -> None:

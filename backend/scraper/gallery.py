@@ -1,9 +1,11 @@
 import re
 from collections.abc import Callable
+from urllib.parse import urlparse
 
 from playwright.sync_api import Page
 
 from backend.app.config import settings
+from backend.scraper.post import goto_post
 
 MAX_LISTING_PAGES = 500
 
@@ -23,11 +25,57 @@ def extract_post_id(url: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _same_site(left: str, right: str) -> bool:
+    return urlparse(left).netloc == urlparse(right).netloc
+
+
+def _dismiss_popups(page: Page) -> None:
+    """Popunders open the gallery in a second page and navigate this one to an ad."""
+    try:
+        extras = [extra for extra in page.context.pages if extra is not page]
+    except Exception:
+        return
+    for extra in extras:
+        try:
+            extra.close()
+        except Exception:
+            continue
+
+
+def _restore_if_hijacked(page: Page, url: str) -> None:
+    _dismiss_popups(page)
+    try:
+        current = page.url
+    except Exception:
+        return
+    if current and _same_site(current, url):
+        return
+    try:
+        # Same flaky Obscura TLS handshake as the first listing load.
+        goto_post(page, url, attempts=6)
+        page.wait_for_timeout(800)
+    except Exception:
+        return
+
+
 def _collect_from_page(page: Page) -> list[str]:
-    links = page.eval_on_selector_all(
-        "a[href*='/post/']",
-        "elements => elements.map(el => el.href)",
-    )
+    links = None
+    last_error: Exception | None = None
+    for _ in range(4):
+        try:
+            links = page.eval_on_selector_all(
+                "a[href*='/post/']",
+                "elements => elements.map(el => el.href)",
+            )
+            break
+        except Exception as exc:
+            # A popunder navigation destroys the document mid-eval.
+            last_error = exc
+            if "context was destroyed" not in str(exc) and "navigation" not in str(exc):
+                raise
+            page.wait_for_timeout(400)
+    if links is None:
+        raise last_error or RuntimeError("Could not read gallery links")
     seen: set[str] = set()
     result: list[str] = []
     for href in links:
@@ -72,6 +120,7 @@ def _expand_filters_panel(page: Page) -> None:
     if header.count() == 0:
         return
     first = header.first
+    here = page.url
     try:
         if first.get_attribute("aria-expanded") == "true":
             return
@@ -79,6 +128,8 @@ def _expand_filters_panel(page: Page) -> None:
         page.wait_for_timeout(500)
     except Exception:
         return
+    finally:
+        _restore_if_hijacked(page, here)
 
 
 def _click_sort_chip(page: Page, label: str) -> bool:
@@ -104,7 +155,9 @@ def _click_sort_chip(page: Page, label: str) -> bool:
                 btn = target.locator("xpath=ancestor::button[1]")
                 if btn.count() > 0:
                     target = btn.first
+            here = page.url
             target.click(timeout=4000, force=True)
+            _restore_if_hijacked(page, here)
             return True
         except Exception:
             continue
@@ -195,8 +248,10 @@ def iter_post_urls(
     ``should_stop`` returns True, or the gallery has no more unseen posts (even if
     a download quota is still unmet).
     """
-    page.goto(gallery_url, wait_until="domcontentloaded")
+    # Obscura stealth TLS to this host fails about half the time (WRONG_VERSION_NUMBER).
+    goto_post(page, gallery_url, attempts=6)
     page.wait_for_timeout(1500)
+    _restore_if_hijacked(page, gallery_url)
 
     if "Checking your browser" in page.content():
         raise RuntimeError("Blocked by Cloudflare")
@@ -210,6 +265,7 @@ def iter_post_urls(
     for _ in range(MAX_LISTING_PAGES):
         if should_stop and should_stop():
             return
+        _restore_if_hijacked(page, gallery_url)
         for url in _collect_from_page(page):
             if url in known:
                 continue

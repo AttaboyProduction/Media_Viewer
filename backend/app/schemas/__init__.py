@@ -202,7 +202,7 @@ class ScrapeFilterIn(BaseModel):
 class ScrapeRunRequest(BaseModel):
     filters: list[ScrapeFilterIn] = Field(default_factory=list)
     sort: Literal["date_desc", "date_asc"] = "date_desc"
-    limit: int = 10
+    limit: int = 0
     exclude_tags: list[str] = Field(default_factory=list)
     gallery_url: str | None = None
     tag_mode: Literal["and", "or"] = "and"
@@ -323,7 +323,7 @@ class ExtensionScrapeIn(BaseModel):
     date_to: str = ""
     media_type: str = ""
     sort: Literal["date_desc", "date_asc"] = "date_desc"
-    limit: int = Field(default=10, ge=0, le=5000)
+    limit: int = Field(default=0, ge=0, le=5000)
 
 
 class ExtensionFileIn(BaseModel):

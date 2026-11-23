@@ -22,7 +22,7 @@ class AppSettingsOut(BaseModel):
     viewer_page_size: int = 36
     viewer_page_sizes: list[int] = Field(default_factory=lambda: [12, 24, 36, 48, 60, 72, 84, 96])
     viewer_include_discarded: bool = False
-    scrape_default_limit: int = 10
+    scrape_default_limit: int = 0
     scrape_default_sort: Literal["date_desc", "date_asc"] = "date_desc"
     scrape_default_exclude_tags: str = ""
     phash_threshold: int = 8
