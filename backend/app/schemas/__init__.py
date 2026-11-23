@@ -242,6 +242,7 @@ class ScrapeSourcePanelOut(BaseModel):
     last_gallery_url: str | None = None
     errors: list[str] = Field(default_factory=list)
     skipped_items: list[ScrapeSkippedItemOut] = Field(default_factory=list)
+    error_items: list[ScrapeSkippedItemOut] = Field(default_factory=list)
     cancelled_urls: list[str] = Field(default_factory=list)
     queue_urls: list[str] = Field(default_factory=list)
 
@@ -263,6 +264,7 @@ class ScrapeStatusOut(BaseModel):
     message: str = ""
     current_url: str | None = None
     skipped_items: list[ScrapeSkippedItemOut] = Field(default_factory=list)
+    error_items: list[ScrapeSkippedItemOut] = Field(default_factory=list)
     cancelled_urls: list[str] = Field(default_factory=list)
     queue_urls: list[str] = Field(default_factory=list)
     hash_backfill_running: bool = False

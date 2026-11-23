@@ -40,14 +40,27 @@
   }
 
   function outcomeCounts(status) {
-    // Cancelled rows are also stored as skips. The line counts each list once.
+    // Cancelled / Errors are separate lists. The line counts each once.
     const items = status && Array.isArray(status.skipped_items) ? status.skipped_items : null;
+    const errorItems = status && Array.isArray(status.error_items) ? status.error_items : null;
     const cancelled = status && Array.isArray(status.cancelled_urls) ? status.cancelled_urls.length : 0;
+    const errors =
+      errorItems != null
+        ? errorItems.length
+        : status && Array.isArray(status.errors)
+          ? status.errors.length
+          : 0;
     if (items) {
-      const skipped = items.filter((item) => item && item.reason !== "cancelled").length;
-      return { skipped, cancelled };
+      const skipped = items.filter(
+        (item) => item && item.reason !== "cancelled" && item.reason !== "error",
+      ).length;
+      return { skipped, cancelled, errors };
     }
-    return { skipped: Math.max(0, num(status && status.skipped) - cancelled), cancelled };
+    return {
+      skipped: Math.max(0, num(status && status.skipped) - cancelled),
+      cancelled,
+      errors,
+    };
   }
 
   function tooltipFor(status) {
@@ -59,6 +72,7 @@
     const parts = [`${DEFAULT_TITLE} · ${processed}/${total || "?"}`];
     parts.push(`downloaded ${num(status.downloaded)}`);
     parts.push(`skipped ${counts.skipped}`);
+    if (counts.errors > 0) parts.push(`errors ${counts.errors}`);
     if (counts.cancelled > 0) parts.push(`cancelled ${counts.cancelled}`);
     return parts.join(" · ");
   }

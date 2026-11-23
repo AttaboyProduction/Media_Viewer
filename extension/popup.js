@@ -116,11 +116,12 @@ function render(status) {
   if (job && (job.running || job.total > 0 || (job.queue_urls && job.queue_urls.length))) {
     const fraction = job.total > 0 ? `${job.processed}/${job.total}` : `${job.processed || 0}`;
     const counts = ScrapIconProgress.outcomeCounts(job);
+    const errors = counts.errors > 0 ? ` · errors ${counts.errors}` : "";
     const cancelled = counts.cancelled > 0 ? ` · cancelled ${counts.cancelled}` : "";
     const queued =
       job.queue_urls && job.queue_urls.length ? ` · queue ${job.queue_urls.length}` : "";
     $("jobText").textContent =
-      `${prefix}${fraction} · downloaded ${job.downloaded || 0} · skipped ${counts.skipped}${cancelled}${queued}`;
+      `${prefix}${fraction} · downloaded ${job.downloaded || 0} · skipped ${counts.skipped}${errors}${cancelled}${queued}`;
   } else if (job && job.message) {
     $("jobText").textContent = `${prefix}${job.message}`;
   } else {

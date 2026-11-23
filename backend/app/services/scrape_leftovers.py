@@ -378,9 +378,10 @@ def adopt_open_as_unfinished() -> None:
 def clear_queues(source: str | None = None, *, which: str | None = None) -> None:
     """Forget stored leftovers.
 
-    ``which`` is ``queue``, ``skipped`` (every unfinished reason except cancelled),
-    or ``cancelled``. Omitted clears all three. ``source`` limits that to one panel.
-    A full clear also drops the in-flight (open) list; a partial clear leaves it.
+    ``which`` is ``queue``, ``skipped`` (unfinished except cancelled and error),
+    ``errors`` (reason=error only), or ``cancelled``. Omitted clears all four.
+    ``source`` limits that to one panel. A full clear also drops the in-flight
+    (open) list; a partial clear leaves it.
     """
     with _lock:
         if source is None and which is None:
@@ -394,7 +395,7 @@ def clear_queues(source: str | None = None, *, which: str | None = None) -> None
                 if key:
                     gone_keys.add(key)
             data["queue"] = [url for url in data["queue"] if identity(url) not in gone_keys]
-        if which in (None, "skipped", "cancelled"):
+        if which in (None, "skipped", "cancelled", "errors"):
             kept: list[dict] = []
             for item in data["unfinished"]:
                 src = _source_of(data, item["url"], item.get("source", ""))
@@ -404,7 +405,11 @@ def clear_queues(source: str | None = None, *, which: str | None = None) -> None
                 reason = item.get("reason") or "error"
                 drop = which is None or (
                     (which == "cancelled" and reason == "cancelled")
-                    or (which == "skipped" and reason != "cancelled")
+                    or (which == "errors" and reason == "error")
+                    or (
+                        which == "skipped"
+                        and reason not in {"cancelled", "error"}
+                    )
                 )
                 if drop:
                     key = identity(item["url"])

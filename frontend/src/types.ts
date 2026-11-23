@@ -158,6 +158,7 @@ export interface ScrapeSourcePanel {
   last_gallery_url: string | null
   errors: string[]
   skipped_items: ScrapeSkippedItem[]
+  error_items: ScrapeSkippedItem[]
   cancelled_urls: string[]
   queue_urls: string[]
 }
@@ -179,6 +180,7 @@ export interface ScrapeStatus {
   message: string
   current_url: string | null
   skipped_items: ScrapeSkippedItem[]
+  error_items?: ScrapeSkippedItem[]
   cancelled_urls: string[]
   queue_urls: string[]
   hash_backfill_running: boolean

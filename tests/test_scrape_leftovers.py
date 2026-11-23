@@ -64,6 +64,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
         pipeline.scrape_status.last_gallery_url = None
         pipeline.scrape_status.similar = 0
         pipeline.scrape_status.errors = []
+        pipeline.scrape_status.error_items = []
         pipeline.scrape_status.message = ""
         pipeline.scrape_status.current_url = None
         pipeline.scrape_status.recent_media_ids = []
@@ -146,8 +147,9 @@ class ScrapeLeftoverTests(unittest.TestCase):
         pipeline.scrape_status.processed = 15
         pipeline.scrape_status.processed_urls = {first, second}
         pipeline.scrape_status.downloaded = 13
-        pipeline.scrape_status.skipped = 2
-        pipeline.scrape_status.skipped_items = [
+        pipeline.scrape_status.skipped = 0
+        pipeline.scrape_status.skipped_items = []
+        pipeline.scrape_status.error_items = [
             SkippedItem(url=first, reason="error", detail="a"),
             SkippedItem(url=second, reason="error", detail="b"),
         ]
@@ -174,10 +176,10 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertEqual(pipeline.scrape_status.processed, 13)
         pipeline._complete_download(first)
         self.assertEqual(pipeline.scrape_status.downloaded, 14)
-        self.assertEqual(pipeline.scrape_status.skipped, 1)
+        self.assertEqual(pipeline.scrape_status.skipped, 0)
         self.assertEqual(pipeline.scrape_status.processed, 14)
         self.assertEqual(pipeline.scrape_status.total, 15)
-        self.assertEqual([row.url for row in pipeline.scrape_status.skipped_items], [second])
+        self.assertEqual([row.url for row in pipeline.scrape_status.error_items], [second])
         self.assertEqual(pipeline.scrape_status.errors, [f"{second}: b"])
         self.assertEqual(scrape_leftovers.unfinished_items()[0]["url"], second)
 
@@ -221,14 +223,30 @@ class ScrapeLeftoverTests(unittest.TestCase):
         pipeline.scrape_status.errors = [f"{url}: timeout"]
         pipeline._complete_skip(url, "error", "timeout")
         self.assertEqual(pipeline.scrape_status.processed, 1)
+        self.assertEqual(pipeline.scrape_status.skipped, 0)
+        self.assertEqual([row.url for row in pipeline.scrape_status.error_items], [url])
+        self.assertEqual(pipeline.scrape_status.skipped_items, [])
         self.assertEqual(len(scrape_leftovers.unfinished_items()), 1)
         pipeline._complete_download(url)
         self.assertEqual(pipeline.scrape_status.processed, 1)
         self.assertEqual(pipeline.scrape_status.downloaded, 1)
         self.assertEqual(pipeline.scrape_status.total, 1)
         self.assertEqual(pipeline.scrape_status.skipped_items, [])
+        self.assertEqual(pipeline.scrape_status.error_items, [])
         self.assertEqual(pipeline.scrape_status.errors, [])
         self.assertEqual(scrape_leftovers.unfinished_items(), [])
+
+    def test_error_attempts_follow_never_auto_run(self) -> None:
+        with patch(
+            "backend.app.services.app_settings.load_app_settings",
+            return_value={"never_auto_run_scrape": False},
+        ):
+            self.assertEqual(pipeline._download_error_attempts(), 3)
+        with patch(
+            "backend.app.services.app_settings.load_app_settings",
+            return_value={"never_auto_run_scrape": True},
+        ):
+            self.assertEqual(pipeline._download_error_attempts(), 1)
 
     def test_queue_urls_increase_the_total(self) -> None:
         done = "https://gallery.test/post/1"
@@ -604,7 +622,8 @@ class ScrapeLeftoverTests(unittest.TestCase):
         scrape_leftovers.restore_into_status()
         out = scrape_api._status_out()
         self.assertEqual([p.key for p in out.sources], ["site_a", "unsupported"])
-        self.assertEqual(len(self._panel(out, "site_a").skipped_items), 1)
+        self.assertEqual(len(self._panel(out, "site_a").error_items), 1)
+        self.assertEqual(self._panel(out, "site_a").skipped_items, [])
         self.assertEqual(self._panel(out, "unsupported").cancelled_urls, ["https://cdn.example/f.jpg"])
 
     def test_run_after_restore_does_not_double_the_total(self) -> None:
@@ -652,7 +671,6 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertEqual(status.recent_media_ids, [])
         self.assertEqual(status.downloaded, 0)
         self.assertEqual(status.similar, 0)
-        self.assertEqual(status.errors, [])
         self.assertEqual(status.message, "")
         self.assertEqual(status.processed, 0)
         self.assertEqual(status.finished_urls, set())
@@ -663,7 +681,8 @@ class ScrapeLeftoverTests(unittest.TestCase):
         raw = self._panel(out, "unsupported")
         self.assertEqual((site.processed, site.downloaded, site.similar, site.total), (0, 0, 0, 2))
         self.assertEqual((raw.processed, raw.downloaded, raw.similar, raw.total), (0, 0, 0, 1))
-        self.assertEqual([i.url for i in site.skipped_items], [failed, cancelled])
+        self.assertEqual([i.url for i in site.error_items], [failed])
+        self.assertEqual(site.skipped_items, [])
         self.assertEqual(site.cancelled_urls, [cancelled])
         self.assertEqual(raw.queue_urls, [queued])
 
@@ -674,8 +693,9 @@ class ScrapeLeftoverTests(unittest.TestCase):
         scrape_panels.activate(status, "site_b", "Site B")
         pipeline._record_skip("https://site-b.test/post/2", "error", "b")
         out = scrape_api.post_clear_queues("site_a")
+        self.assertEqual(self._panel(out, "site_a").error_items, [])
         self.assertEqual(self._panel(out, "site_a").skipped_items, [])
-        self.assertEqual(len(self._panel(out, "site_b").skipped_items), 1)
+        self.assertEqual(len(self._panel(out, "site_b").error_items), 1)
         self.assertEqual(
             [i["url"] for i in scrape_leftovers.unfinished_items()],
             ["https://site-b.test/post/2"],
@@ -740,7 +760,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
         panel = self._panel(out, "site_a")
         self.assertEqual(panel.queue_urls, [])
         self.assertEqual(panel.cancelled_urls, [stopped])
-        self.assertIn(failed, [item.url for item in panel.skipped_items])
+        self.assertIn(failed, [item.url for item in panel.error_items])
         self.assertEqual(scrape_leftovers.queue_urls(), [])
         self.assertEqual(scrape_leftovers.queue_urls("site_b"), [])
         self.assertEqual(
@@ -751,7 +771,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
         out = scrape_api.post_clear_queues("site_a", which="cancelled")
         panel = self._panel(out, "site_a")
         self.assertEqual(panel.cancelled_urls, [])
-        self.assertEqual([item.url for item in panel.skipped_items], [failed])
+        self.assertEqual([item.url for item in panel.error_items], [failed])
         self.assertEqual(
             [item["url"] for item in scrape_leftovers.unfinished_items("site_a")],
             [failed],
@@ -764,6 +784,15 @@ class ScrapeLeftoverTests(unittest.TestCase):
         out = scrape_api.post_clear_queues("site_a", which="skipped")
         panel = self._panel(out, "site_a")
         self.assertEqual(panel.skipped_items, [])
+        self.assertEqual([item.url for item in panel.error_items], [failed])
+        self.assertEqual(
+            [item["url"] for item in scrape_leftovers.unfinished_items("site_a")],
+            [failed],
+        )
+
+        out = scrape_api.post_clear_queues("site_a", which="errors")
+        panel = self._panel(out, "site_a")
+        self.assertEqual(panel.error_items, [])
         self.assertEqual(panel.errors, [])
         self.assertEqual(scrape_leftovers.unfinished_items("site_a"), [])
         self.assertEqual(
@@ -792,10 +821,10 @@ class ScrapeLeftoverTests(unittest.TestCase):
         status.processed_urls = {queued, failed, skipped, stopped}
         status.counted_urls = set(status.processed_urls)
         status.skipped_items = [
-            SkippedItem(url=failed, reason="error", detail="boom"),
             SkippedItem(url=skipped, reason="already_have"),
             SkippedItem(url=stopped, reason="cancelled"),
         ]
+        status.error_items = [SkippedItem(url=failed, reason="error", detail="boom")]
         status.cancelled_urls = [stopped]
         status.errors = [f"{failed}: boom"]
 
@@ -813,7 +842,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
             patch.object(scrape_api.threading, "Thread"),
         ):
             scrape_api.post_retry_skipped("site_a")
-        self.assertEqual(status.pending_urls, [failed, skipped])
+        self.assertEqual(status.pending_urls, [skipped, failed])
         self.assertNotIn(stopped, status.pending_urls)
         self.assertNotIn(queued, status.pending_urls)
         self.assertEqual(status.processed, 2)
@@ -823,6 +852,22 @@ class ScrapeLeftoverTests(unittest.TestCase):
             [item["url"] for item in scrape_leftovers.unfinished_items("site_a")],
             [failed, stopped],
         )
+
+        # Errors-only retry leaves intentional skips alone.
+        status.running = False
+        status.pending_urls = []
+        status.processed = 4
+        status.processed_urls = {queued, failed, skipped, stopped}
+        with (
+            patch.object(
+                scrape_api, "get_selected_site", return_value={"id": "site_a", "name": "Site A"}
+            ),
+            patch.object(scrape_api, "compile_scrape_job", side_effect=_compiled),
+            patch.object(scrape_api.threading, "Thread"),
+        ):
+            scrape_api.post_retry_skipped("site_a", which="errors")
+        self.assertEqual(status.pending_urls, [failed])
+        self.assertNotIn(skipped, status.pending_urls)
 
     def test_retry_unsupported_skips_the_queue_and_cancelled(self) -> None:
         raw_q = "https://cdn.example/q.jpg"
@@ -838,10 +883,9 @@ class ScrapeLeftoverTests(unittest.TestCase):
         status.total = 2
         status.processed_urls = {raw_err, raw_cancel}
         status.counted_urls = {raw_err, raw_cancel}
-        status.skipped_items = [
-            SkippedItem(url=raw_err, reason="error", detail="x"),
-            SkippedItem(url=raw_cancel, reason="cancelled"),
-        ]
+        status.skipped_items = [SkippedItem(url=raw_cancel, reason="cancelled")]
+        status.error_items = [SkippedItem(url=raw_err, reason="error", detail="x")]
+        status.errors = [f"{raw_err}: x"]
         status.cancelled_urls = [raw_cancel]
         with patch.object(pipeline.threading, "Thread"):
             scrape_api.post_retry_skipped("unsupported")
@@ -858,10 +902,9 @@ class ScrapeLeftoverTests(unittest.TestCase):
         stopped = r"D:\pics\b.jpg"
         status = pipeline.scrape_status
         scrape_panels.activate(status, "local", "Local")
-        status.skipped_items = [
-            SkippedItem(url=failed, reason="error", detail="x"),
-            SkippedItem(url=stopped, reason="cancelled"),
-        ]
+        status.skipped_items = [SkippedItem(url=stopped, reason="cancelled")]
+        status.error_items = [SkippedItem(url=failed, reason="error", detail="x")]
+        status.errors = [f"{failed}: x"]
         status.cancelled_urls = [stopped]
         with patch.object(scrape_api.threading, "Thread") as thread:
             scrape_api.post_retry_skipped("local")

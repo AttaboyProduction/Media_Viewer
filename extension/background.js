@@ -1092,8 +1092,17 @@ async function mediaStatusForPage(pageUrl, scrapeData) {
       addQueue("Queue to scrape", label);
     }
     const skipped = (panel && panel.skipped_items) || [];
-    if (skipped.some((item) => item && item.reason !== "cancelled" && urlTouchesPage(item.url, pageUrl))) {
+    if (
+      skipped.some(
+        (item) =>
+          item && item.reason !== "cancelled" && item.reason !== "error" && urlTouchesPage(item.url, pageUrl),
+      )
+    ) {
       addQueue("Skipped", label);
+    }
+    const errors = (panel && panel.error_items) || [];
+    if (errors.some((item) => item && urlTouchesPage(item.url, pageUrl))) {
+      addQueue("Errors", label);
     }
     if (panel && (panel.cancelled_urls || []).some((url) => urlTouchesPage(url, pageUrl))) {
       addQueue("Cancelled", label);

@@ -127,6 +127,7 @@ function emptyPanel(key: string, label: string): ScrapeSourcePanelData {
     last_gallery_url: null,
     errors: [],
     skipped_items: [],
+    error_items: [],
     cancelled_urls: [],
     queue_urls: [],
   }
@@ -448,12 +449,20 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
 
   const clearQueues = async (panel: ScrapeSourcePanelData, which?: ScrapeListName) => {
     const listName =
-      which === 'queue' ? 'Queue to scrape' : which === 'skipped' ? 'Skipped' : which === 'cancelled' ? 'Cancelled' : null
+      which === 'queue'
+        ? 'Queue to scrape'
+        : which === 'skipped'
+          ? 'Skipped'
+          : which === 'errors'
+            ? 'Errors'
+            : which === 'cancelled'
+              ? 'Cancelled'
+              : null
     const ok = await confirm({
       title: listName ? `Clear ${panel.label} ${listName}?` : `Clear ${panel.label} queues?`,
       message: listName
         ? `Remove everything from ${panel.label}'s ${listName}? The other lists, downloaded files, and other sources stay.`
-        : `Remove everything from ${panel.label}'s Queue to scrape, Skipped, and Cancelled? Downloaded files, the Downloaded previously list, and other sources stay.`,
+        : `Remove everything from ${panel.label}'s Queue to scrape, Skipped, Errors, and Cancelled? Downloaded files, the Downloaded previously list, and other sources stay.`,
       confirmLabel: listName ? 'Clear' : 'Clear queues',
       danger: true,
     })
@@ -467,13 +476,13 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     }
   }
 
-  const retrySkipped = async (panel: ScrapeSourcePanelData) => {
+  const retryList = async (panel: ScrapeSourcePanelData, which?: 'skipped' | 'errors') => {
     setError(null)
     try {
-      const next = await retryScrapeSkipped(panel.key)
+      const next = await retryScrapeSkipped(panel.key, which)
       queryClient.setQueryData(['scrape-status'], next)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to retry skipped files')
+      setError(err instanceof Error ? err.message : 'Failed to retry files')
     }
   }
 
@@ -502,7 +511,10 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
       return { canRun: false, title: `Wait for the running ${runningLabel} job, or press Stop` }
     }
     if (panel.key === 'unsupported') {
-      const waiting = panel.queue_urls.length + panel.skipped_items.length
+      const waiting =
+        panel.queue_urls.length +
+        panel.skipped_items.length +
+        (panel.error_items?.length ?? 0)
       return waiting > 0
         ? { canRun: true, title: 'Retry the queued and skipped files' }
         : { canRun: false, title: 'Nothing is queued or skipped for Unsupported' }
@@ -1023,7 +1035,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                 onStop={stop}
                 onClear={() => void clearQueues(panel)}
                 onClearList={(which) => void clearQueues(panel, which)}
-                onRetry={() => void retrySkipped(panel)}
+                onRetry={(which) => void retryList(panel, which)}
                 neverAutoRun={appSettings?.never_auto_run_scrape ?? false}
                 onNeverAutoRunChange={(value) => {
                   queryClient.setQueryData(['app-settings'], (prev: typeof appSettings) =>

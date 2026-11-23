@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import type { ScrapeListName } from '../api/client'
+import type { ScrapeListName, ScrapeRetryWhich } from '../api/client'
 import type { ScrapeSourcePanel as ScrapeSourcePanelData } from '../types'
 
 function statusMessageParts(
@@ -116,7 +116,7 @@ interface Props {
   onStop: () => void
   onClear: () => void
   onClearList: (which: ScrapeListName) => void
-  onRetry: () => void
+  onRetry: (which?: ScrapeRetryWhich) => void
   neverAutoRun: boolean
   onNeverAutoRunChange: (value: boolean) => void
 }
@@ -139,12 +139,24 @@ export default function ScrapeSourcePanel({
   onNeverAutoRunChange,
 }: Props) {
   const [skippedOpen, setSkippedOpen] = useState(false)
+  const [errorsOpen, setErrorsOpen] = useState(false)
   const [queueOpen, setQueueOpen] = useState(false)
   const [cancelledOpen, setCancelledOpen] = useState(false)
 
   const isLocal = panel.key === 'local'
   const cancelledUrls = panel.cancelled_urls
-  const skippedItems = panel.skipped_items.filter((item) => item.reason !== 'cancelled')
+  const skippedItems = panel.skipped_items.filter(
+    (item) => item.reason !== 'cancelled' && item.reason !== 'error',
+  )
+  const errorItems =
+    panel.error_items && panel.error_items.length > 0
+      ? panel.error_items
+      : panel.errors.map((line) => {
+          const idx = line.indexOf(': ')
+          return idx >= 0
+            ? { url: line.slice(0, idx), reason: 'error', detail: line.slice(idx + 2) }
+            : { url: line, reason: 'error', detail: '' }
+        })
   const queueUrls = panel.queue_urls
   const anyRunning = runningLabel !== null
   const hasActivity =
@@ -153,9 +165,9 @@ export default function ScrapeSourcePanel({
     panel.processed > 0 ||
     panel.downloaded > 0 ||
     skippedItems.length > 0 ||
+    errorItems.length > 0 ||
     cancelledUrls.length > 0 ||
     queueUrls.length > 0 ||
-    panel.errors.length > 0 ||
     Boolean(panel.message)
   const percent =
     panel.total > 0 ? Math.min(100, Math.round((panel.processed / panel.total) * 100)) : 0
@@ -179,7 +191,7 @@ export default function ScrapeSourcePanel({
           type="button"
           className="btn btn-danger"
           onClick={onStop}
-          disabled={!anyRunning && panel.errors.length === 0}
+          disabled={!anyRunning && errorItems.length === 0}
           title={anyRunning ? `Stops the running ${runningLabel} job` : 'Nothing is running'}
         >
           Stop
@@ -190,12 +202,15 @@ export default function ScrapeSourcePanel({
           onClick={onClear}
           disabled={
             panel.running ||
-            (queueUrls.length === 0 && skippedItems.length === 0 && cancelledUrls.length === 0)
+            (queueUrls.length === 0 &&
+              skippedItems.length === 0 &&
+              errorItems.length === 0 &&
+              cancelledUrls.length === 0)
           }
           title={
             panel.running
               ? 'Stop the running job before clearing the queues'
-              : `Empty ${panel.label}: Queue to scrape, Skipped, and Cancelled`
+              : `Empty ${panel.label}: Queue to scrape, Skipped, Errors, and Cancelled`
           }
         >
           Clear queues
@@ -236,6 +251,7 @@ export default function ScrapeSourcePanel({
             {panel.total > 0 && ` · ${panel.processed}/${panel.total}`}
             {` · ${isLocal ? 'added' : 'downloaded'} ${panel.downloaded}`}
             {` · skipped ${skippedItems.length}`}
+            {errorItems.length > 0 && ` · errors ${errorItems.length}`}
             {panel.similar > 0 && ` · similar ${panel.similar}`}
             {cancelledUrls.length > 0 && ` · cancelled ${cancelledUrls.length}`}
           </div>
@@ -262,6 +278,42 @@ export default function ScrapeSourcePanel({
               </ul>
             </QueueSection>
           )}
+          {errorItems.length > 0 && (
+            <QueueSection
+              title="Errors"
+              count={errorItems.length}
+              open={errorsOpen}
+              onToggle={() => setErrorsOpen((open) => !open)}
+              clearDisabled={panel.running}
+              clearTitle={
+                panel.running
+                  ? 'Stop the running job before clearing this list'
+                  : `Empty ${panel.label} Errors`
+              }
+              onClear={() => onClearList('errors')}
+              retryDisabled={anyRunning}
+              retryTitle={
+                anyRunning
+                  ? `Wait for the running ${runningLabel} job, or press Stop`
+                  : 'Try the error files again. Skipped, Queue to scrape, and Cancelled stay.'
+              }
+              onRetry={() => onRetry('errors')}
+            >
+              <ul className={queueListClass(errorItems.length)}>
+                {errorItems.map((item) => (
+                  <li key={`${item.url}:${item.detail || ''}`}>
+                    <UrlLine url={item.url} />
+                    {item.detail ? (
+                      <details className="scrape-skipped-error">
+                        <summary>Error</summary>
+                        <pre>{item.detail}</pre>
+                      </details>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </QueueSection>
+          )}
           {skippedItems.length > 0 && (
             <QueueSection
               title="Skipped"
@@ -272,16 +324,16 @@ export default function ScrapeSourcePanel({
               clearTitle={
                 panel.running
                   ? 'Stop the running job before clearing this list'
-                  : `Empty ${panel.label} Skipped, including files with errors`
+                  : `Empty ${panel.label} Skipped`
               }
               onClear={() => onClearList('skipped')}
               retryDisabled={anyRunning}
               retryTitle={
                 anyRunning
                   ? `Wait for the running ${runningLabel} job, or press Stop`
-                  : 'Try the skipped and error files again. Queue to scrape and Cancelled stay.'
+                  : 'Try the skipped files again. Errors, Queue to scrape, and Cancelled stay.'
               }
-              onRetry={onRetry}
+              onRetry={() => onRetry('skipped')}
             >
               <ul className={queueListClass(skippedItems.length)}>
                 {skippedItems.map((item) => (
@@ -290,7 +342,7 @@ export default function ScrapeSourcePanel({
                     <span className="scrape-skipped-reason">{item.reason}</span>
                     {item.detail ? (
                       <details className="scrape-skipped-error">
-                        <summary>Error</summary>
+                        <summary>Detail</summary>
                         <pre>{item.detail}</pre>
                       </details>
                     ) : null}
@@ -321,31 +373,6 @@ export default function ScrapeSourcePanel({
                 ))}
               </ul>
             </QueueSection>
-          )}
-          {panel.errors.length > 0 && (
-            <div className="error">
-              {skippedItems.length === 0 && (
-                <div className="scrape-queue-bar">
-                  <span>Errors ({panel.errors.length})</span>
-                  <button
-                    type="button"
-                    className="btn btn-small"
-                    onClick={onRetry}
-                    disabled={anyRunning}
-                    title={
-                      anyRunning
-                        ? `Wait for the running ${runningLabel} job, or press Stop`
-                        : 'Try the error files again. Queue to scrape and Cancelled stay.'
-                    }
-                  >
-                    Retry
-                  </button>
-                </div>
-              )}
-              {panel.errors.slice(-5).map((item) => (
-                <div key={item}>{item}</div>
-              ))}
-            </div>
           )}
         </div>
       ) : (

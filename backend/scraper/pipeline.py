@@ -45,6 +45,8 @@ class ScrapeStatus:
     message: str = ""
     current_url: str | None = None
     skipped_items: list[SkippedItem] = field(default_factory=list)
+    # Failed downloads (separate from intentional Skipped).
+    error_items: list[SkippedItem] = field(default_factory=list)
     # Process-lifetime session list — not cleared by _reset_status between jobs.
     recent_media_ids: list[int] = field(default_factory=list)
     # URLs left behind by Stop this process. Kept for the progress line.
@@ -107,6 +109,7 @@ def _reset_status(gallery_url: str) -> None:
         scrape_status.similar = 0
         scrape_status.errors = []
         scrape_status.skipped_items = []
+        scrape_status.error_items = []
         scrape_status.counted_urls = set()
         scrape_status.released_urls = set()
         scrape_status.processed_urls = set()
@@ -381,8 +384,8 @@ def abandon_running_job() -> None:
             scrape_status.running = False
             scrape_status.queue_open = False
             scrape_status.kind = ""
-        if scrape_status.errors or scrape_status.processed < scrape_status.total:
-            _settle_errors_into_skipped()
+        if scrape_status.errors or scrape_status.error_items or scrape_status.processed < scrape_status.total:
+            _settle_errors_into_error_items()
             scrape_status.message = "Cancelled"
             scrape_status.current_url = None
 
@@ -443,8 +446,11 @@ def _reopen_skipped_or_error(url: str) -> None:
     if not url or url not in scrape_status.processed_urls or url in scrape_status.finished_urls:
         return
     row = next((item for item in scrape_status.skipped_items if item.url == url), None)
+    err_row = next((item for item in scrape_status.error_items if item.url == url), None)
     prefix = f"{url}:"
-    in_errors = any(item == url or item.startswith(prefix) for item in scrape_status.errors)
+    in_errors = err_row is not None or any(
+        item == url or item.startswith(prefix) for item in scrape_status.errors
+    )
     if row is not None and row.reason == "cancelled" and not in_errors:
         return
     if row is None and not in_errors:
@@ -476,13 +482,14 @@ def _drop_skipped(url: str) -> None:
 
 
 def _drop_errors(url: str) -> None:
-    """Drop this file's lines from the live error list."""
+    """Drop this file from the Errors queue and the error string list."""
     if not url:
         return
     prefix = f"{url}:"
     scrape_status.errors = [
         item for item in scrape_status.errors if item != url and not item.startswith(prefix)
     ]
+    scrape_status.error_items = [row for row in scrape_status.error_items if row.url != url]
 
 
 def _persist_outcome(url: str, *, downloaded: bool, reason: str = "", detail: str = "") -> None:
@@ -523,6 +530,9 @@ def _complete_skip(url: str, reason: str, detail: str = "") -> None:
 def _complete_skip_locked(url: str, reason: str, detail: str = "") -> None:
     from backend.app.services.scrape_leftovers import RETRY_REASONS
 
+    if reason == "error":
+        _complete_error_locked(url, detail)
+        return
     if _is_retry(url) and reason not in RETRY_REASONS:
         _drop_skipped(url)
         _drop_errors(url)
@@ -547,6 +557,9 @@ def _record_skip(url: str, reason: str, detail: str = "") -> None:
 
 
 def _record_skip_locked(url: str, reason: str, detail: str = "") -> None:
+    if reason == "error":
+        _record_error_locked(url, detail)
+        return
     if url:
         for row in scrape_status.skipped_items:
             if row.url == url:
@@ -559,25 +572,85 @@ def _record_skip_locked(url: str, reason: str, detail: str = "") -> None:
     _persist_outcome(url, downloaded=False, reason=reason, detail=detail)
 
 
-def _settle_errors_into_skipped() -> None:
-    """Move scrape errors into the skipped list. Caller holds ``scrape_lock``.
+ERROR_DOWNLOAD_ATTEMPTS = 3
 
-    Does not pad ``processed`` up to ``total`` — incomplete work stays incomplete.
+
+def _download_error_attempts() -> int:
+    """How many times to try a failing file in this job before the Errors queue.
+
+    With Never auto-run scrape on: fail once and park in Errors.
+    Off (default): retry up to three times in the same job.
     """
+    try:
+        from backend.app.services.app_settings import load_app_settings
+
+        if bool(load_app_settings().get("never_auto_run_scrape", False)):
+            return 1
+    except Exception:  # noqa: BLE001 — settings must not block a scrape
+        pass
+    return ERROR_DOWNLOAD_ATTEMPTS
+
+
+def _complete_error(url: str, detail: str = "") -> None:
+    with scrape_lock:
+        _complete_error_locked(url, detail)
+
+
+def _complete_error_locked(url: str, detail: str = "") -> None:
+    """Settle a failed download into the Errors queue (not Skipped)."""
+    if url:
+        scrape_status.counted_urls.add(url)
+    _count_settled(url)
+    _record_error_locked(url, detail)
+
+
+def _record_error_locked(url: str, detail: str = "") -> None:
+    line = f"{url}: {detail}" if url else (detail or "error")
+    if url:
+        for row in scrape_status.error_items:
+            if row.url == url:
+                row.reason = "error"
+                row.detail = detail
+                # Keep one string line per URL.
+                prefix = f"{url}:"
+                scrape_status.errors = [
+                    item
+                    for item in scrape_status.errors
+                    if item != url and not item.startswith(prefix)
+                ]
+                scrape_status.errors.append(line)
+                _persist_outcome(url, downloaded=False, reason="error", detail=detail)
+                return
+        # Leave intentional Skipped rows alone; errors are a separate list.
+        scrape_status.skipped_items = [row for row in scrape_status.skipped_items if row.url != url]
+    scrape_status.error_items.append(SkippedItem(url=url, reason="error", detail=detail))
+    if line not in scrape_status.errors:
+        scrape_status.errors.append(line)
+    _persist_outcome(url, downloaded=False, reason="error", detail=detail)
+
+
+def _settle_errors_into_error_items() -> None:
+    """Ensure every ``errors`` string has a matching Errors-queue row. Caller holds lock."""
     for item in list(scrape_status.errors):
         url, _, detail = item.partition(": ")
         if not detail:
             url, detail = item, item
-        already = any(
-            row.url == url and row.reason == "error" and row.detail == (detail or item)
-            for row in scrape_status.skipped_items
-        )
+        already = any(row.url == url for row in scrape_status.error_items)
         if not already:
-            scrape_status.skipped += 1
-            scrape_status.skipped_items.append(
+            scrape_status.error_items.append(
                 SkippedItem(url=url, reason="error", detail=detail or item)
             )
-    scrape_status.errors = []
+            # Do not bump skipped — errors are not Skipped.
+    # Drop any leftover error rows that were wrongly parked under Skipped.
+    moved = [row for row in scrape_status.skipped_items if row.reason == "error"]
+    if moved:
+        scrape_status.skipped_items = [
+            row for row in scrape_status.skipped_items if row.reason != "error"
+        ]
+        scrape_status.skipped = max(0, int(scrape_status.skipped) - len(moved))
+        for row in moved:
+            if not any(existing.url == row.url for existing in scrape_status.error_items):
+                scrape_status.error_items.append(row)
 
 
 def _post_matches_tags(post_tag_names: set[str], required: list[str], mode: str = "and") -> bool:
@@ -667,82 +740,90 @@ def _process_post_url(
     scrape_status.message = f"Scraping {post_url}"
     scrape_status.current_url = post_url
 
-    page = None
-    try:
-        # Direct post URLs: JSON API + CDN first (no browser). Browser is HTML fallback.
-        post = None
-        api_error: Exception | None = None
-        if post_id:
-            try:
-                post = scrape_post_from_api(post_url)
-            except Exception as exc:  # noqa: BLE001 — fall back to page scrape
-                api_error = exc
-        if post is None and not _browser_allowed():
-            return "needs_browser"
-        if post is None:
-            page = client.new_page()
-            try:
-                post = scrape_post(page, post_url)
-            except Exception:
-                if api_error is not None:
-                    raise RuntimeError(
-                        f"API failed ({api_error}); browser scrape also failed"
-                    ) from api_error
-                raise
-        if scrape_status.job_id != owner:
-            return "stop_cancel"
-        if post is None:
-            _complete_skip(post_url, "unavailable")
-            return "ok"
+    attempts = _download_error_attempts()
+    last_detail = ""
+    for attempt in range(1, attempts + 1):
+        page = None
+        try:
+            # Direct post URLs: JSON API + CDN first (no browser). Browser is HTML fallback.
+            post = None
+            api_error: Exception | None = None
+            if post_id:
+                try:
+                    post = scrape_post_from_api(post_url)
+                except Exception as exc:  # noqa: BLE001 — fall back to page scrape
+                    api_error = exc
+            if post is None and not _browser_allowed():
+                return "needs_browser"
+            if post is None:
+                page = client.new_page()
+                try:
+                    post = scrape_post(page, post_url)
+                except Exception:
+                    if api_error is not None:
+                        raise RuntimeError(
+                            f"API failed ({api_error}); browser scrape also failed"
+                        ) from api_error
+                    raise
+            if scrape_status.job_id != owner:
+                return "stop_cancel"
+            if post is None:
+                _complete_skip(post_url, "unavailable")
+                return "ok"
 
-        tag_names = {tag.name for tag in post.tags}
-        if _excluded(tag_names, job.exclude_tags):
-            _complete_skip(post_url, "excluded_tag")
-            return "ok"
-        if job.tags and not _post_matches_tags(tag_names, job.tags, job.tag_mode):
-            _complete_skip(post_url, "tag_mismatch")
-            return "ok"
-        if job.media_type and post.media_type != job.media_type:
-            _complete_skip(post_url, "media_type")
-            return "ok"
-        if not date_in_range(post.posted_at, job):
-            _complete_skip(post_url, "date_range")
-            if should_stop_for_date(post.posted_at, job):
-                scrape_status.message = "Reached date range boundary"
-                scrape_status.current_url = None
-                return "stop_date"
-            return "ok"
+            tag_names = {tag.name for tag in post.tags}
+            if _excluded(tag_names, job.exclude_tags):
+                _complete_skip(post_url, "excluded_tag")
+                return "ok"
+            if job.tags and not _post_matches_tags(tag_names, job.tags, job.tag_mode):
+                _complete_skip(post_url, "tag_mismatch")
+                return "ok"
+            if job.media_type and post.media_type != job.media_type:
+                _complete_skip(post_url, "media_type")
+                return "ok"
+            if not date_in_range(post.posted_at, job):
+                _complete_skip(post_url, "date_range")
+                if should_stop_for_date(post.posted_at, job):
+                    scrape_status.message = "Reached date range boundary"
+                    scrape_status.current_url = None
+                    return "stop_date"
+                return "ok"
 
-        stored = download_media(post)
-        if scrape_status.job_id != owner:
-            return "stop_cancel"
-        result = upsert_post(db, post, stored)
-        db.commit()
-        if result.skipped_reason in {"duplicate_hash", "identical"}:
-            _complete_skip(post_url, result.skipped_reason)
-        else:
-            _complete_download(post_url)
-            if result.media is not None:
-                scrape_status.recent_media_ids.append(result.media.id)
-                if result.media.duplicate_of_id:
-                    scrape_status.similar += 1
-                with _posts_lock:
-                    existing_posts[post.post_id] = post.posted_at
-        return "ok"
-    except Exception as exc:  # noqa: BLE001 — collect per-post errors
-        db.rollback()
-        if scrape_status.job_id != owner:
-            return "stop_cancel"
-        detail = str(exc)
-        scrape_status.errors.append(f"{post_url}: {detail}")
-        _complete_skip(post_url, "error", detail)
-        return "ok"
-    finally:
-        if page is not None:
-            try:
-                page.close()
-            except Exception:
-                pass
+            stored = download_media(post)
+            if scrape_status.job_id != owner:
+                return "stop_cancel"
+            result = upsert_post(db, post, stored)
+            db.commit()
+            if result.skipped_reason in {"duplicate_hash", "identical"}:
+                _complete_skip(post_url, result.skipped_reason)
+            else:
+                _complete_download(post_url)
+                if result.media is not None:
+                    scrape_status.recent_media_ids.append(result.media.id)
+                    if result.media.duplicate_of_id:
+                        scrape_status.similar += 1
+                    with _posts_lock:
+                        existing_posts[post.post_id] = post.posted_at
+            return "ok"
+        except Exception as exc:  # noqa: BLE001 — collect per-post errors
+            db.rollback()
+            if scrape_status.job_id != owner:
+                return "stop_cancel"
+            last_detail = str(exc)
+            if attempt < attempts and not _cancelled():
+                scrape_status.message = f"Retrying ({attempt + 1}/{attempts}) {post_url}"
+                scrape_status.current_url = post_url
+                continue
+            _complete_error(post_url, last_detail)
+            return "ok"
+        finally:
+            if page is not None:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+    _complete_error(post_url, last_detail or "download failed")
+    return "ok"
 
 
 def _drain_pending(client: PlaywrightClient, db, job: ScrapeJob, existing_posts: dict) -> str:
@@ -831,9 +912,7 @@ class _DownloadLanes:
             try:
                 outcome = fut.result()
             except Exception as exc:  # noqa: BLE001 — one worker must not drop the rest
-                detail = str(exc)
-                scrape_status.errors.append(f"{url}: {detail}")
-                _complete_skip(url, "error", detail)
+                _complete_error(url, str(exc))
                 outcome = "ok"
             self._handle(url, outcome)
 
@@ -1024,6 +1103,7 @@ def _claim_remote_download(url: str) -> str:
         scrape_status.similar = 0
         scrape_status.errors = []
         scrape_status.skipped_items = []
+        scrape_status.error_items = []
         scrape_status.counted_urls = set()
         scrape_status.released_urls = set()
         scrape_status.processed_urls = set()
@@ -1056,21 +1136,32 @@ def _run_remote_downloads(job_id: int) -> None:
     def one(url: str) -> str:
         if _cancelled() or scrape_status.job_id != job_id:
             return "stop"
-        scrape_status.message = "Downloading file"
-        scrape_status.current_url = url
-        try:
-            from backend.app.services.scrape_leftovers import page_url_for
+        attempts = _download_error_attempts()
+        last_detail = ""
+        for attempt in range(1, attempts + 1):
+            if _cancelled() or scrape_status.job_id != job_id:
+                return "stop"
+            scrape_status.message = (
+                "Downloading file"
+                if attempt == 1
+                else f"Retrying file ({attempt}/{attempts})"
+            )
+            scrape_status.current_url = url
+            try:
+                from backend.app.services.scrape_leftovers import page_url_for
 
-            result = save_remote_file(url, page_url_for(url))
-        except Exception as exc:  # noqa: BLE001 — one bad file should not drop the rest
-            detail = str(exc)
-            with scrape_lock:
-                scrape_status.errors.append(f"{url}: {detail}")
-            _complete_skip(url, "error", detail)
+                result = save_remote_file(url, page_url_for(url))
+            except Exception as exc:  # noqa: BLE001 — one bad file should not drop the rest
+                last_detail = str(exc)
+                if attempt < attempts and not _cancelled():
+                    continue
+                _complete_error(url, last_detail)
+                return "ok"
+            if scrape_status.job_id != job_id:
+                return "stop"
+            _finish_remote_download(url, result)
             return "ok"
-        if scrape_status.job_id != job_id:
-            return "stop"
-        _finish_remote_download(url, result)
+        _complete_error(url, last_detail or "download failed")
         return "ok"
 
     try:
@@ -1095,9 +1186,7 @@ def _run_remote_downloads(job_id: int) -> None:
                 try:
                     outcome = fut.result()
                 except Exception as exc:  # noqa: BLE001
-                    detail = str(exc)
-                    scrape_status.errors.append(f"{url}: {detail}")
-                    _complete_skip(url, "error", detail)
+                    _complete_error(url, str(exc))
                     outcome = "ok"
                 if outcome == "stop":
                     with scrape_lock:

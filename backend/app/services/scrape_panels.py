@@ -18,7 +18,7 @@ LOCAL_LABEL = "Local"
 UNSUPPORTED_LABEL = "Unsupported"
 
 _COUNTERS = ("total", "processed", "downloaded", "skipped", "similar")
-_LISTS = ("errors", "skipped_items", "cancelled_urls")
+_LISTS = ("errors", "skipped_items", "error_items", "cancelled_urls")
 _SETS = (
     "counted_urls",
     "finished_urls",
@@ -128,20 +128,32 @@ def _without_skipped(items, *, drop_cancelled: bool, drop_other: bool):
 def clear_panel(status, key: str | None = None, *, which: str | None = None) -> None:
     """Empty one list, or every list, for one source (``key`` omitted = every source).
 
-    ``which`` is ``queue``, ``skipped`` (non-cancelled skips and the error lines),
-    or ``cancelled``. Omitted clears all three. Downloaded counts stay.
+    ``which`` is ``queue``, ``skipped`` (non-cancelled intentional skips), ``errors``,
+    or ``cancelled``. Omitted clears all four. Downloaded counts stay.
     """
     drop_cancelled = which in (None, "cancelled")
     drop_other = which in (None, "skipped")
+    drop_errors = which in (None, "errors")
     drop_queue = which in (None, "queue")
 
-    def _apply_lists(skipped_items, cancelled_urls, skipped, errors):
+    def _apply_lists(skipped_items, cancelled_urls, skipped, errors, error_items):
         next_items, removed = _without_skipped(
             skipped_items, drop_cancelled=drop_cancelled, drop_other=drop_other
         )
+        # Never leave reason=error under Skipped after a clear.
+        if drop_other:
+            next_items = [row for row in next_items if getattr(row, "reason", "") != "error"]
+            removed = len(skipped_items) - len(next_items)
         next_cancelled = [] if drop_cancelled else list(cancelled_urls)
-        next_errors = [] if drop_other else list(errors)
-        return next_items, next_cancelled, max(0, int(skipped) - removed), next_errors
+        next_errors = [] if drop_errors else list(errors)
+        next_error_items = [] if drop_errors else list(error_items)
+        return (
+            next_items,
+            next_cancelled,
+            max(0, int(skipped) - removed),
+            next_errors,
+            next_error_items,
+        )
 
     if key is None or key == status.source_key:
         (
@@ -149,8 +161,13 @@ def clear_panel(status, key: str | None = None, *, which: str | None = None) -> 
             status.cancelled_urls,
             status.skipped,
             status.errors,
+            status.error_items,
         ) = _apply_lists(
-            status.skipped_items, status.cancelled_urls, status.skipped, status.errors
+            status.skipped_items,
+            status.cancelled_urls,
+            status.skipped,
+            status.errors,
+            getattr(status, "error_items", []) or [],
         )
         if drop_queue:
             status.queue_urls = []
@@ -166,30 +183,40 @@ def clear_panel(status, key: str | None = None, *, which: str | None = None) -> 
             snap["cancelled_urls"],
             snap["skipped"],
             snap["errors"],
+            snap["error_items"],
         ) = _apply_lists(
             snap["skipped_items"],
             snap["cancelled_urls"],
             snap["skipped"],
             snap.get("errors") or [],
+            snap.get("error_items") or [],
         )
         if which is None:
             snap["retry_urls"] = set()
 
 
-def retry_targets(status, key: str) -> list[str]:
-    """Skipped and error files for one panel. Cancelled and Queue to scrape stay out."""
+def retry_targets(status, key: str, *, which: str | None = None) -> list[str]:
+    """URLs to retry for one panel.
+
+    ``which`` is ``skipped`` (non-cancelled skips only), ``errors`` (Errors queue),
+    or omitted for both. Cancelled and Queue to scrape stay out.
+    """
     key = (key or "").strip()
     if not key:
         return []
+    want_skipped = which in (None, "skipped")
+    want_errors = which in (None, "errors")
     if key == status.source_key:
-        items = status.skipped_items
-        errors = status.errors
+        items = status.skipped_items if want_skipped else []
+        error_items = getattr(status, "error_items", []) or [] if want_errors else []
+        errors = status.errors if want_errors else []
     else:
         snap = _archive.get(key)
         if snap is None:
             return []
-        items = snap.get("skipped_items") or []
-        errors = snap.get("errors") or []
+        items = snap.get("skipped_items") or [] if want_skipped else []
+        error_items = snap.get("error_items") or [] if want_errors else []
+        errors = snap.get("errors") or [] if want_errors else []
     out: list[str] = []
     seen: set[str] = set()
 
@@ -201,8 +228,11 @@ def retry_targets(status, key: str) -> list[str]:
         out.append(url)
 
     for row in items:
-        if getattr(row, "reason", "") == "cancelled":
+        reason = getattr(row, "reason", "")
+        if reason in {"cancelled", "error"}:
             continue
+        add(getattr(row, "url", ""))
+    for row in error_items:
         add(getattr(row, "url", ""))
     for item in errors:
         text = str(item or "").strip()
@@ -229,6 +259,7 @@ def restore(status, items: list[dict]) -> None:
     status.downloaded = 0
     status.similar = 0
     status.errors = []
+    status.error_items = []
     status.message = ""
     status.current_url = None
     status.last_gallery_url = None
@@ -247,6 +278,7 @@ def restore(status, items: list[dict]) -> None:
         key = item.get("source") or SOURCE_UNSUPPORTED
         groups.setdefault(key, []).append(item)
     status.skipped_items = []
+    status.error_items = []
     status.cancelled_urls = []
     status.skipped = 0
     status.total = 0
@@ -257,14 +289,25 @@ def restore(status, items: list[dict]) -> None:
         skipped = [
             SkippedItem(url=row["url"], reason=row["reason"], detail=row["detail"])
             for row in rows
+            if row.get("reason") not in {"cancelled", "error"}
+        ]
+        error_items = [
+            SkippedItem(url=row["url"], reason="error", detail=row.get("detail") or "")
+            for row in rows
+            if row.get("reason") == "error"
         ]
         cancelled = [row["url"] for row in rows if row["reason"] == "cancelled"]
+        error_lines = [
+            f"{row.url}: {row.detail}" if row.detail else row.url for row in error_items
+        ]
         if first:
             first = False
             status.source_key = key
             status.source_label = _labels[key]
             status.skipped_items = skipped
             status.skipped = len(skipped)
+            status.error_items = error_items
+            status.errors = error_lines
             status.cancelled_urls = cancelled
             status.total = len(rows)
             status.processed = 0
@@ -272,6 +315,8 @@ def restore(status, items: list[dict]) -> None:
         snap = _fresh()
         snap["skipped_items"] = skipped
         snap["skipped"] = len(skipped)
+        snap["error_items"] = error_items
+        snap["errors"] = error_lines
         snap["cancelled_urls"] = cancelled
         snap["total"] = len(rows)
         snap["processed"] = 0
@@ -286,28 +331,54 @@ def drop_url(status, url: str) -> None:
     if not key:
         return
 
-    def _scrub(skipped_items, cancelled_urls, counted_urls, finished_urls, released_urls):
+    def _scrub(skipped_items, error_items, cancelled_urls, counted_urls, finished_urls, released_urls, errors):
         next_skipped = [row for row in skipped_items if identity(row.url) != key]
         removed = len(skipped_items) - len(next_skipped)
+        next_errors_items = [row for row in error_items if identity(row.url) != key]
         next_cancelled = [item for item in cancelled_urls if identity(item) != key]
         next_counted = {item for item in counted_urls if identity(item) != key}
         next_finished = {item for item in finished_urls if identity(item) != key}
         next_released = {item for item in released_urls if identity(item) != key}
-        return next_skipped, next_cancelled, next_counted, next_finished, next_released, removed
+        prefix_hit = False
+        next_errors = []
+        for item in errors:
+            text = str(item or "")
+            url, sep, _ = text.partition(": ")
+            check = url if sep else text
+            if identity(check) == key:
+                prefix_hit = True
+                continue
+            next_errors.append(item)
+        return (
+            next_skipped,
+            next_errors_items,
+            next_cancelled,
+            next_counted,
+            next_finished,
+            next_released,
+            next_errors,
+            removed,
+            prefix_hit or len(error_items) != len(next_errors_items),
+        )
 
     (
         status.skipped_items,
+        status.error_items,
         status.cancelled_urls,
         status.counted_urls,
         status.finished_urls,
         status.released_urls,
+        status.errors,
         removed,
+        _err_removed,
     ) = _scrub(
         status.skipped_items,
+        getattr(status, "error_items", []) or [],
         status.cancelled_urls,
         status.counted_urls,
         status.finished_urls,
         status.released_urls,
+        status.errors,
     )
     if removed:
         status.skipped = max(0, int(status.skipped) - removed)
@@ -317,17 +388,22 @@ def drop_url(status, url: str) -> None:
     for snap in _archive.values():
         (
             snap["skipped_items"],
+            snap["error_items"],
             snap["cancelled_urls"],
             snap["counted_urls"],
             snap["finished_urls"],
             snap["released_urls"],
+            snap["errors"],
             removed,
+            _err_removed,
         ) = _scrub(
             snap["skipped_items"],
+            snap.get("error_items") or [],
             snap["cancelled_urls"],
             snap["counted_urls"],
             snap.get("finished_urls") or set(),
             snap.get("released_urls") or set(),
+            snap.get("errors") or [],
         )
         if removed:
             snap["skipped"] = max(0, int(snap["skipped"]) - removed)
@@ -386,6 +462,11 @@ def panels(status, queues: dict[str, list[str]]) -> list[dict]:
                 "skipped_items": [
                     {"url": row.url, "reason": row.reason, "detail": row.detail}
                     for row in snap["skipped_items"]
+                    if getattr(row, "reason", "") != "error"
+                ],
+                "error_items": [
+                    {"url": row.url, "reason": row.reason, "detail": row.detail}
+                    for row in (snap.get("error_items") or [])
                 ],
                 "cancelled_urls": list(snap["cancelled_urls"]),
                 "queue_urls": list(queues.get(key, [])),

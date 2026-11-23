@@ -92,6 +92,11 @@ def _status_out() -> ScrapeStatusOut:
         skipped_items=[
             {"url": item.url, "reason": item.reason, "detail": item.detail}
             for item in scrape_status.skipped_items
+            if item.reason != "error"
+        ],
+        error_items=[
+            {"url": item.url, "reason": item.reason, "detail": item.detail}
+            for item in getattr(scrape_status, "error_items", []) or []
         ],
         cancelled_urls=list(scrape_status.cancelled_urls),
         queue_urls=list(scrape_status.queue_urls),
@@ -460,17 +465,17 @@ def post_clear_recent() -> ScrapeStatusOut:
 
 @router.post("/clear-queues", response_model=ScrapeStatusOut)
 def post_clear_queues(source: str | None = None, which: str | None = None) -> ScrapeStatusOut:
-    """Empty Queue to scrape, Skipped, and Cancelled. Session downloads stay.
+    """Empty Queue to scrape, Skipped, Errors, and Cancelled. Session downloads stay.
 
     ``source`` (a panel key) clears only that source; omitted clears every panel.
-    ``which`` is ``queue``, ``skipped``, or ``cancelled``; omitted clears all three.
+    ``which`` is ``queue``, ``skipped``, ``errors``, or ``cancelled``; omitted clears all four.
     """
     key = (source or "").strip() or None
     kind = (which or "").strip() or None
-    if kind not in (None, "queue", "skipped", "cancelled"):
+    if kind not in (None, "queue", "skipped", "errors", "cancelled"):
         raise HTTPException(
             status_code=400,
-            detail="which must be queue, skipped, or cancelled.",
+            detail="which must be queue, skipped, errors, or cancelled.",
         )
     with scrape_lock:
         if scrape_status.running and (key is None or key == scrape_status.source_key):
@@ -484,11 +489,17 @@ def post_clear_queues(source: str | None = None, which: str | None = None) -> Sc
 
 
 @router.post("/retry", response_model=ScrapeStatusOut, dependencies=[Depends(require_scrape_page)])
-def post_retry_skipped(source: str) -> ScrapeStatusOut:
-    """Run only this panel's skipped and error files. Queue and Cancelled stay."""
+def post_retry_skipped(source: str, which: str | None = None) -> ScrapeStatusOut:
+    """Run this panel's Skipped and/or Errors files. Queue and Cancelled stay.
+
+    ``which`` is ``skipped``, ``errors``, or omitted for both.
+    """
     key = (source or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="source is required.")
+    kind = (which or "").strip() or None
+    if kind not in (None, "skipped", "errors"):
+        raise HTTPException(status_code=400, detail="which must be skipped or errors.")
     local = False
     urls: list[str] = []
     with scrape_lock:
@@ -497,7 +508,7 @@ def post_retry_skipped(source: str) -> ScrapeStatusOut:
                 status_code=409,
                 detail="A scrape or import is running. Stop it before retrying.",
             )
-        urls = scrape_panels.retry_targets(scrape_status, key)
+        urls = scrape_panels.retry_targets(scrape_status, key, which=kind)
         if not urls:
             raise HTTPException(status_code=400, detail="Nothing skipped or failed to retry.")
         local = key == scrape_panels.SOURCE_LOCAL
