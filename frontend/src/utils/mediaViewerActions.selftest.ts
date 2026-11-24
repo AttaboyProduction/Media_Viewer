@@ -1,4 +1,6 @@
 import {
+  formatFileSize,
+  formatPixelSize,
   packWebShareBatches,
   WEB_SHARE_MAX_BYTES,
   WEB_SHARE_MAX_FILES,
@@ -81,6 +83,15 @@ function assert(cond: boolean, message: string) {
   })
   assert(notice.message.toLowerCase().includes('50'), 'oversized notice mentions 50 MB')
   assert((notice.detailLines || []).some((line) => line.includes('big.mp4')), 'lists oversized names')
+}
+
+{
+  assert(formatPixelSize(1920, 1080) === '1920×1080', 'formats pixel size')
+  assert(formatPixelSize(0, 1080) === '', 'skips zero width')
+  assert(formatPixelSize(null, 1080) === '', 'skips missing width')
+  assert(formatFileSize(900) === '900 B', 'bytes under 1 KB')
+  assert(formatFileSize(1536) === '1.5 KB', 'small KB with one decimal')
+  assert(formatFileSize(5 * 1024 * 1024) === '5.0 MB', 'megabytes keep one decimal under 10')
 }
 
 console.log('mediaViewerActions.selftest: ok')

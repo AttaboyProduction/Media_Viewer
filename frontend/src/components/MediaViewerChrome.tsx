@@ -74,10 +74,9 @@ export default function MediaViewerChrome({ media, index, total, onRotate }: Pro
   }, [status, statusMs])
 
   const stamp = formatViewerStamp(media.scraped_at)
-  const size = formatFileSize(media.file_size)
   const title =
     total > 0 && index >= 0 ? `File ${index + 1} of ${total}` : `File #${media.source_post_id}`
-  const subtitle = [stamp, size].filter(Boolean).join(' · ')
+  const subtitle = stamp
 
   const showStatus = (message: string, ms = 1800) => {
     setStatusMs(ms)

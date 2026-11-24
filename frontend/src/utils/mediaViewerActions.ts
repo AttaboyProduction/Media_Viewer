@@ -684,6 +684,24 @@ export function formatFileSize(bytes: number | null | undefined): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`
 }
 
+/** Intrinsic pixel size for the detail chrome (e.g. `1920×1080`). */
+export function formatPixelSize(
+  width: number | null | undefined,
+  height: number | null | undefined,
+): string {
+  if (
+    width == null ||
+    height == null ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width < 1 ||
+    height < 1
+  ) {
+    return ''
+  }
+  return `${Math.round(width)}×${Math.round(height)}`
+}
+
 /** 0-based index in a paged list, or -1 when the open id is not on this page. */
 export function fileIndexOnPage(
   page: number,

@@ -25,6 +25,7 @@ import { DEFAULT_APP_SETTINGS } from '../types/appSettings'
 import { registerEscapeHandler } from '../utils/escapeStack'
 import { useHorizontalWheelNav } from '../hooks/useHorizontalWheelNav'
 import { shouldSkipKeyboardShortcut } from '../utils/keyboardTarget'
+import { formatFileSize, formatPixelSize } from '../utils/mediaViewerActions'
 
 interface Props {
   mediaId: number
@@ -563,6 +564,19 @@ export default function MediaDetailModal({
                 <span className="source-id-secondary"> · source #{sourceNumber}</span>
               ) : (
                 <span className="source-id-secondary"> · id {media.id}</span>
+              )}
+              {(formatPixelSize(naturalSize.w, naturalSize.h) ||
+                formatFileSize(media.file_size)) && (
+                <span className="source-id-secondary">
+                  {' '}
+                  ·{' '}
+                  {[
+                    formatPixelSize(naturalSize.w, naturalSize.h),
+                    formatFileSize(media.file_size),
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                </span>
               )}
             </span>
           </div>
