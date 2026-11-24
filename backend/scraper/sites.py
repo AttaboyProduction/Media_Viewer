@@ -200,21 +200,21 @@ def save_session_settings(updates: dict) -> dict:
 
 
 def _source_group(site: dict[str, Any]) -> str | None:
-    """Shared adapter label for a site. Gelbooru sites use that one scraper name."""
-    if str(site.get("profile") or "") != "gelbooru":
-        return None
+    """Non-selectable Source list heading from the site's scraper name (Rule34, Gelbooru, …)."""
     site_id = site.get("id")
     for scraper in KNOWN_SCRAPERS.values():
         if site_id in scraper.get("site_ids", []) and scraper.get("name"):
             return str(scraper["name"])
-    return "Gelbooru"
+    if str(site.get("profile") or "") == "gelbooru":
+        return "Gelbooru"
+    return "Rule34"
 
 
 def list_known_sources() -> list[dict[str, Any]]:
     """Top-level scrape sources: Local first, then each installed catalog site.
 
-    Gelbooru sites stay separate sources and share one group label (the adapter name)
-    so the Source list can show every site that uses that adapter.
+    Site sources share a group label with their scraper name (Rule34, Gelbooru, …)
+    so the Source list can show a non-selectable heading above those sites.
     """
     sources = [
         {

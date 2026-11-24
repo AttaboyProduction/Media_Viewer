@@ -244,7 +244,12 @@ class ManifestTests(unittest.TestCase):
                 "id": "gelbooru_default",
                 "name": "Gelbooru",
                 "site_ids": ["gelbooru", "rule34_xxx"],
-            }
+            },
+            "rule34_xyz_default": {
+                "id": "rule34_xyz_default",
+                "name": "Rule34",
+                "site_ids": ["rule34_xyz"],
+            },
         }
         with (
             patch.dict(sites_mod.KNOWN_SITES, catalog, clear=True),
@@ -253,7 +258,7 @@ class ManifestTests(unittest.TestCase):
             sources = sites_mod.list_known_sources()
         by_id = {item["id"]: item for item in sources}
         self.assertIsNone(by_id["local"]["group"])
-        self.assertIsNone(by_id["rule34_xyz"]["group"])
+        self.assertEqual(by_id["rule34_xyz"]["group"], "Rule34")
         self.assertEqual(by_id["gelbooru"]["group"], "Gelbooru")
         self.assertEqual(by_id["gelbooru"]["name"], "gelbooru.com")
         self.assertEqual(by_id["rule34_xxx"]["group"], "Gelbooru")
