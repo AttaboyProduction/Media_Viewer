@@ -163,8 +163,7 @@ export default function ScrapeSelect({
   )
 }
 
-/** Short counts for every scrape queue on a source status panel. */
-export function sourceBusyDetail(panel: {
+type BusyPanel = {
   running: boolean
   total: number
   processed: number
@@ -173,8 +172,9 @@ export function sourceBusyDetail(panel: {
   skipped_items?: { reason: string }[]
   error_items?: { reason: string }[]
   cancelled_urls?: string[]
-} | null | undefined): string | null {
-  if (!panel) return null
+}
+
+function panelBusyCounts(panel: BusyPanel) {
   const remaining = Math.max(0, panel.total - panel.processed)
   const scraping = panel.running ? (remaining > 0 ? remaining : panel.current_url ? 1 : 0) : 0
   const queued = panel.queue_urls.length
@@ -186,12 +186,63 @@ export function sourceBusyDetail(panel: {
       ? panel.error_items.length
       : (panel.skipped_items ?? []).filter((item) => item.reason === 'error').length
   const cancelled = (panel.cancelled_urls ?? []).length
+  return {
+    scraping,
+    running: panel.running,
+    queued,
+    skipped,
+    errors,
+    cancelled,
+  }
+}
+
+function formatBusyCounts(counts: {
+  scraping: number
+  running: boolean
+  queued: number
+  skipped: number
+  errors: number
+  cancelled: number
+}): string | null {
   const parts: string[] = []
-  if (scraping > 0) parts.push(`${scraping} scraping`)
-  else if (panel.running) parts.push('scraping')
-  if (queued > 0) parts.push(`${queued} queue`)
-  if (skipped > 0) parts.push(`${skipped} skipped`)
-  if (errors > 0) parts.push(`${errors} errors`)
-  if (cancelled > 0) parts.push(`${cancelled} cancelled`)
+  if (counts.scraping > 0) parts.push(`${counts.scraping} scraping`)
+  else if (counts.running) parts.push('scraping')
+  if (counts.queued > 0) parts.push(`${counts.queued} queue`)
+  if (counts.skipped > 0) parts.push(`${counts.skipped} skipped`)
+  if (counts.errors > 0) parts.push(`${counts.errors} errors`)
+  if (counts.cancelled > 0) parts.push(`${counts.cancelled} cancelled`)
   return parts.length > 0 ? parts.join(' · ') : null
+}
+
+/** Short counts for every scrape queue on a source status panel. */
+export function sourceBusyDetail(panel: BusyPanel | null | undefined): string | null {
+  if (!panel) return null
+  return formatBusyCounts(panelBusyCounts(panel))
+}
+
+/** Sum queue counts across every site a scraper covers. */
+export function scraperBusyDetail(
+  siteIds: string[],
+  panelsByKey: Map<string, BusyPanel>,
+): string | null {
+  const totals = {
+    scraping: 0,
+    running: false,
+    queued: 0,
+    skipped: 0,
+    errors: 0,
+    cancelled: 0,
+  }
+  for (const siteId of siteIds) {
+    const panel = panelsByKey.get(siteId)
+    if (!panel) continue
+    const counts = panelBusyCounts(panel)
+    totals.scraping += counts.scraping
+    totals.running = totals.running || counts.running
+    totals.queued += counts.queued
+    totals.skipped += counts.skipped
+    totals.errors += counts.errors
+    totals.cancelled += counts.cancelled
+  }
+  return formatBusyCounts(totals)
 }

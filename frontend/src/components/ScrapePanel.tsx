@@ -26,7 +26,7 @@ import { DEFAULT_APP_SETTINGS } from '../types/appSettings'
 import type { ScrapeListName } from '../api/client'
 import type { ScrapeFilter, ScrapeFilterType, ScrapeSourcePanel as ScrapeSourcePanelData } from '../types'
 import ExcludeTagsPicker from './ExcludeTagsPicker'
-import ScrapeSelect, { sourceBusyDetail } from './ScrapeSelect'
+import ScrapeSelect, { scraperBusyDetail, sourceBusyDetail } from './ScrapeSelect'
 import ScrapeSourcePanel from './ScrapeSourcePanel'
 import { SearchableTagSingleSelect } from './TagChipSelect'
 
@@ -234,18 +234,28 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
   const isLocalSource = selectedSource?.kind === 'local'
   const selectedScraper = session?.selected_scraper ?? null
   const allScrapers = session?.available_scrapers ?? []
-  const sourceOptions = useMemo(() => {
-    const panelsByKey = new Map((status?.sources ?? []).map((panel) => [panel.key, panel]))
-    return (session?.available_sources ?? []).map((source) => ({
-      id: source.id,
-      label: source.name,
-      group: source.group ?? null,
-      detail: sourceBusyDetail(panelsByKey.get(source.id)),
-    }))
-  }, [session?.available_sources, status?.sources])
+  const panelsByKey = useMemo(
+    () => new Map((status?.sources ?? []).map((panel) => [panel.key, panel])),
+    [status?.sources],
+  )
+  const sourceOptions = useMemo(
+    () =>
+      (session?.available_sources ?? []).map((source) => ({
+        id: source.id,
+        label: source.name,
+        group: source.group ?? null,
+        detail: sourceBusyDetail(panelsByKey.get(source.id)),
+      })),
+    [session?.available_sources, panelsByKey],
+  )
   const scraperOptions = useMemo(
-    () => allScrapers.map((agent) => ({ id: agent.id, label: agent.name })),
-    [allScrapers],
+    () =>
+      allScrapers.map((agent) => ({
+        id: agent.id,
+        label: agent.name,
+        detail: scraperBusyDetail(agent.site_ids, panelsByKey),
+      })),
+    [allScrapers, panelsByKey],
   )
   const localPaths = useMemo(
     () => [...localFolders, ...localFiles],
