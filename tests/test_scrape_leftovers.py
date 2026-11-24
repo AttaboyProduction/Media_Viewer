@@ -493,6 +493,48 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertEqual(scrape_leftovers.unfinished_items(), [])
         self.assertEqual(scrape_leftovers.queue_urls(), [])
 
+    def test_clear_cancelled_shrinks_progress_to_downloads(self) -> None:
+        """After Stop, clearing Cancelled must not leave processed < total."""
+        from backend.scraper.pipeline import SkippedItem
+
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "site_a", "Site A")
+        done = [f"https://gallery.test/post/{i}" for i in range(1, 11)]
+        stopped = [f"https://gallery.test/post/{i}" for i in range(11, 24)]
+        status.total = 23
+        status.processed = 23
+        status.downloaded = 10
+        status.skipped = 13
+        status.processed_urls = set(done + stopped)
+        status.cancelled_urls = list(stopped)
+        status.skipped_items = [
+            SkippedItem(url=url, reason="cancelled") for url in stopped
+        ]
+        out = scrape_api.post_clear_queues("site_a", which="cancelled")
+        panel = self._panel(out, "site_a")
+        self.assertEqual(panel.cancelled_urls, [])
+        self.assertEqual(panel.skipped_items, [])
+        self.assertEqual(panel.downloaded, 10)
+        self.assertEqual(panel.processed, 10)
+        self.assertEqual(panel.total, 10)
+
+    def test_idle_status_clamps_progress_when_queues_are_empty(self) -> None:
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "site_a", "Site A")
+        status.running = False
+        status.total = 23
+        status.processed = 10
+        status.downloaded = 10
+        status.cancelled_urls = []
+        status.skipped_items = []
+        status.error_items = []
+        status.errors = []
+        status.queue_urls = []
+        panels = scrape_panels.panels(status, {})
+        panel = next(p for p in panels if p["key"] == "site_a")
+        self.assertEqual((panel["processed"], panel["total"]), (10, 10))
+        self.assertEqual((status.processed, status.total), (10, 10))
+
     def test_clear_queues_endpoint_refuses_while_running(self) -> None:
         self._seed_queues()
         pipeline.scrape_status.running = True

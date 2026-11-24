@@ -772,6 +772,27 @@ class CancelRemainderTests(unittest.TestCase):
         self.assertEqual(pipeline.scrape_status.processed, 3)
         self.assertEqual(pipeline.scrape_status.total, 10)
 
+    def test_release_queue_drops_uncounted_pending_from_total(self) -> None:
+        """Done must not leave processed < total after pending URLs are discarded."""
+        pipeline.scrape_status.job_id = 7
+        pipeline.scrape_status.running = True
+        pipeline.scrape_status.queue_open = True
+        pipeline.scrape_status.kind = "scrape"
+        pipeline.scrape_status.total = 23
+        pipeline.scrape_status.processed = 10
+        pipeline.scrape_status.downloaded = 10
+        pipeline.scrape_status.processed_urls = {
+            f"https://gallery.test/post/{i}" for i in range(1, 11)
+        }
+        pipeline.scrape_status.pending_urls = [
+            f"https://gallery.test/post/{i}" for i in range(11, 24)
+        ]
+        pipeline._release_queue(7)
+        self.assertEqual(pipeline.scrape_status.pending_urls, [])
+        self.assertEqual(pipeline.scrape_status.processed, 10)
+        self.assertEqual(pipeline.scrape_status.total, 10)
+        self.assertFalse(pipeline.scrape_status.running)
+
     def test_classify_remote_picture(self) -> None:
         from backend.scraper.storage import classify_remote_media
 

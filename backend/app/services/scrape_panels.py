@@ -130,11 +130,65 @@ def clear_panel(status, key: str | None = None, *, which: str | None = None) -> 
 
     ``which`` is ``queue``, ``skipped`` (non-cancelled intentional skips), ``errors``,
     or ``cancelled``. Omitted clears all four. Downloaded counts stay.
+
+    Clearing Cancelled (or a full clear) also drops those URLs from ``total`` /
+    ``processed`` so the progress line cannot stay at e.g. 10/23 with empty queues.
     """
     drop_cancelled = which in (None, "cancelled")
     drop_other = which in (None, "skipped")
     drop_errors = which in (None, "errors")
     drop_queue = which in (None, "queue")
+
+    def _cancelled_keys(skipped_items, cancelled_urls) -> set[str]:
+        from backend.app.services.scrape_leftovers import identity
+
+        keys: set[str] = set()
+        for url in cancelled_urls:
+            key_id = identity(url)
+            if key_id:
+                keys.add(key_id)
+        for row in skipped_items:
+            if getattr(row, "reason", "") != "cancelled":
+                continue
+            key_id = identity(getattr(row, "url", "") or "")
+            if key_id:
+                keys.add(key_id)
+        return keys
+
+    def _drop_progress(target, keys: set[str]) -> None:
+        if not keys:
+            return
+        from backend.app.services.scrape_leftovers import identity
+
+        removed = 0
+        is_status = not isinstance(target, dict)
+        processed_urls = (
+            target.processed_urls if is_status else (target.get("processed_urls") or set())
+        )
+        kept: set[str] = set()
+        for url in processed_urls:
+            if identity(url) in keys:
+                removed += 1
+            else:
+                kept.add(url)
+        if is_status:
+            target.processed_urls = kept
+        else:
+            target["processed_urls"] = kept
+            counted = target.get("counted_urls") or set()
+            finished = target.get("finished_urls") or set()
+            target["counted_urls"] = {url for url in counted if identity(url) not in keys}
+            target["finished_urls"] = {url for url in finished if identity(url) not in keys}
+        if removed <= 0:
+            return
+        if is_status:
+            target.processed = max(0, int(target.processed) - removed)
+            target.total = max(int(target.processed), int(target.total) - removed)
+        else:
+            target["processed"] = max(0, int(target.get("processed") or 0) - removed)
+            target["total"] = max(
+                int(target["processed"]), int(target.get("total") or 0) - removed
+            )
 
     def _apply_lists(skipped_items, cancelled_urls, skipped, errors, error_items):
         next_items, removed = _without_skipped(
@@ -156,6 +210,11 @@ def clear_panel(status, key: str | None = None, *, which: str | None = None) -> 
         )
 
     if key is None or key == status.source_key:
+        cancel_keys = (
+            _cancelled_keys(status.skipped_items, status.cancelled_urls)
+            if drop_cancelled
+            else set()
+        )
         (
             status.skipped_items,
             status.cancelled_urls,
@@ -169,15 +228,24 @@ def clear_panel(status, key: str | None = None, *, which: str | None = None) -> 
             status.errors,
             getattr(status, "error_items", []) or [],
         )
+        if drop_cancelled:
+            _drop_progress(status, cancel_keys)
         if drop_queue:
             status.queue_urls = []
             status.pending_urls = []
         if which is None:
             status.retry_urls = set()
             status.leftover_urls = set()
+        if not status.running and status.total < status.processed:
+            status.total = status.processed
     targets = list(_archive) if key is None else ([key] if key in _archive else [])
     for name in targets:
         snap = _archive[name]
+        cancel_keys = (
+            _cancelled_keys(snap["skipped_items"], snap["cancelled_urls"])
+            if drop_cancelled
+            else set()
+        )
         (
             snap["skipped_items"],
             snap["cancelled_urls"],
@@ -191,9 +259,12 @@ def clear_panel(status, key: str | None = None, *, which: str | None = None) -> 
             snap.get("errors") or [],
             snap.get("error_items") or [],
         )
+        if drop_cancelled:
+            _drop_progress(snap, cancel_keys)
         if which is None:
             snap["retry_urls"] = set()
-
+        if int(snap.get("total") or 0) < int(snap.get("processed") or 0):
+            snap["total"] = int(snap.get("processed") or 0)
 
 def retry_targets(status, key: str, *, which: str | None = None) -> list[str]:
     """URLs to retry for one panel.
@@ -435,8 +506,42 @@ def _sort_key(key: str, label: str) -> tuple[int, str]:
     return (1, label.lower())
 
 
+def _idle_has_outstanding(snap: dict, queue: list[str]) -> bool:
+    if queue:
+        return True
+    if snap.get("cancelled_urls") or snap.get("errors"):
+        return True
+    if snap.get("error_items"):
+        return True
+    for row in snap.get("skipped_items") or []:
+        if getattr(row, "reason", "") != "error":
+            return True
+    return False
+
+
+def clamp_idle_progress(status, queues: dict[str, list[str]] | None = None) -> None:
+    """When a panel is idle with empty queues, force ``total == processed``.
+
+    Heals leftover gaps (e.g. 10/23 after pending URLs were discarded) so the
+    status line never looks unfinished with nothing left to run.
+    """
+    queues = queues or {}
+    if not status.running:
+        snap = _take(status)
+        if not _idle_has_outstanding(snap, list(queues.get(status.source_key, []) or status.queue_urls)):
+            if int(status.total or 0) != int(status.processed or 0):
+                status.total = int(status.processed or 0)
+    for key, snap in _archive.items():
+        if _idle_has_outstanding(snap, list(queues.get(key, []))):
+            continue
+        processed = int(snap.get("processed") or 0)
+        if int(snap.get("total") or 0) != processed:
+            snap["total"] = processed
+
+
 def panels(status, queues: dict[str, list[str]]) -> list[dict]:
     """One dict per source with activity: parked, live, or holding Queue to scrape URLs."""
+    clamp_idle_progress(status, queues)
     keys = set(_archive) | set(queues)
     if status.source_key:
         keys.add(status.source_key)

@@ -329,7 +329,17 @@ def _release_queue(job_id: int) -> None:
         scrape_status.running = False
         scrape_status.queue_open = False
         scrape_status.kind = ""
+        # Pending URLs that never settled must leave ``total``, or Done shows
+        # processed/total with empty queues (e.g. 10/23 after Stop + restart).
+        left = list(scrape_status.pending_urls)
         scrape_status.pending_urls = []
+        for url in left:
+            if not url or url in scrape_status.processed_urls:
+                continue
+            scrape_status.total = max(scrape_status.processed, scrape_status.total - 1)
+            scrape_status.accepted_urls.discard(url)
+        if scrape_status.total < scrape_status.processed:
+            scrape_status.total = scrape_status.processed
         _sync_open_urls()
 
 
