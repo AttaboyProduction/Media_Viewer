@@ -6,7 +6,13 @@ import unittest
 from unittest.mock import patch
 
 from backend.scraper import gelbooru
-from backend.scraper.adapter_loader import parse_adapter_manifest
+from backend.scraper.adapter_loader import (
+    install_adapter_from_dir,
+    parse_adapter_manifest,
+    read_adapter_secrets,
+    site_api_auth_configured,
+    write_site_secrets,
+)
 from backend.scraper.gallery import extract_post_id
 from backend.scraper.storage import video_download_urls
 
@@ -263,6 +269,62 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(by_id["gelbooru"]["name"], "gelbooru.com")
         self.assertEqual(by_id["rule34_xxx"]["group"], "Gelbooru")
         self.assertEqual(by_id["rule34_xxx"]["name"], "rule34.xxx")
+
+    def test_requires_api_auth_flag_and_configured(self) -> None:
+        manifest = parse_adapter_manifest(
+            {
+                "id": "gelbooru",
+                "sites": [
+                    {
+                        "id": "rule34_xxx",
+                        "name": "rule34.xxx",
+                        "base_url": "https://rule34.xxx",
+                        "requires_api_auth": True,
+                    }
+                ],
+                "scrapers": [{"id": "g", "name": "Gelbooru", "site_ids": ["rule34_xxx"]}],
+            }
+        )
+        assert manifest is not None
+        site = manifest["sites"][0]
+        self.assertTrue(site.get("requires_api_auth"))
+        self.assertFalse(site_api_auth_configured(site))
+        site["api_user_id"] = "1"
+        site["api_key"] = "k"
+        self.assertTrue(site_api_auth_configured(site))
+
+    def test_secrets_merge_and_install_preserves_secrets(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from backend.scraper import adapter_loader as loader
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            installed = root / "installed"
+            pkg = root / "pkg"
+            pkg.mkdir()
+            (pkg / "adapter.json").write_text(
+                '{"id":"gelbooru","sites":[{"id":"rule34_xxx","name":"rule34.xxx",'
+                '"base_url":"https://rule34.xxx","requires_api_auth":true}],'
+                '"scrapers":[{"id":"g","name":"Gelbooru","site_ids":["rule34_xxx"]}]}',
+                encoding="utf-8",
+            )
+            dest = installed / "gelbooru"
+            dest.mkdir(parents=True)
+            (dest / "adapter.json").write_text((pkg / "adapter.json").read_text(encoding="utf-8"), encoding="utf-8")
+            write_site_secrets(dest, "rule34_xxx", api_user_id="449", api_key="secret-key")
+
+            with patch.object(loader, "installed_adapters_dir", return_value=installed):
+                sites, _ = loader.load_catalog_from_installed()
+                self.assertEqual(sites["rule34_xxx"]["api_user_id"], "449")
+                self.assertEqual(sites["rule34_xxx"]["api_key"], "secret-key")
+                self.assertTrue(site_api_auth_configured(sites["rule34_xxx"]))
+
+                install_adapter_from_dir(pkg)
+                preserved = read_adapter_secrets(installed / "gelbooru")
+                self.assertEqual(preserved["rule34_xxx"]["api_user_id"], "449")
+                self.assertEqual(preserved["rule34_xxx"]["api_key"], "secret-key")
 
 
 if __name__ == "__main__":

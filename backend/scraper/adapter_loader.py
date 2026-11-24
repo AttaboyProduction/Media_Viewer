@@ -18,6 +18,7 @@ from backend.app.config import ROOT_DIR, settings
 logger = logging.getLogger(__name__)
 
 MANIFEST_NAME = "adapter.json"
+SECRETS_NAME = "secrets.json"
 
 
 def installed_adapters_dir() -> Path:
@@ -26,6 +27,76 @@ def installed_adapters_dir() -> Path:
 
 def project_adapters_dir() -> Path:
     return ROOT_DIR / "adapters"
+
+
+def secrets_path(adapter_dir: Path) -> Path:
+    return adapter_dir / SECRETS_NAME
+
+
+def site_api_auth_configured(site: dict[str, Any]) -> bool:
+    """True when the site opts into API auth and both credentials are set."""
+    if not site.get("requires_api_auth"):
+        return False
+    user_id = str(site.get("api_user_id") or "").strip()
+    api_key = str(site.get("api_key") or "").strip()
+    return bool(user_id and api_key)
+
+
+def read_adapter_secrets(adapter_dir: Path) -> dict[str, dict[str, str]]:
+    """Return ``{site_id: {api_user_id, api_key}}`` from secrets.json (empty if missing)."""
+    path = secrets_path(adapter_dir)
+    raw = _read_manifest(path)  # same JSON object load; name is historical
+    if raw is None:
+        return {}
+    sites_raw = raw.get("sites")
+    if not isinstance(sites_raw, dict):
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for site_id, entry in sites_raw.items():
+        if not isinstance(site_id, str) or not site_id.strip():
+            continue
+        if not isinstance(entry, dict):
+            continue
+        row: dict[str, str] = {}
+        for key in ("api_user_id", "api_key"):
+            value = entry.get(key)
+            if isinstance(value, str) and value.strip():
+                row[key] = value.strip()
+        if row:
+            out[site_id.strip()] = row
+    return out
+
+
+def write_site_secrets(
+    adapter_dir: Path,
+    site_id: str,
+    *,
+    api_user_id: str,
+    api_key: str,
+) -> dict[str, str]:
+    """Update one site in secrets.json. Empty strings clear that site's entry."""
+    adapter_dir.mkdir(parents=True, exist_ok=True)
+    path = secrets_path(adapter_dir)
+    existing = read_adapter_secrets(adapter_dir)
+    user = api_user_id.strip()
+    key = api_key.strip()
+    if user or key:
+        existing[site_id] = {"api_user_id": user, "api_key": key}
+    else:
+        existing.pop(site_id, None)
+    payload = {"sites": existing}
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return existing.get(site_id, {"api_user_id": "", "api_key": ""})
+
+
+def _apply_secrets_to_site(site: dict[str, Any], secrets: dict[str, dict[str, str]]) -> None:
+    row = secrets.get(site["id"])
+    if not row:
+        return
+    for key in ("api_user_id", "api_key"):
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            site[key] = value.strip()
 
 
 def _read_manifest(path: Path) -> dict[str, Any] | None:
@@ -68,10 +139,13 @@ def _normalize_site(raw: object) -> dict[str, Any] | None:
     api_base = raw.get("api_base")
     if isinstance(api_base, str) and api_base.strip():
         site["api_base"] = api_base.strip()
+    # Prefer secrets.json; still accept inline values for older local copies.
     for secret_key in ("api_user_id", "api_key"):
         secret = raw.get(secret_key)
         if isinstance(secret, str) and secret.strip():
             site[secret_key] = secret.strip()
+    if raw.get("requires_api_auth") is True:
+        site["requires_api_auth"] = True
     order = raw.get("tag_fetch_order")
     if isinstance(order, list):
         site["tag_fetch_order"] = [str(item) for item in order if isinstance(item, str) and item]
@@ -215,6 +289,7 @@ def load_catalog_from_installed() -> tuple[dict[str, dict[str, Any]], dict[str, 
     """Scan data/adapters/*/adapter.json. First site/scraper id wins on duplicates.
 
     Template packages are never loaded into the live site catalog.
+    Merges ``secrets.json`` beside each package onto matching sites.
     """
     sites: dict[str, dict[str, Any]] = {}
     scrapers: dict[str, dict[str, Any]] = {}
@@ -230,11 +305,14 @@ def load_catalog_from_installed() -> tuple[dict[str, dict[str, Any]], dict[str, 
         parsed = parse_adapter_manifest(raw, folder_id=child.name)
         if not parsed or parsed.get("template"):
             continue
+        secrets = read_adapter_secrets(child)
         for site in parsed["sites"]:
             sid = site["id"]
             if sid in sites:
                 logger.warning("Duplicate site id %s from %s; keeping first", sid, child)
                 continue
+            site["adapter_id"] = parsed["id"]
+            _apply_secrets_to_site(site, secrets)
             sites[sid] = site
         for scraper in parsed["scrapers"]:
             sid = scraper["id"]
@@ -245,8 +323,56 @@ def load_catalog_from_installed() -> tuple[dict[str, dict[str, Any]], dict[str, 
     return sites, scrapers
 
 
+def list_sites_requiring_api_auth() -> list[dict[str, Any]]:
+    """Installed sites with ``requires_api_auth``, including current secret values."""
+    sites, _ = load_catalog_from_installed()
+    out: list[dict[str, Any]] = []
+    for site in sites.values():
+        if not site.get("requires_api_auth"):
+            continue
+        out.append(
+            {
+                "site_id": site["id"],
+                "name": site["name"],
+                "adapter_id": str(site.get("adapter_id") or ""),
+                "api_user_id": str(site.get("api_user_id") or ""),
+                "api_key": str(site.get("api_key") or ""),
+                "configured": site_api_auth_configured(site),
+            }
+        )
+    return out
+
+
+def save_site_api_auth(site_id: str, *, api_user_id: str, api_key: str) -> dict[str, Any]:
+    """Write secrets for an installed site that requires API auth. Reloads nothing."""
+    sites, _ = load_catalog_from_installed()
+    site = sites.get(site_id)
+    if site is None or not site.get("requires_api_auth"):
+        raise KeyError(site_id)
+    adapter_id = str(site.get("adapter_id") or "").strip()
+    if not adapter_id:
+        raise KeyError(site_id)
+    adapter_dir = installed_adapters_dir() / adapter_id
+    if not adapter_dir.is_dir():
+        raise KeyError(site_id)
+    write_site_secrets(adapter_dir, site_id, api_user_id=api_user_id, api_key=api_key)
+    user = api_user_id.strip()
+    key = api_key.strip()
+    return {
+        "site_id": site_id,
+        "name": site["name"],
+        "adapter_id": adapter_id,
+        "api_user_id": user,
+        "api_key": key,
+        "configured": bool(site.get("requires_api_auth") and user and key),
+    }
+
+
 def install_adapter_from_dir(src: Path) -> str:
-    """Copy an adapter package into data/adapters/<id>/. Returns adapter id."""
+    """Copy an adapter package into data/adapters/<id>/. Returns adapter id.
+
+    Preserves an existing destination ``secrets.json`` across reinstall/update.
+    """
     src = src.resolve()
     if not src.is_dir():
         raise ValueError(f"Adapter path is not a folder: {src}")
@@ -263,9 +389,28 @@ def install_adapter_from_dir(src: Path) -> str:
     aid = parsed["id"]
     dest = installed_adapters_dir() / aid
     installed_adapters_dir().mkdir(parents=True, exist_ok=True)
+    preserved_secrets: str | None = None
+    dest_secrets = secrets_path(dest)
+    if dest_secrets.is_file():
+        try:
+            preserved_secrets = dest_secrets.read_text(encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not read existing secrets for %s: %s", aid, exc)
     if dest.exists():
         shutil.rmtree(dest)
     shutil.copytree(src, dest)
+    # Never keep secrets that arrived from the source package; restore prior local file.
+    copied_secrets = secrets_path(dest)
+    if copied_secrets.is_file() and preserved_secrets is None:
+        try:
+            copied_secrets.unlink()
+        except OSError:
+            pass
+    if preserved_secrets is not None:
+        try:
+            secrets_path(dest).write_text(preserved_secrets, encoding="utf-8")
+        except OSError as exc:
+            logger.warning("Could not restore secrets for %s: %s", aid, exc)
     return aid
 
 

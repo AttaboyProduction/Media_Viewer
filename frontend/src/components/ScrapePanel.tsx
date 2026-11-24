@@ -674,6 +674,12 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
             />
           )}
         </div>
+        {selectedSource?.requires_api_auth && !selectedSource.api_auth_configured && (
+          <p className="settings-hint scrape-api-auth-hint" role="status">
+            {selectedSource.name} needs an API User ID and API key. Set them in Settings → Other →
+            Scrape → Source API credentials.
+          </p>
+        )}
         {(installedSiteCount === 0 || projectAdapters.length > 0) && (
           <div className="scrape-adapters">
             {installedSiteCount === 0 && (

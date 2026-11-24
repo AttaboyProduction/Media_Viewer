@@ -1,7 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 
-import { fetchAppSettings, patchAppSettings, recalculateTagUsage, type AppSettings } from '../api/client'
+import {
+  fetchAppSettings,
+  fetchSiteApiAuth,
+  patchAppSettings,
+  putSiteApiAuth,
+  recalculateTagUsage,
+  type AppSettings,
+} from '../api/client'
+import type { SiteApiAuth } from '../types'
 
 import ContentHideRulesEditor from '../components/ContentHideRulesEditor'
 import ExcludeTagsPicker from '../components/ExcludeTagsPicker'
@@ -558,6 +566,7 @@ export default function AppSettingsPage() {
                       onChange={(next) => save({ scrape_default_exclude_tags: next })}
                     />
                   </SettingsOption>
+                  <SiteApiAuthSettingsBlock />
                   <div className="panel settings-subpanel">
                     <h3 className="settings-subpanel-title">Scrape browser</h3>
                     <p className="settings-hint">
@@ -675,6 +684,97 @@ export default function AppSettingsPage() {
           {mutation.error instanceof Error ? mutation.error.message : 'Failed to save settings'}
         </div>
       )}
+    </div>
+  )
+}
+
+function SiteApiAuthSettingsBlock() {
+  const queryClient = useQueryClient()
+  const { notifySaved } = useSaveFeedback()
+  const { data: rows = [] } = useQuery({
+    queryKey: ['site-api-auth'],
+    queryFn: fetchSiteApiAuth,
+  })
+  const [drafts, setDrafts] = useState<Record<string, { api_user_id: string; api_key: string }>>({})
+
+  useEffect(() => {
+    const next: Record<string, { api_user_id: string; api_key: string }> = {}
+    for (const row of rows) {
+      next[row.site_id] = { api_user_id: row.api_user_id, api_key: row.api_key }
+    }
+    setDrafts(next)
+  }, [rows])
+
+  const saveRow = async (row: SiteApiAuth) => {
+    const draft = drafts[row.site_id] ?? { api_user_id: row.api_user_id, api_key: row.api_key }
+    await withSavedFeedback(notifySaved, () =>
+      putSiteApiAuth(row.site_id, {
+        api_user_id: draft.api_user_id,
+        api_key: draft.api_key,
+      }),
+    )
+    await queryClient.invalidateQueries({ queryKey: ['site-api-auth'] })
+    await queryClient.invalidateQueries({ queryKey: ['scrape-session'] })
+  }
+
+  if (rows.length === 0) return null
+
+  return (
+    <div className="panel settings-subpanel">
+      <h3 className="settings-subpanel-title">Source API credentials</h3>
+      <p className="settings-hint">
+        Some gallery Sources need an API User ID and API key from that site&apos;s account options.
+        Values stay in a local secrets file next to the installed adapter (not in git).
+      </p>
+      {rows.map((row) => {
+        const draft = drafts[row.site_id] ?? { api_user_id: row.api_user_id, api_key: row.api_key }
+        return (
+          <div key={row.site_id} className="settings-site-auth">
+            <h4 className="settings-subpanel-title">{row.name}</h4>
+            <p className="settings-hint">
+              On {row.name}, open Account → Options, copy User ID and API key, then paste here.
+            </p>
+            <SettingsOption label="User ID">
+              <input
+                type="text"
+                autoComplete="off"
+                value={draft.api_user_id}
+                onChange={(e) =>
+                  setDrafts((prev) => ({
+                    ...prev,
+                    [row.site_id]: { ...draft, api_user_id: e.target.value },
+                  }))
+                }
+                onBlur={() => void saveRow(row)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.currentTarget.blur()
+                  }
+                }}
+              />
+            </SettingsOption>
+            <SettingsOption label="API key">
+              <input
+                type="password"
+                autoComplete="off"
+                value={draft.api_key}
+                onChange={(e) =>
+                  setDrafts((prev) => ({
+                    ...prev,
+                    [row.site_id]: { ...draft, api_key: e.target.value },
+                  }))
+                }
+                onBlur={() => void saveRow(row)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.currentTarget.blur()
+                  }
+                }}
+              />
+            </SettingsOption>
+          </div>
+        )
+      })}
     </div>
   )
 }

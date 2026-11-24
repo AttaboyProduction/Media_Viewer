@@ -112,7 +112,7 @@ Dev UI: http://localhost:5173 · Built UI + API: http://127.0.0.1:8000
 
 ### Site adapters
 
-Gallery site metadata is not built into the core catalog. The repo tracks only [`adapters/example/`](adapters/example/) (copy and change the JSON fields for a real site). Other packages under `adapters/` are gitignored. On the Scrape page use **Install …** or **Load adapters folder…** to copy into `data/adapters/` (gitignored). Until then Source is **Local** only. Sites with `"profile": "gelbooru"` (gelbooru.com, rule34.xxx, safebooru.org, xbooru.com, tbib.org, hypnohub.net, …) share one scraper named Gelbooru. Each of those sites is its own selectable Source, listed under Gelbooru. That profile lists by tag or the whole gallery and downloads the original file. That run keeps one browser context and clears the site checkbox page before the next list page or image. Other sites keep the rule34.xyz downloader.
+Gallery site metadata is not built into the core catalog. The repo tracks only [`adapters/example/`](adapters/example/) (copy and change the JSON fields for a real site). Other packages under `adapters/` are gitignored. On the Scrape page use **Install …** or **Load adapters folder…** to copy into `data/adapters/` (gitignored). Until then Source is **Local** only. Sites with `"profile": "gelbooru"` (gelbooru.com, rule34.xxx, safebooru.org, xbooru.com, tbib.org, hypnohub.net, …) share one scraper named Gelbooru. Each of those sites is its own selectable Source, listed under Gelbooru. That profile lists by tag or the whole gallery and downloads the original file. That run keeps one browser context and clears the site checkbox page before the next list page or image. Other sites keep the rule34.xyz downloader. Sites that set `"requires_api_auth": true` (e.g. rule34.xxx) need an API User ID and API key under Settings → Other → Scrape → **Source API credentials**; values live in `data/adapters/<id>/secrets.json` (kept across reinstall) and are never committed. The Scrape page shows a short hint when that Source is selected and credentials are still empty.
 
 CLI scrape (URL must match an *installed* adapter site):
 
@@ -318,6 +318,8 @@ Base URL: `http://127.0.0.1:8000/api`
 | PATCH | `/app/settings` | Update settings (`display_mode`) |
 | GET | `/app/adapters` | Installed vs project adapter packages (Scrape page on) |
 | POST | `/app/adapters/install` | Install adapter (`from_project` id or folder `path`) into `data/adapters/` |
+| GET | `/app/adapters/site-auth` | Sites with `requires_api_auth` and their local User ID / API key (Scrape page on) |
+| PUT | `/app/adapters/site-auth/{site_id}` | Save User ID / API key into that adapter’s `secrets.json` |
 | POST | `/app/restart` | Restart via detached `pythonw launcher.py --restart` (same as `Run.bat restart`; no console flash; skips opening a new viewer so in-app Reload can reuse the current window) |
 | POST | `/app/shutdown` | Stop server and launcher |
 | GET | `/app/info` | Paths and display mode |

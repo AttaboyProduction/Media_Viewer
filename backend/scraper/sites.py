@@ -223,8 +223,12 @@ def list_known_sources() -> list[dict[str, Any]]:
             "kind": "local",
             "base_url": None,
             "group": None,
+            "requires_api_auth": False,
+            "api_auth_configured": True,
         }
     ]
+    from backend.scraper.adapter_loader import site_api_auth_configured
+
     sources.extend(
         {
             "id": site["id"],
@@ -232,6 +236,8 @@ def list_known_sources() -> list[dict[str, Any]]:
             "kind": "site",
             "base_url": site.get("base_url"),
             "group": _source_group(site),
+            "requires_api_auth": bool(site.get("requires_api_auth")),
+            "api_auth_configured": site_api_auth_configured(site),
         }
         for site in KNOWN_SITES.values()
     )
@@ -249,6 +255,8 @@ def get_selected_source() -> dict[str, Any] | None:
         "name": "Local",
         "kind": "local",
         "base_url": None,
+        "requires_api_auth": False,
+        "api_auth_configured": True,
     }
 
 

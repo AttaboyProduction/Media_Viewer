@@ -9,6 +9,7 @@ import type {
   ScrapeRunRequest,
   ScrapeSession,
   ScrapeStatus,
+  SiteApiAuth,
   Tag,
   TagGroup,
 } from '../types'
@@ -482,6 +483,17 @@ export function installAdapter(payload: { from_project?: string; path?: string }
 
 export function pickAdapterFolder() {
   return request<{ path: string | null }>('/app/adapters/pick-folder', { method: 'POST' })
+}
+
+export function fetchSiteApiAuth() {
+  return request<SiteApiAuth[]>('/app/adapters/site-auth')
+}
+
+export function putSiteApiAuth(siteId: string, payload: { api_user_id: string; api_key: string }) {
+  return request<SiteApiAuth>(`/app/adapters/site-auth/${encodeURIComponent(siteId)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
 }
 
 export function openViewerWindow() {

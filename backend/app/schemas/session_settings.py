@@ -18,6 +18,8 @@ class ScrapeSourceOut(BaseModel):
     kind: str  # site | local
     base_url: str | None = None
     group: str | None = None
+    requires_api_auth: bool = False
+    api_auth_configured: bool = True
 
 
 class ScraperOut(BaseModel):
@@ -70,6 +72,8 @@ def _source_out(source: dict) -> ScrapeSourceOut:
         kind=source["kind"],
         base_url=source.get("base_url"),
         group=source.get("group"),
+        requires_api_auth=bool(source.get("requires_api_auth")),
+        api_auth_configured=bool(source.get("api_auth_configured", True)),
     )
 
 

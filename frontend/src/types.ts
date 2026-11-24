@@ -110,6 +110,19 @@ export interface ScrapeSource {
   base_url: string | null
   /** Shared adapter name. Gelbooru sites use one group and the same scraper. */
   group?: string | null
+  /** Site opts into Settings API User ID / key (adapter flag). */
+  requires_api_auth?: boolean
+  /** Both credentials present when requires_api_auth. */
+  api_auth_configured?: boolean
+}
+
+export interface SiteApiAuth {
+  site_id: string
+  name: string
+  adapter_id: string
+  api_user_id: string
+  api_key: string
+  configured: boolean
 }
 
 export interface AdapterPackage {
