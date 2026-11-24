@@ -23,6 +23,7 @@ class BrowserEngine:
         self._browser: Browser | None = None
         self._contexts: list[BrowserContext] = []
         self._api: BrowserContext | None = None
+        self._shared: BrowserContext | None = None
 
     def start(self) -> None:
         raise NotImplementedError
@@ -35,11 +36,12 @@ class BrowserEngine:
         return {"ignore_https_errors": self._ignore_https_errors}
 
     def close(self) -> None:
-        for context in [*self._contexts, self._api]:
+        for context in [*self._contexts, self._api, self._shared]:
             if context is not None:
                 _close_quietly(context)
         self._contexts = []
         self._api = None
+        self._shared = None
         self._stop()
 
     def _require_browser(self) -> Browser:
@@ -60,6 +62,24 @@ class BrowserEngine:
         except Exception:
             pass
         return page
+
+    def shared_page(self) -> Page:
+        """Page in the job-long context so a solved checkbox cookie survives the next page."""
+        if self._shared is None:
+            self._shared = self._require_browser().new_context(**self._context_options())
+        page = self._shared.new_page()
+        try:
+            page.route(BLOCKED_ASSETS, lambda route: route.abort())
+            for pattern in POPUNDER_ROUTES:
+                page.route(pattern, lambda route: route.abort())
+        except Exception:
+            pass
+        return page
+
+    def close_shared(self) -> None:
+        if self._shared is not None:
+            _close_quietly(self._shared)
+            self._shared = None
 
     def _prune_contexts(self) -> None:
         alive: list[BrowserContext] = []

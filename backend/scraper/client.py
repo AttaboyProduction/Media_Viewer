@@ -26,6 +26,15 @@ class PlaywrightClient:
             raise RuntimeError("Browser not started")
         return self._engine.new_page()
 
+    def shared_page(self) -> Page:
+        if self._engine is None:
+            raise RuntimeError("Browser not started")
+        return self._engine.shared_page()
+
+    def close_shared(self) -> None:
+        if self._engine is not None:
+            self._engine.close_shared()
+
     def reset_context(self) -> None:
         if self._engine is None:
             raise RuntimeError("Browser not started")

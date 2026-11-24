@@ -241,6 +241,52 @@ def pick_adapter_folder() -> dict:
     return {"path": folder}
 
 
+class SiteAuthOut(BaseModel):
+    site_id: str
+    name: str
+    adapter_id: str
+    api_user_id: str = ""
+    api_key: str = ""
+    configured: bool = False
+
+
+class SiteAuthPut(BaseModel):
+    api_user_id: str = ""
+    api_key: str = ""
+
+
+@router.get(
+    "/adapters/site-auth",
+    response_model=list[SiteAuthOut],
+    dependencies=[Depends(require_scrape_page)],
+)
+def get_site_auth() -> list[SiteAuthOut]:
+    from backend.scraper.adapter_loader import list_sites_requiring_api_auth
+
+    return [SiteAuthOut(**row) for row in list_sites_requiring_api_auth()]
+
+
+@router.put(
+    "/adapters/site-auth/{site_id}",
+    response_model=SiteAuthOut,
+    dependencies=[Depends(require_scrape_page)],
+)
+def put_site_auth(site_id: str, payload: SiteAuthPut) -> SiteAuthOut:
+    from backend.scraper import sites as sites_mod
+    from backend.scraper.adapter_loader import save_site_api_auth
+
+    try:
+        row = save_site_api_auth(
+            site_id,
+            api_user_id=payload.api_user_id,
+            api_key=payload.api_key,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Site not found or does not require API auth") from exc
+    sites_mod.reload_adapter_catalog()
+    return SiteAuthOut(**row)
+
+
 @router.get("/settings", response_model=AppSettingsOut)
 def get_settings() -> AppSettingsOut:
     return app_settings_out(load_app_settings_persisting_update_default())

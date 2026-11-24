@@ -107,10 +107,27 @@ def compile_scrape_job(payload: ScrapeRunRequest) -> ScrapeJob:
             if value and value != "all":
                 media_type = value
 
+    exclude = [normalize_tag_name(tag) for tag in payload.exclude_tags if tag.strip()]
     seed_urls: list[str] = []
     base = str(site.get("base_url") or settings.base_url).rstrip("/")
     default_gallery = str(site.get("default_gallery_url") or settings.default_gallery_url)
-    if urls:
+    from backend.scraper.gelbooru import is_gelbooru_site, list_page_url
+
+    if is_gelbooru_site(site):
+        if urls:
+            seed_urls = list(dict.fromkeys(urls))
+        elif payload.gallery_url:
+            seed_urls = [payload.gallery_url]
+        elif tags:
+            if tag_mode == "or":
+                seed_urls = [list_page_url(site, [tag], exclude) for tag in tags]
+            else:
+                seed_urls = [list_page_url(site, tags, exclude)]
+        elif exclude:
+            seed_urls = [list_page_url(site, [], exclude)]
+        else:
+            seed_urls = [default_gallery]
+    elif urls:
         seed_urls = list(dict.fromkeys(urls))
     elif payload.gallery_url:
         seed_urls = [payload.gallery_url]
@@ -122,8 +139,6 @@ def compile_scrape_job(payload: ScrapeRunRequest) -> ScrapeJob:
             seed_urls = [f"{base}/{quote(' '.join(tags))}"]
     else:
         seed_urls = [default_gallery]
-
-    exclude = [normalize_tag_name(tag) for tag in payload.exclude_tags if tag.strip()]
     # limit = max successful downloads for tag/gallery scrapes (skips do not count).
     # URL-filter scrapes ignore the quota and try every seed / listing result.
 

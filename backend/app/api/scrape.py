@@ -163,8 +163,22 @@ def patch_scrape_session(payload: SessionSettingsPatch) -> SessionSettingsOut:
         # Validate scraper belongs to the (possibly new) site before persisting.
         tentative = {**ensure_session_settings_file(), **updates}
         source_id = tentative.get("selected_source_id")
-        site_id = tentative.get("selected_site_id")
-        scraper_id = tentative.get("selected_scraper_id")
+        # Source change also changes the site; do not validate against a stale site id.
+        if source_id == SOURCE_LOCAL:
+            site_id = None
+        elif isinstance(source_id, str) and source_id in {s["id"] for s in list_known_sites()}:
+            site_id = source_id
+        else:
+            site_id = tentative.get("selected_site_id")
+        # Source-only change drops the old scraper in save_session_settings; do not
+        # reject against a scraper that still belongs to the previous site.
+        scraper_id = (
+            updates["selected_scraper_id"]
+            if "selected_scraper_id" in updates
+            else None
+            if "selected_source_id" in updates
+            else tentative.get("selected_scraper_id")
+        )
         known_source_ids = {s["id"] for s in list_known_sources()}
         if source_id is not None and source_id not in known_source_ids:
             raise HTTPException(status_code=400, detail=f"Unknown source: {source_id}")

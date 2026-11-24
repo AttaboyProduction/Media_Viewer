@@ -199,22 +199,45 @@ def save_session_settings(updates: dict) -> dict:
     return persist_session_settings(current)
 
 
+def _source_group(site: dict[str, Any]) -> str | None:
+    """Non-selectable Source list heading from the site's scraper name (Rule34, Gelbooru, …)."""
+    site_id = site.get("id")
+    for scraper in KNOWN_SCRAPERS.values():
+        if site_id in scraper.get("site_ids", []) and scraper.get("name"):
+            return str(scraper["name"])
+    if str(site.get("profile") or "") == "gelbooru":
+        return "Gelbooru"
+    return "Rule34"
+
+
 def list_known_sources() -> list[dict[str, Any]]:
-    """Top-level scrape sources: Local first, then each installed catalog site."""
+    """Top-level scrape sources: Local first, then each installed catalog site.
+
+    Site sources share a group label with their scraper name (Rule34, Gelbooru, …)
+    so the Source list can show a non-selectable heading above those sites.
+    """
     sources = [
         {
             "id": SOURCE_LOCAL,
             "name": "Local",
             "kind": "local",
             "base_url": None,
+            "group": None,
+            "requires_api_auth": False,
+            "api_auth_configured": True,
         }
     ]
+    from backend.scraper.adapter_loader import site_api_auth_configured
+
     sources.extend(
         {
             "id": site["id"],
             "name": site["name"],
             "kind": "site",
             "base_url": site.get("base_url"),
+            "group": _source_group(site),
+            "requires_api_auth": bool(site.get("requires_api_auth")),
+            "api_auth_configured": site_api_auth_configured(site),
         }
         for site in KNOWN_SITES.values()
     )
@@ -232,6 +255,8 @@ def get_selected_source() -> dict[str, Any] | None:
         "name": "Local",
         "kind": "local",
         "base_url": None,
+        "requires_api_auth": False,
+        "api_auth_configured": True,
     }
 
 
@@ -321,12 +346,11 @@ def resolve_extension_url(url: str) -> tuple[str, str, str] | None:
 def extension_scrape_target(url: str) -> tuple[str, str] | None:
     """``(site_id, url to put on the scrape queue)`` for one page the extension sent.
 
-    A path-style post page is queued as itself without query or fragment. Any other
-    URL the adapter recognizes (query-string post, CDN preview, …) is queued as the
-    adapter ``post_url_template`` for that id so the scraper gets the full post.
+    A path-style ``/post/{id}`` page is queued as itself without query or fragment.
+    Any other URL the adapter recognizes (query-string post, CDN preview, …) is
+    queued as the adapter ``post_url_template`` for that id so the scraper gets the
+    full post. CDN paths can contain the same id and must not be queued as the file.
     """
-    from backend.scraper.gallery import extract_post_id
-
     cleaned = clean_page_url(url)
     if not page_identity(url) and not cleaned:
         return None
@@ -334,7 +358,7 @@ def extension_scrape_target(url: str) -> tuple[str, str] | None:
     if hit is None:
         return None
     site_id, _post_id, post_url = hit
-    if cleaned and extract_post_id(cleaned):
+    if cleaned and re.search(r"/post/\d+", cleaned):
         return site_id, cleaned
     return site_id, post_url
 

@@ -22,7 +22,34 @@ def normalize_post_url(href: str) -> str | None:
 
 def extract_post_id(url: str) -> str | None:
     match = re.search(r"/post/(\d+)", url)
-    return match.group(1) if match else None
+    if match:
+        return match.group(1)
+    return _post_id_from_site_patterns(url)
+
+
+def _post_id_from_site_patterns(url: str) -> str | None:
+    """Query-string post ids from installed adapter patterns (gelbooru ``id=``)."""
+    try:
+        from backend.scraper.sites import KNOWN_SITES, get_selected_site
+    except Exception:
+        return None
+    ordered: list[dict] = []
+    selected = get_selected_site()
+    if selected:
+        ordered.append(selected)
+    for site in KNOWN_SITES.values():
+        if not any(site.get("id") == item.get("id") for item in ordered):
+            ordered.append(site)
+    for site in ordered:
+        extension = site.get("extension") or {}
+        for pattern in extension.get("post_id_patterns") or []:
+            try:
+                found = re.search(str(pattern), url)
+            except re.error:
+                continue
+            if found and found.lastindex and str(found.group(1)).isdigit():
+                return found.group(1)
+    return None
 
 
 def _same_site(left: str, right: str) -> bool:
@@ -280,6 +307,28 @@ def iter_post_urls(
         # download limit has not been reached (remaining hits would only be skips).
         if not _load_more(page, known):
             return
+
+
+def iter_gallery_posts(client, gallery_url: str, *, sort: str = "date_desc", should_stop: Callable[[], bool] | None = None):
+    """List post URLs for the selected site. Gelbooru uses the DAPI, then HTML."""
+    from backend.scraper.gelbooru import is_gelbooru_site, iter_posts
+    from backend.scraper.sites import get_selected_site
+
+    site = get_selected_site() or {}
+    if is_gelbooru_site(site):
+        yield from iter_posts(client, site, gallery_url, sort=sort, should_stop=should_stop)
+        return
+    page = client.new_page()
+    try:
+        yield from iter_post_urls(
+            page,
+            gallery_url,
+            limit=0,
+            sort=sort,
+            should_stop=should_stop,
+        )
+    finally:
+        page.close()
 
 
 def collect_post_urls(

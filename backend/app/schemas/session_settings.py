@@ -6,7 +6,8 @@ class SiteOut(BaseModel):
     name: str
     base_url: str
     default_gallery_url: str
-    media_cdn_host: str
+    # Optional: Gelbooru-profile sites download via file_url and may omit a CDN host.
+    media_cdn_host: str = ""
 
 
 class ScrapeSourceOut(BaseModel):
@@ -16,6 +17,9 @@ class ScrapeSourceOut(BaseModel):
     name: str
     kind: str  # site | local
     base_url: str | None = None
+    group: str | None = None
+    requires_api_auth: bool = False
+    api_auth_configured: bool = True
 
 
 class ScraperOut(BaseModel):
@@ -57,7 +61,7 @@ def _site_out(site: dict) -> SiteOut:
         name=site["name"],
         base_url=site["base_url"],
         default_gallery_url=site["default_gallery_url"],
-        media_cdn_host=site["media_cdn_host"],
+        media_cdn_host=str(site.get("media_cdn_host") or ""),
     )
 
 
@@ -67,6 +71,9 @@ def _source_out(source: dict) -> ScrapeSourceOut:
         name=source["name"],
         kind=source["kind"],
         base_url=source.get("base_url"),
+        group=source.get("group"),
+        requires_api_auth=bool(source.get("requires_api_auth")),
+        api_auth_configured=bool(source.get("api_auth_configured", True)),
     )
 
 

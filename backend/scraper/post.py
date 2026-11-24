@@ -246,10 +246,24 @@ def _posted_at_from_payload(payload: dict) -> datetime | None:
 
 
 def scrape_post_from_api(post_url: str) -> PostData | None:
-    """Build post data from the site JSON API + CDN URL (no browser).
+    """Build post data from the site JSON API (no browser).
 
-    Preferred for direct ``/post/{id}`` seeds: avoids flaky page TLS and Show more clicks.
+    Preferred for direct post seeds: avoids flaky page TLS and Show more clicks.
+    Gelbooru sites use the DAPI ``file_url``. Other sites keep the xyz CDN layout.
     """
+    from backend.scraper.gelbooru import api_post_record, is_gelbooru_site, record_to_post
+    from backend.scraper.sites import get_selected_site
+
+    site = get_selected_site() or {}
+    if is_gelbooru_site(site):
+        from backend.scraper.gallery import extract_post_id
+
+        post_id = extract_post_id(post_url)
+        if not post_id:
+            return None
+        record = api_post_record(site, post_url, post_id)
+        return record_to_post(record) if record else None
+
     match = re.search(r"/post/(\d+)", post_url)
     if not match:
         return None
@@ -296,6 +310,28 @@ def scrape_post(page: Page, post_url: str) -> PostData | None:
 
     if "Checking your browser" in page.content():
         raise RuntimeError("Blocked by Cloudflare")
+
+    from backend.scraper.gallery import extract_post_id
+    from backend.scraper.gelbooru import api_post_record, is_gelbooru_site, post_from_html, record_to_post, settle_checkbox
+    from backend.scraper.sites import get_selected_site
+
+    site = get_selected_site() or {}
+    if is_gelbooru_site(site):
+        settle_checkbox(page, post_url)
+        post_id = extract_post_id(post_url)
+        if not post_id:
+            return None
+        try:
+            record = api_post_record(site, post_url, post_id)
+        except Exception as exc:
+            from backend.scraper.gelbooru import ScrapeCancelled
+
+            if isinstance(exc, ScrapeCancelled):
+                raise
+            record = None
+        if record is None:
+            record = post_from_html(page.content(), post_url, post_id)
+        return record_to_post(record) if record else None
 
     match = re.search(r"/post/(\d+)", post_url)
     if not match:

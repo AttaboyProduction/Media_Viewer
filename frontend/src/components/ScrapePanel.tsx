@@ -26,6 +26,7 @@ import { DEFAULT_APP_SETTINGS } from '../types/appSettings'
 import type { ScrapeListName } from '../api/client'
 import type { ScrapeFilter, ScrapeFilterType, ScrapeSourcePanel as ScrapeSourcePanelData } from '../types'
 import ExcludeTagsPicker from './ExcludeTagsPicker'
+import ScrapeSelect, { scraperBusyDetail, sourceBusyDetail } from './ScrapeSelect'
 import ScrapeSourcePanel from './ScrapeSourcePanel'
 import { SearchableTagSingleSelect } from './TagChipSelect'
 
@@ -232,11 +233,30 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
   const selectedSource = session?.selected_source ?? null
   const isLocalSource = selectedSource?.kind === 'local'
   const selectedScraper = session?.selected_scraper ?? null
-  const scrapersForSite = useMemo(() => {
-    const siteId = session?.selected_site_id
-    if (!siteId || !session) return []
-    return session.available_scrapers.filter((agent) => agent.site_ids.includes(siteId))
-  }, [session])
+  const allScrapers = session?.available_scrapers ?? []
+  const panelsByKey = useMemo(
+    () => new Map((status?.sources ?? []).map((panel) => [panel.key, panel])),
+    [status?.sources],
+  )
+  const sourceOptions = useMemo(
+    () =>
+      (session?.available_sources ?? []).map((source) => ({
+        id: source.id,
+        label: source.name,
+        group: source.group ?? null,
+        detail: sourceBusyDetail(panelsByKey.get(source.id)),
+      })),
+    [session?.available_sources, panelsByKey],
+  )
+  const scraperOptions = useMemo(
+    () =>
+      allScrapers.map((agent) => ({
+        id: agent.id,
+        label: agent.name,
+        detail: scraperBusyDetail(agent.site_ids, panelsByKey),
+      })),
+    [allScrapers, panelsByKey],
+  )
   const localPaths = useMemo(
     () => [...localFolders, ...localFiles],
     [localFolders, localFiles],
@@ -248,6 +268,47 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
       queryClient.setQueryData(['scrape-session'], next)
     },
   })
+
+  const selectSource = (sourceId: string) => {
+    if (sourceId === 'local') {
+      sessionMutation.mutate({ selected_source_id: 'local' })
+      return
+    }
+    const currentScraperId = session?.selected_scraper_id
+    const currentStillFits =
+      !!currentScraperId &&
+      allScrapers.some(
+        (agent) => agent.id === currentScraperId && agent.site_ids.includes(sourceId),
+      )
+    const scraperId = currentStillFits
+      ? currentScraperId
+      : allScrapers.find((agent) => agent.site_ids.includes(sourceId))?.id
+    if (scraperId) {
+      sessionMutation.mutate({
+        selected_source_id: sourceId,
+        selected_scraper_id: scraperId,
+      })
+      return
+    }
+    sessionMutation.mutate({ selected_source_id: sourceId })
+  }
+
+  const selectScraper = (scraperId: string) => {
+    const agent = allScrapers.find((item) => item.id === scraperId)
+    if (!agent) return
+    const knownSites = new Set((session?.available_sites ?? []).map((site) => site.id))
+    const firstSite = agent.site_ids.find((siteId) => knownSites.has(siteId))
+    if (!firstSite) return
+    const currentSite = session?.selected_site_id
+    if (currentSite && agent.site_ids.includes(currentSite)) {
+      sessionMutation.mutate({ selected_scraper_id: scraperId })
+      return
+    }
+    sessionMutation.mutate({
+      selected_source_id: firstSite,
+      selected_scraper_id: scraperId,
+    })
+  }
   const adapterMutation = useMutation({
     mutationFn: installAdapter,
     onSuccess: async (next) => {
@@ -560,79 +621,65 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
 
       <div className="scrape-source">
         <div className="scrape-source-row">
-          <label className="scrape-source-field">
-            <span className="scrape-source-label">Source</span>
-            <select
-              value={session?.selected_source_id ?? session?.available_sources[0]?.id ?? ''}
+          <ScrapeSelect
+            label="Source"
+            value={session?.selected_source_id ?? session?.available_sources[0]?.id ?? ''}
+            options={sourceOptions}
+            disabled={
+              sessionLoading ||
+              sessionMutation.isPending ||
+              status?.running ||
+              sourceOptions.length === 0
+            }
+            emptyLabel="Loading sources…"
+            onChange={selectSource}
+            hint={
+              selectedSource?.kind === 'site' && selectedSource.base_url ? (
+                <a
+                  className="scrape-source-hint scrape-source-link"
+                  href={selectedSource.base_url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {selectedSource.base_url}
+                </a>
+              ) : selectedSource?.kind === 'local' ? (
+                <span className="scrape-source-hint">
+                  Link folders or files from this PC (no copy into the app)
+                </span>
+              ) : (
+                <span className="scrape-source-hint">Loading sources…</span>
+              )
+            }
+          />
+
+          {!isLocalSource && scraperOptions.length > 0 && (
+            <ScrapeSelect
+              label="Scraper"
+              value={session?.selected_scraper_id ?? ''}
+              options={scraperOptions}
               disabled={
                 sessionLoading ||
                 sessionMutation.isPending ||
                 status?.running ||
-                (session?.available_sources.length ?? 0) === 0
+                scraperOptions.length === 0
               }
-              onChange={(e) => {
-                sessionMutation.mutate({ selected_source_id: e.target.value })
-              }}
-            >
-              {(session?.available_sources ?? []).map((source) => (
-                <option key={source.id} value={source.id}>
-                  {source.name}
-                </option>
-              ))}
-            </select>
-            {selectedSource?.kind === 'site' && selectedSource.base_url ? (
-              <a
-                className="scrape-source-hint scrape-source-link"
-                href={selectedSource.base_url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                {selectedSource.base_url}
-              </a>
-            ) : selectedSource?.kind === 'local' ? (
-              <span className="scrape-source-hint">
-                Link folders or files from this PC (no copy into the app)
-              </span>
-            ) : (
-              <span className="scrape-source-hint">Loading sources…</span>
-            )}
-          </label>
-
-          {!isLocalSource && (
-            <label className="scrape-source-field">
-              <span className="scrape-source-label">Scraper</span>
-              <select
-                value={session?.selected_scraper_id ?? scrapersForSite[0]?.id ?? ''}
-                disabled={
-                  sessionLoading ||
-                  sessionMutation.isPending ||
-                  status?.running ||
-                  !session?.selected_site_id ||
-                  scrapersForSite.length === 0
-                }
-                onChange={(e) => {
-                  sessionMutation.mutate({ selected_scraper_id: e.target.value })
-                }}
-              >
-                {scrapersForSite.length === 0 ? (
-                  <option value="">No scrapers for this site</option>
-                ) : (
-                  scrapersForSite.map((agent) => (
-                    <option key={agent.id} value={agent.id}>
-                      {agent.name}
-                    </option>
-                  ))
-                )}
-              </select>
-              <span className="scrape-source-hint">
-                {selectedScraper?.description ||
-                  (session?.selected_site_id
-                    ? 'How media is downloaded from this site'
-                    : 'Waiting for a site…')}
-              </span>
-            </label>
+              emptyLabel="No scrapers installed"
+              onChange={selectScraper}
+              hint={
+                <span className="scrape-source-hint">
+                  {selectedScraper?.description || 'How media is downloaded from this site'}
+                </span>
+              }
+            />
           )}
         </div>
+        {selectedSource?.requires_api_auth && !selectedSource.api_auth_configured && (
+          <p className="settings-hint scrape-api-auth-hint" role="status">
+            {selectedSource.name} needs an API User ID and API key. Set them in Settings → Other →
+            Scrape → Source API credentials.
+          </p>
+        )}
         {(installedSiteCount === 0 || projectAdapters.length > 0) && (
           <div className="scrape-adapters">
             {installedSiteCount === 0 && (
