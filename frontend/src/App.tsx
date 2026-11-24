@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query'
 import { fetchAppSettings, fetchScrapeStatus, restartApp, shutdownApp } from './api/client'
 import { SaveFeedbackProvider, useSaveFeedback } from './context/SaveFeedbackContext'
 import { ConfirmProvider, useConfirm } from './context/ConfirmContext'
+import { ResolveDuplicatesProvider } from './context/ResolveDuplicatesContext'
 import ViewerPage from './pages/ViewerPage'
 import TagsPage from './pages/TagsPage'
 import TagAddPage from './pages/TagAddPage'
@@ -171,11 +172,13 @@ export default function App() {
   return (
     <SaveFeedbackProvider>
       <ConfirmProvider>
-        <div className="app-shell">
-          <AppSettingsSync />
-          <TopNav hideScrapePage={hideScrapePage} />
-          <AppRoutes hideScrapePage={hideScrapePage} />
-        </div>
+        <ResolveDuplicatesProvider>
+          <div className="app-shell">
+            <AppSettingsSync />
+            <TopNav hideScrapePage={hideScrapePage} />
+            <AppRoutes hideScrapePage={hideScrapePage} />
+          </div>
+        </ResolveDuplicatesProvider>
       </ConfirmProvider>
     </SaveFeedbackProvider>
   )

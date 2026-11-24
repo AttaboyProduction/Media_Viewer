@@ -817,6 +817,75 @@ tr.drop-guide-after td {
   user-select: none;
 }
 
+.resolve-duplicates-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 1.5rem 1rem 2rem;
+  overflow: auto;
+  background: var(--bg-overlay);
+}
+
+.resolve-duplicates-panel {
+  width: min(960px, 100%);
+  margin: auto 0;
+  padding: 1.25rem 1.35rem 1.5rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+  box-shadow: 0 16px 48px var(--bg-overlay);
+  outline: none;
+}
+
+.resolve-duplicates-panel:focus-visible {
+  box-shadow:
+    0 16px 48px var(--bg-overlay),
+    0 0 0 2px var(--accent, #3b82f6);
+}
+
+.resolve-duplicates-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.resolve-duplicates-header h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.resolve-duplicates-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0.75rem 0 0.5rem;
+}
+
+.resolve-duplicates-progress {
+  flex: 1;
+  text-align: center;
+  font-size: 0.95rem;
+}
+
+.resolve-duplicates-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.resolve-duplicates-panel .duplicate-group {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
+
 .reload-lock-message {
   padding: 0.85rem 1.25rem;
   border-radius: 8px;
@@ -2998,6 +3067,32 @@ tr.selected {
   font-size: 0.85rem;
   color: var(--text-secondary);
   margin-bottom: 0.35rem;
+}
+
+.hidden-tags-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+}
+
+.hidden-tags-inline .hidden-tags-section-label {
+  margin-bottom: 0;
+  flex: 0 0 auto;
+}
+
+/* Let Search tags sit on the label row; the open search panel wraps full-width below. */
+.hidden-tags-inline .tag-picker-select-panel {
+  display: contents;
+}
+
+.hidden-tags-inline .tag-filter-toolbar {
+  margin: 0;
+}
+
+.hidden-tags-inline .tag-filter-search-panel {
+  flex: 1 1 100%;
+  width: 100%;
 }
 
 .hidden-tags-section-hint {

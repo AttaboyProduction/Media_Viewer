@@ -29,9 +29,10 @@ BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
 
 
 class ClassifyTests(unittest.TestCase):
-    def test_identical_band_is_zero_through_two(self):
+    def test_identical_band_is_zero_through_one(self):
         self.assertEqual(classify_distance(0, 8), "identical")
-        self.assertEqual(classify_distance(2, 8), "identical")
+        self.assertEqual(classify_distance(1, 8), "identical")
+        self.assertEqual(classify_distance(2, 8), "similar")
         self.assertEqual(classify_distance(3, 8), "similar")
         self.assertEqual(classify_distance(8, 8), "similar")
         self.assertIsNone(classify_distance(9, 8))

@@ -55,6 +55,54 @@ def _fill_kind(item: MediaItem, target: MediaItem) -> str:
     return classify_stored_hash(item.phash, target.phash) or "similar"
 
 
+def rematch_duplicate_kinds() -> dict[str, int]:
+    """Reclassify every existing duplicate link with the current identical/similar bands.
+
+    SHA-256 matches stay identical. pHash/video hashes are reclassified; pairs that
+    fall outside the sensitivity setting are unlinked. Returns counts.
+    """
+    db = SessionLocal()
+    stats = {"identical": 0, "similar": 0, "unlinked": 0, "unchanged_sha": 0}
+    try:
+        items = (
+            db.query(MediaItem)
+            .filter(MediaItem.duplicate_of_id.isnot(None))
+            .order_by(MediaItem.id.asc())
+            .all()
+        )
+        for item in items:
+            target = db.query(MediaItem).filter(MediaItem.id == item.duplicate_of_id).first()
+            if target is None or (item.duplicate_of_id is not None and item.duplicate_of_id >= item.id):
+                item.duplicate_of_id = None
+                item.duplicate_kind = None
+                stats["unlinked"] += 1
+                continue
+            if item.content_hash and item.content_hash == target.content_hash:
+                item.duplicate_kind = "identical"
+                stats["unchanged_sha"] += 1
+                stats["identical"] += 1
+                continue
+            kind = classify_stored_hash(item.phash, target.phash)
+            if kind is None:
+                item.duplicate_of_id = None
+                item.duplicate_kind = None
+                stats["unlinked"] += 1
+                continue
+            item.duplicate_kind = kind
+            stats[kind] += 1
+        db.commit()
+        logger.info(
+            "Rematched duplicate kinds: identical=%s similar=%s unlinked=%s sha=%s",
+            stats["identical"],
+            stats["similar"],
+            stats["unlinked"],
+            stats["unchanged_sha"],
+        )
+        return stats
+    finally:
+        db.close()
+
+
 def run_hash_backfill() -> None:
     with _backfill_lock:
         if backfill_status["running"]:

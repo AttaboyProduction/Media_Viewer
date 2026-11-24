@@ -32,6 +32,8 @@ interface MultiProps {
   showSelectedPanel?: boolean
   /** Hide the chip cloud until Search tags is open and the query is non-empty. */
   chipsOnlyWhileSearching?: boolean
+  /** When false, only the Search tags toolbar (and optional actions) — no chip list. */
+  showChipList?: boolean
 }
 
 export function SearchableTagMultiSelect({
@@ -44,6 +46,7 @@ export function SearchableTagMultiSelect({
   toolbarActions,
   showSelectedPanel = true,
   chipsOnlyWhileSearching = false,
+  showChipList = true,
 }: MultiProps) {
   const { data: appSettings } = useQuery({
     queryKey: ['app-settings'],
@@ -96,6 +99,7 @@ export function SearchableTagMultiSelect({
         }}
       >
         {(filteredList, filtersActive, textActive) => {
+          if (!showChipList) return null
           if (chipsOnlyWhileSearching && !textActive) return null
           return (
             <CollapsibleTagChipSelectList

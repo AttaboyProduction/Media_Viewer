@@ -162,13 +162,14 @@ export default function HiddenTagsPicker({ tagValue, groupValue, onChange }: Pro
           />
         </div>
 
-        <div className="hidden-tags-section">
+        <div className="hidden-tags-section hidden-tags-inline">
           <span className="hidden-tags-section-label">Individual tags to hide</span>
           <SearchableTagMultiSelect
             tags={pickableTags}
             selectedIds={selectedTagIds}
             onChange={updateTagIds}
             showSelectedPanel={false}
+            showChipList={false}
             searchPlaceholder="Search tags to hide..."
             emptyLabel={
               pickableTags.length === 0 && selectedGroupKeys.length > 0

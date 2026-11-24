@@ -16,12 +16,15 @@ interface Props {
   onChange: (next: string) => void
   /** Hide the chip cloud until Search tags is open and the query is non-empty. */
   chipsOnlyWhileSearching?: boolean
+  /** Settings: toolbar only (Search tags + Add hidden tags), no chip list. */
+  searchToolbarOnly?: boolean
 }
 
 export default function ExcludeTagsPicker({
   value,
   onChange,
   chipsOnlyWhileSearching = false,
+  searchToolbarOnly = false,
 }: Props) {
   const { data: allTags = [] } = useQuery({ queryKey: ['tags'], queryFn: fetchTags })
   const { data: appSettings } = useQuery({
@@ -72,6 +75,8 @@ export default function ExcludeTagsPicker({
         searchPlaceholder="Search tags to exclude..."
         emptyLabel="No matching tags"
         chipsOnlyWhileSearching={chipsOnlyWhileSearching}
+        showSelectedPanel={!searchToolbarOnly}
+        showChipList={!searchToolbarOnly}
         toolbarActions={
           <button
             type="button"

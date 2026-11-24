@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 
 import { keepDuplicates, mergeDuplicates, resolveDuplicate } from '../api/client'
@@ -29,19 +29,23 @@ function Preview({ item, selected }: { item: MediaItem; selected: boolean }) {
   )
 }
 
-function largestId(items: MediaItem[]) {
+/** Prefer larger file_size; tie → lower id. */
+export function largestDuplicateId(items: MediaItem[]) {
   return [...items].sort((a, b) => (b.file_size ?? 0) - (a.file_size ?? 0) || a.id - b.id)[0].id
 }
 
 export default function DuplicateGroupCard({
   group,
   kind,
+  wizard = false,
 }: {
   group: DuplicateGroup
   kind: 'identical' | 'similar'
+  /** One-group resolve overlay: Auto-resolve larger + start keep-selected for similar. */
+  wizard?: boolean
 }) {
   const queryClient = useQueryClient()
-  const [keepId, setKeepId] = useState(() => largestId(group.items))
+  const [keepId, setKeepId] = useState(() => largestDuplicateId(group.items))
   const rated = useMemo(
     () => group.items.filter((item) => item.rating.my_rating != null),
     [group.items],
@@ -49,8 +53,12 @@ export default function DuplicateGroupCard({
   const [ratingFrom, setRatingFrom] = useState<number | ''>(
     rated.length > 1 ? rated[0].id : '',
   )
-  const [pickingKeep, setPickingKeep] = useState(false)
+  const [pickingKeep, setPickingKeep] = useState(() => wizard && kind === 'similar')
   const [checkedKeep, setCheckedKeep] = useState<number[]>(() => group.items.map((item) => item.id))
+
+  useEffect(() => {
+    if (wizard && kind === 'similar') setPickingKeep(true)
+  }, [wizard, kind, group.primary_id])
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['duplicates'] })
@@ -66,12 +74,11 @@ export default function DuplicateGroupCard({
     onSuccess: invalidate,
   })
   const merge = useMutation({
-    mutationFn: () =>
-      mergeDuplicates({
-        keep_id: keepId,
-        merge_ids: group.items.filter((item) => item.id !== keepId).map((item) => item.id),
-        rating_from_id: ratingFrom === '' ? null : ratingFrom,
-      }),
+    mutationFn: (payload: {
+      keep_id: number
+      merge_ids: number[]
+      rating_from_id: number | null
+    }) => mergeDuplicates(payload),
     onSuccess: invalidate,
   })
   const keep = useMutation({
@@ -85,6 +92,16 @@ export default function DuplicateGroupCard({
 
   const busy = resolve.isPending || merge.isPending || keep.isPending
   const canMerge = kind === 'identical' && group.items.length >= 2
+
+  const mergeInto = (targetId: number) => {
+    merge.mutate({
+      keep_id: targetId,
+      merge_ids: group.items.filter((item) => item.id !== targetId).map((item) => item.id),
+      rating_from_id: ratingFrom === '' ? null : ratingFrom,
+    })
+  }
+
+  const autoResolveLarger = () => mergeInto(largestDuplicateId(group.items))
 
   return (
     <div className="duplicate-group">
@@ -153,14 +170,24 @@ export default function DuplicateGroupCard({
               </select>
             </label>
         )}
+        {canMerge && wizard && (
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={busy || group.items.length < 2}
+            onClick={autoResolveLarger}
+          >
+            {merge.isPending ? 'Merging…' : 'Auto-resolve (keep larger)'}
+          </button>
+        )}
         {canMerge && (
           <button
             type="button"
             className="btn btn-primary"
             disabled={busy || group.items.every((item) => item.id === keepId)}
-            onClick={() => merge.mutate()}
+            onClick={() => mergeInto(keepId)}
           >
-            {merge.isPending ? 'Merging…' : 'Merge into selected'}
+            {merge.isPending && !wizard ? 'Merging…' : 'Merge into selected'}
           </button>
         )}
         <button
@@ -168,6 +195,7 @@ export default function DuplicateGroupCard({
           className="btn"
           disabled={busy}
           onClick={() => keep.mutate(group.items.map((item) => item.id))}
+          title="Keep every file in this group and clear the identical/similar link"
         >
           Keep all
         </button>
@@ -178,16 +206,30 @@ export default function DuplicateGroupCard({
               className="btn btn-primary"
               disabled={busy || checkedKeep.length === 0}
               onClick={() => keep.mutate(checkedKeep)}
+              title="Keep checked files; discard the rest of this group"
             >
-              Keep checked
+              Keep selected, discard the rest
             </button>
-            <button type="button" className="btn" disabled={busy} onClick={() => setPickingKeep(false)}>
-              Cancel
-            </button>
+            {!wizard && (
+              <button
+                type="button"
+                className="btn"
+                disabled={busy}
+                onClick={() => setPickingKeep(false)}
+              >
+                Cancel
+              </button>
+            )}
           </>
         ) : (
-          <button type="button" className="btn" disabled={busy} onClick={() => setPickingKeep(true)}>
-            Keep selected
+          <button
+            type="button"
+            className="btn"
+            disabled={busy}
+            onClick={() => setPickingKeep(true)}
+            title="Choose which files to keep; unchecked files in this group are discarded"
+          >
+            Keep selected, discard the rest
           </button>
         )}
       </div>

@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useSearchParams } from 'react-router-dom'
-import { fetchAppSettings, fetchMedia, patchAppSettings, type TagMatchMode } from '../api/client'
+import {
+  fetchAppSettings,
+  fetchDuplicates,
+  fetchMedia,
+  patchAppSettings,
+  type TagMatchMode,
+} from '../api/client'
+import { useResolveDuplicates } from '../context/ResolveDuplicatesContext'
 import { useApplyAppDefaults } from '../hooks/useAppDefaults'
 import { useMediaBulkActions } from '../hooks/useMediaBulkActions'
 import { useMediaMultiSelect } from '../hooks/useMediaMultiSelect'
@@ -126,11 +133,19 @@ function MediaCard({
 export default function ViewerPage() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
+  const { openResolveDuplicates } = useResolveDuplicates()
   const { data: appSettings } = useQuery({
     queryKey: ['app-settings'],
     queryFn: fetchAppSettings,
     staleTime: 30_000,
   })
+  const { data: duplicates } = useQuery({
+    queryKey: ['duplicates'],
+    queryFn: fetchDuplicates,
+    staleTime: 30_000,
+  })
+  const hasDuplicates =
+    (duplicates?.identical.length ?? 0) + (duplicates?.similar.length ?? 0) > 0
   const { hasPendingReveals, revealAllPending, revealing } = useContentHide()
   const prefs = appSettings ?? DEFAULT_APP_SETTINGS
 
@@ -691,6 +706,11 @@ export default function ViewerPage() {
           />{' '}
           Show discarded
         </label>
+        {hasDuplicates && (
+          <button type="button" className="btn btn-small" onClick={openResolveDuplicates}>
+            Resolve similar
+          </button>
+        )}
         {sidebarLayout && data && (
           <button
             type="button"

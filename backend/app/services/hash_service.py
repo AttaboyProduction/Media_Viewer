@@ -13,8 +13,9 @@ from sqlalchemy.orm import Session
 
 from backend.app.db.models import MediaItem
 
-# Hamming 0–2 is the same picture (re-encode / resize). Capped by the sensitivity setting.
-IDENTICAL_MAX_DISTANCE = 2
+# Hamming 0–1 is the same picture (re-encode / resize). Capped by the sensitivity setting.
+# Distance 2+ (up to Similar image sensitivity) is Similar for pictures.
+IDENTICAL_MAX_DISTANCE = 1
 # Four frames. Identical only: every frame must fall in the identical band. No "similar" for video.
 _VIDEO_FRACTIONS = (0.1, 0.35, 0.6, 0.85)
 _NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0

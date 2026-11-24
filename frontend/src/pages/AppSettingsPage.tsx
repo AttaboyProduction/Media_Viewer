@@ -19,6 +19,7 @@ import { SettingsNumberInput } from '../components/SettingsNumberInput'
 import { SettingsOption } from '../components/SettingsOption'
 import { SettingsPageSizeListEditor } from '../components/SettingsPageSizeListEditor'
 import { useSaveFeedback, withSavedFeedback } from '../context/SaveFeedbackContext'
+import { useResolveDuplicates } from '../context/ResolveDuplicatesContext'
 import { useDevicePref } from '../hooks/useDevicePref'
 
 import { applyDisplayMode, syncDisplayModeFromServer } from '../utils/displayMode'
@@ -564,6 +565,7 @@ export default function AppSettingsPage() {
                     <ExcludeTagsPicker
                       value={settings.scrape_default_exclude_tags}
                       onChange={(next) => save({ scrape_default_exclude_tags: next })}
+                      searchToolbarOnly
                     />
                   </SettingsOption>
                   <SiteApiAuthSettingsBlock />
@@ -665,7 +667,7 @@ export default function AppSettingsPage() {
               </SettingsOption>
               <SettingsOption
                 label="Similar image sensitivity"
-                hint="Hamming distance. 0–2 (within this cap) counts as Identical (same picture, including different resolution). Higher values also catch crops and watermarks as Similar."
+                hint="Hamming distance. 0–1 (within this cap) counts as Identical (same picture, including different resolution). 2 up to this value counts as Similar (crops, watermarks)."
               >
                 <SettingsNumberInput
                   value={settings.phash_threshold}
@@ -674,6 +676,7 @@ export default function AppSettingsPage() {
                   onCommit={(n) => save({ phash_threshold: n })}
                 />
               </SettingsOption>
+              <ResolveSimilarFilesSetting />
             </div>
           </div>
         )}
@@ -685,6 +688,20 @@ export default function AppSettingsPage() {
         </div>
       )}
     </div>
+  )
+}
+
+function ResolveSimilarFilesSetting() {
+  const { openResolveDuplicates } = useResolveDuplicates()
+  return (
+    <SettingsOption
+      label="Resolve similar files"
+      hint="Opens a panel that walks identical groups one by one (auto-merge into the larger file), then similar groups (keep one or several)."
+    >
+      <button type="button" className="btn" onClick={openResolveDuplicates}>
+        Resolve similar files
+      </button>
+    </SettingsOption>
   )
 }
 
