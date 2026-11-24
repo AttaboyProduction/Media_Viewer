@@ -216,12 +216,17 @@ def video_can_improve(filename: str) -> bool:
 
 
 def video_download_urls(media_url: str) -> list[str]:
-    """Same CDN stem, each known video suffix, best quality first."""
+    """Same CDN stem, each known video suffix, best quality first.
+
+    The ladder is the xyz ``.mov*.mp4`` names. Any other video URL is fetched as given.
+    """
     query = ""
     path = media_url
     if "?" in media_url:
         path, query = media_url.split("?", 1)
         query = "?" + query
+    if ".mov" not in path.rsplit("/", 1)[-1]:
+        return [media_url]
     stem = path
     for suffix in _VIDEO_SUFFIXES:
         if stem.endswith(suffix):
@@ -248,6 +253,19 @@ def download_media(post: PostData) -> StoredFile:
     for url in urls:
         try:
             content = fetch_media_bytes(url)
+            from backend.scraper.gelbooru import (
+                NeedsBrowser,
+                fetch_bytes_after_checkbox,
+                is_gelbooru_site,
+                is_html_challenge,
+            )
+
+            if is_gelbooru_site() and is_html_challenge(content):
+                from backend.scraper.pipeline import _browser_allowed
+
+                if not _browser_allowed():
+                    raise NeedsBrowser()
+                content = fetch_bytes_after_checkbox(url)
             chosen = url
             break
         except Exception as exc:  # noqa: BLE001 — try the next video quality

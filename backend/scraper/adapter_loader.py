@@ -62,6 +62,16 @@ def _normalize_site(raw: object) -> dict[str, Any] | None:
     cdn = raw.get("media_cdn_host")
     if isinstance(cdn, str) and cdn.strip():
         site["media_cdn_host"] = cdn.strip().rstrip("/")
+    profile = raw.get("profile")
+    if isinstance(profile, str) and profile.strip():
+        site["profile"] = profile.strip()
+    api_base = raw.get("api_base")
+    if isinstance(api_base, str) and api_base.strip():
+        site["api_base"] = api_base.strip()
+    for secret_key in ("api_user_id", "api_key"):
+        secret = raw.get(secret_key)
+        if isinstance(secret, str) and secret.strip():
+            site[secret_key] = secret.strip()
     order = raw.get("tag_fetch_order")
     if isinstance(order, list):
         site["tag_fetch_order"] = [str(item) for item in order if isinstance(item, str) and item]

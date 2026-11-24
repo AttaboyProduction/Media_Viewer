@@ -108,6 +108,8 @@ export interface ScrapeSource {
   name: string
   kind: 'site' | 'local'
   base_url: string | null
+  /** Shared adapter name. Gelbooru sites use one group and the same scraper. */
+  group?: string | null
 }
 
 export interface AdapterPackage {

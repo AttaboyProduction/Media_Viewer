@@ -12,7 +12,7 @@ from backend.app.db.seed import seed_database
 from backend.app.db.session import SessionLocal
 from backend.app.schemas import ScrapeRunRequest
 from backend.scraper.client import PlaywrightClient
-from backend.scraper.gallery import extract_post_id, iter_post_urls
+from backend.scraper.gallery import extract_post_id, iter_gallery_posts
 from backend.scraper.job import ScrapeJob, compile_scrape_job, date_in_range, should_stop_for_date
 from backend.scraper.post import normalize_tag_name, scrape_post, scrape_post_from_api
 from backend.scraper.storage import (
@@ -766,7 +766,9 @@ def _process_post_url(
             if post is None and not _browser_allowed():
                 return "needs_browser"
             if post is None:
-                page = client.new_page()
+                from backend.scraper.gelbooru import is_gelbooru_site
+
+                page = client.shared_page() if is_gelbooru_site() else client.new_page()
                 try:
                     post = scrape_post(page, post_url)
                 except Exception:
@@ -816,6 +818,14 @@ def _process_post_url(
                         existing_posts[post.post_id] = post.posted_at
             return "ok"
         except Exception as exc:  # noqa: BLE001 — collect per-post errors
+            from backend.scraper.gelbooru import NeedsBrowser, ScrapeCancelled
+
+            if isinstance(exc, ScrapeCancelled):
+                db.rollback()
+                return "stop_cancel"
+            if isinstance(exc, NeedsBrowser):
+                db.rollback()
+                return "needs_browser"
             db.rollback()
             if scrape_status.job_id != owner:
                 return "stop_cancel"
@@ -1236,6 +1246,11 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
         }
 
         with PlaywrightClient() as client:
+            from backend.scraper.gelbooru import bind_client, is_gelbooru_site
+
+            gelbooru_job = is_gelbooru_site()
+            if gelbooru_job:
+                bind_client(client)
             gallery_seeds = [url for url in job.seed_urls if not extract_post_id(url)]
 
             # total is files in this run (queued, downloaded, skipped, cancelled,
@@ -1254,13 +1269,9 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
                         scrape_status.message = f"Collecting posts from {gallery_url}"
                         scrape_status.last_gallery_url = gallery_url
                         scrape_status.current_url = gallery_url
-                        page = client.new_page()
-                        try:
-                            for post_url in iter_post_urls(
-                                page,
+                        for post_url in iter_gallery_posts(
+                                client,
                                 gallery_url,
-                                # 0 = keep paging until quota / cancel / exhaustion
-                                limit=0,
                                 sort=job.sort,
                                 should_stop=lambda: (
                                     _cancelled() or _quota_met(job) or _listing_saturated(job)
@@ -1280,14 +1291,15 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
                                 if lanes.listing_stop or _cancelled():
                                     stop = lanes.listing_stop
                                     break
-                        finally:
-                            page.close()
                         if stop or _cancelled() or _quota_met(job):
                             break
 
                 _finish_queue(my_id, client, db, job, existing_posts, lanes)
             finally:
                 lanes.close()
+                if gelbooru_job:
+                    bind_client(None)
+                    client.close_shared()
     except Exception as exc:  # noqa: BLE001
         if scrape_status.job_id == my_id:
             detail = str(exc)

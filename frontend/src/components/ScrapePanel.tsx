@@ -24,7 +24,7 @@ import { useConfirm } from '../context/ConfirmContext'
 import { useApplyAppDefaults } from '../hooks/useAppDefaults'
 import { DEFAULT_APP_SETTINGS } from '../types/appSettings'
 import type { ScrapeListName } from '../api/client'
-import type { ScrapeFilter, ScrapeFilterType, ScrapeSourcePanel as ScrapeSourcePanelData } from '../types'
+import type { ScrapeFilter, ScrapeFilterType, ScrapeSource, ScrapeSourcePanel as ScrapeSourcePanelData } from '../types'
 import ExcludeTagsPicker from './ExcludeTagsPicker'
 import ScrapeSourcePanel from './ScrapeSourcePanel'
 import { SearchableTagSingleSelect } from './TagChipSelect'
@@ -38,6 +38,33 @@ interface FilterRow {
 }
 
 let rowSeq = 1
+
+function sourceOption(source: ScrapeSource) {
+  return (
+    <option key={source.id} value={source.id}>
+      {source.name}
+    </option>
+  )
+}
+
+/** Local and other adapters stay flat. Sites that share an adapter sit under its name. */
+function renderSourceOptions(sources: ScrapeSource[]) {
+  const ungrouped = sources.filter((source) => !source.group)
+  const groups: string[] = []
+  for (const source of sources) {
+    if (source.group && !groups.includes(source.group)) groups.push(source.group)
+  }
+  return (
+    <>
+      {ungrouped.map(sourceOption)}
+      {groups.map((group) => (
+        <optgroup key={group} label={group}>
+          {sources.filter((source) => source.group === group).map(sourceOption)}
+        </optgroup>
+      ))}
+    </>
+  )
+}
 
 function newRow(type: ScrapeFilterType = 'tag'): FilterRow {
   return { id: `f${rowSeq++}`, type, value: '', dateFrom: '', dateTo: '' }
@@ -574,11 +601,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                 sessionMutation.mutate({ selected_source_id: e.target.value })
               }}
             >
-              {(session?.available_sources ?? []).map((source) => (
-                <option key={source.id} value={source.id}>
-                  {source.name}
-                </option>
-              ))}
+              {renderSourceOptions(session?.available_sources ?? [])}
             </select>
             {selectedSource?.kind === 'site' && selectedSource.base_url ? (
               <a

@@ -16,6 +16,7 @@ class ScrapeSourceOut(BaseModel):
     name: str
     kind: str  # site | local
     base_url: str | None = None
+    group: str | None = None
 
 
 class ScraperOut(BaseModel):
@@ -67,6 +68,7 @@ def _source_out(source: dict) -> ScrapeSourceOut:
         name=source["name"],
         kind=source["kind"],
         base_url=source.get("base_url"),
+        group=source.get("group"),
     )
 
 

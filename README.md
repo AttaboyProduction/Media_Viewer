@@ -112,7 +112,7 @@ Dev UI: http://localhost:5173 · Built UI + API: http://127.0.0.1:8000
 
 ### Site adapters
 
-Gallery site metadata is not built into the core catalog. The repo tracks only [`adapters/example/`](adapters/example/) (copy and change the JSON fields for a real site). Other packages under `adapters/` are gitignored. On the Scrape page use **Install …** or **Load adapters folder…** to copy into `data/adapters/` (gitignored). Until then Source is **Local** only.
+Gallery site metadata is not built into the core catalog. The repo tracks only [`adapters/example/`](adapters/example/) (copy and change the JSON fields for a real site). Other packages under `adapters/` are gitignored. On the Scrape page use **Install …** or **Load adapters folder…** to copy into `data/adapters/` (gitignored). Until then Source is **Local** only. Sites with `"profile": "gelbooru"` (gelbooru.com, rule34.xxx, …) share one scraper named Gelbooru. Each of those sites is its own selectable Source, listed under Gelbooru. That profile lists by tag or the whole gallery and downloads the original file. That run keeps one browser context and clears the site checkbox page before the next list page or image. Other sites keep the rule34.xyz downloader.
 
 CLI scrape (URL must match an *installed* adapter site):
 
