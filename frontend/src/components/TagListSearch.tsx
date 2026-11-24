@@ -202,6 +202,14 @@ export default function TagListSearch<T extends SearchableTag>({
             showGroups={!separateGroupSearch}
             stackedSearch={compact}
             {...filterProps}
+            onSearchKeyDown={(event) => {
+              if (event.key !== 'Enter' || !onSuggestPick) return
+              event.preventDefault()
+              const first = filteredItems[0]
+              if (!first) return
+              onSuggestPick(first.name)
+              filterProps.onSearchChange('')
+            }}
           />
           {textActive && onSuggestPick && (
             <TagSearchSuggest
