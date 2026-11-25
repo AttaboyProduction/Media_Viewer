@@ -27,6 +27,7 @@ import { applyDisplayMode, syncDisplayModeFromServer } from '../utils/displayMod
 import { registerEscapeHandler } from '../utils/escapeStack'
 
 import { applyThemePreference } from '../utils/theme'
+import { shortcutGroups } from '../utils/keyboardShortcuts'
 
 import {
   DEFAULT_APP_SETTINGS,
@@ -43,6 +44,7 @@ export default function AppSettingsPage() {
   const { notifySaved } = useSaveFeedback()
   const [otherOpen, setOtherOpen] = useState(false)
   const [generalOpen, setGeneralOpen] = useState(true)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [tagsOpen, setTagsOpen] = useState(true)
   const [viewerOpen, setViewerOpen] = useState(true)
 
@@ -223,6 +225,47 @@ export default function AppSettingsPage() {
           </label>
         </SettingsOption>
       </div>
+          </div>
+        )}
+      </div>
+
+      <div className="panel panel-collapsible">
+        <button
+          type="button"
+          className="panel-collapse-header"
+          onClick={() => setShortcutsOpen((v) => !v)}
+          aria-expanded={shortcutsOpen}
+        >
+          <h2>Shortcuts</h2>
+          <span className="panel-collapse-toggle" aria-hidden="true">
+            {shortcutsOpen ? '^' : 'v'}
+          </span>
+        </button>
+        {shortcutsOpen && (
+          <div className="panel-collapse-body">
+            <div className="panel">
+              <h2>Keyboard shortcuts</h2>
+              <p className="settings-hint">
+                Built-in keys for the viewer and overlays. Main navigation (←/→ between files, page
+                Previous/Next, and wheel tilt paging) is omitted here for now. Bindings are not
+                editable yet.
+              </p>
+              <div className="settings-shortcuts">
+                {shortcutGroups().map(({ group, items }) => (
+                  <div key={group} className="settings-shortcuts-group">
+                    <h3 className="settings-shortcuts-group-title">{group}</h3>
+                    <ul className="settings-shortcuts-list">
+                      {items.map((item) => (
+                        <li key={`${item.group}-${item.keys}-${item.action}`}>
+                          <kbd className="settings-shortcut-keys">{item.keys}</kbd>
+                          <span className="settings-shortcut-action">{item.action}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
       </div>

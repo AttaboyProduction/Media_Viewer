@@ -160,7 +160,8 @@ export default function ResolveDuplicatesOverlay({ onClose }: { onClose: () => v
         <p className="hint">
           Identical groups first (merge into the larger file), then similar groups. With this panel
           focused, ← / → move between groups (the Viewer behind does not change page).{' '}
-          <strong>Keep all</strong> keeps every file and only clears the similar/identical link.{' '}
+          <strong>Keep all</strong> keeps every file and clears the similar/identical mark so this
+          pair will not return after reload.{' '}
           <strong>Keep selected, discard the rest</strong> keeps the checked files and discards the
           unchecked ones in this group.
         </p>

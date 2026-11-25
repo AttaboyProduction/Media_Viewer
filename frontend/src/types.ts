@@ -40,7 +40,7 @@ export interface MediaItem {
   tags: MediaTag[]
   rating: Rating
   duplicate_of_id: number | null
-  duplicate_kind: 'identical' | 'similar' | null
+  duplicate_kind: 'identical' | 'similar' | 'dismissed' | null
   file_size: number | null
   source_posted_at: string | null
 }

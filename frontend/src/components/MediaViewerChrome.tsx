@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useConfirm } from '../context/ConfirmContext'
 import type { MediaItem } from '../types'
 import { registerEscapeHandler } from '../utils/escapeStack'
@@ -9,7 +9,6 @@ import {
   formatFileSize,
   formatViewerStamp,
   prefetchShareFile,
-  saveMediaAs,
   shareDownloadFallbackMessage,
   shareMediaFileOrDownload,
   suggestedMediaFilename,
@@ -22,9 +21,17 @@ type Props = {
   index: number
   total: number
   onRotate: () => void
+  /** Detail actions under the file # / date line (bottom-left). */
+  detailActions?: ReactNode
 }
 
-export default function MediaViewerChrome({ media, index, total, onRotate }: Props) {
+export default function MediaViewerChrome({
+  media,
+  index,
+  total,
+  onRotate,
+  detailActions,
+}: Props) {
   const { confirm } = useConfirm()
   const [menuOpen, setMenuOpen] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -53,19 +60,11 @@ export default function MediaViewerChrome({ media, index, total, onRotate }: Pro
     }
   }, [menuOpen])
 
-  // Prefetch while the menu is open so Share keeps the user gesture on iOS/Android.
-  useEffect(() => {
-    if (!menuOpen) return
-    let cancelled = false
+  const prefetchShare = () => {
     void prefetchShareFile(media.media_url, filename, media.media_type).catch(() => {
-      if (!cancelled) {
-        /* Prefetch is best-effort; Share click will fetch again. */
-      }
+      /* Prefetch is best-effort; Share click will fetch again. */
     })
-    return () => {
-      cancelled = true
-    }
-  }, [menuOpen, media.media_url, media.media_type, filename])
+  }
 
   useEffect(() => {
     if (!status) return
@@ -100,29 +99,17 @@ export default function MediaViewerChrome({ media, index, total, onRotate }: Pro
   return (
     <>
       <div className="modal-viewer-info" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-viewer-info-title">{title}</div>
-        {subtitle ? <div className="modal-viewer-info-sub">{subtitle}</div> : null}
-        {status ? <div className="modal-viewer-info-status">{status}</div> : null}
+        <div className="modal-viewer-info-text">
+          <div className="modal-viewer-info-title">{title}</div>
+          {subtitle ? <div className="modal-viewer-info-sub">{subtitle}</div> : null}
+          {status ? <div className="modal-viewer-info-status">{status}</div> : null}
+        </div>
+        {detailActions ? (
+          <div className="modal-viewer-info-actions">{detailActions}</div>
+        ) : null}
       </div>
 
       <div className="modal-viewer-actions" onClick={(e) => e.stopPropagation()}>
-        <button
-          type="button"
-          className="modal-viewer-action-btn"
-          title="Download"
-          aria-label="Download"
-          disabled={busy}
-          onClick={() =>
-            void run(() => downloadMediaFile(media.media_url, filename), 'Downloaded')
-          }
-        >
-          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-            <path
-              fill="currentColor"
-              d="M5 20h14v-2H5v2zm7-18v12.17l3.59-3.58L17 12l-5 5-5-5 1.41-1.41L11 14.17V2h1z"
-            />
-          </svg>
-        </button>
         <button
           type="button"
           className="modal-viewer-action-btn"
@@ -146,6 +133,8 @@ export default function MediaViewerChrome({ media, index, total, onRotate }: Pro
             aria-label="More"
             aria-expanded={menuOpen}
             disabled={busy}
+            onMouseEnter={prefetchShare}
+            onFocus={prefetchShare}
             onClick={() => setMenuOpen((open) => !open)}
           >
             <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
@@ -162,6 +151,23 @@ export default function MediaViewerChrome({ media, index, total, onRotate }: Pro
                 className="modal-viewer-menu-item"
                 role="menuitem"
                 disabled={busy}
+                onClick={() => void run(() => downloadMediaFile(media.media_url, filename))}
+              >
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M5 20h14v-2H5v2zm7-18v12.17l3.59-3.58L17 12l-5 5-5-5 1.41-1.41L11 14.17V2h1z"
+                  />
+                </svg>
+                Download
+              </button>
+              <button
+                type="button"
+                className="modal-viewer-menu-item"
+                role="menuitem"
+                disabled={busy}
+                onMouseEnter={prefetchShare}
+                onFocus={prefetchShare}
                 onClick={() =>
                   void run(async () => {
                     if (media.file_size != null && media.file_size > WEB_SHARE_MAX_BYTES) {
@@ -195,7 +201,7 @@ export default function MediaViewerChrome({ media, index, total, onRotate }: Pro
                     d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92-1.31-2.92-2.92-2.92z"
                   />
                 </svg>
-                Share…
+                Share
               </button>
               <button
                 type="button"
@@ -216,23 +222,6 @@ export default function MediaViewerChrome({ media, index, total, onRotate }: Pro
                   />
                 </svg>
                 Copy
-              </button>
-              <button
-                type="button"
-                className="modal-viewer-menu-item"
-                role="menuitem"
-                disabled={busy}
-                onClick={() =>
-                  void run(() => saveMediaAs(media.media_url, filename), 'Saved')
-                }
-              >
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-                  <path
-                    fill="currentColor"
-                    d="M5 20h14v-2H5v2zm7-18v12.17l3.59-3.58L17 12l-5 5-5-5 1.41-1.41L11 14.17V2h1z"
-                  />
-                </svg>
-                Save As…
               </button>
             </div>
           ) : null}

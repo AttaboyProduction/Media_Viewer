@@ -62,10 +62,11 @@ export default function MediaBulkBar({
     setTagPickerOpen(false)
   }
 
+  const showMark = selectedCount >= markMin
+
   return (
     <div className="recent-scrape-bulk-bar-wrap">
       <div className="recent-scrape-bulk-bar">
-        <span>{selectedCount} selected</span>
         {onDownload && (
           <button
             type="button"
@@ -86,7 +87,42 @@ export default function MediaBulkBar({
             Share
           </button>
         )}
-        {transferMessage && <span className="settings-hint">{transferMessage}</span>}
+        {onAddTags && (
+          <button
+            type="button"
+            className={`btn btn-small${tagPickerOpen ? ' btn-primary' : ''}`}
+            disabled={selectedCount === 0 || busy}
+            onClick={() => setTagPickerOpen((open) => !open)}
+            aria-expanded={tagPickerOpen}
+          >
+            Add tags
+          </button>
+        )}
+        {showMark && (
+          <>
+            <span>Mark as</span>
+            <button
+              type="button"
+              className="btn btn-small"
+              disabled={markDisabled}
+              title={markTitle}
+              onClick={() => onMark('identical')}
+            >
+              Identical
+            </button>
+            <button
+              type="button"
+              className="btn btn-small"
+              disabled={markDisabled}
+              title={markTitle}
+              onClick={() => onMark('similar')}
+            >
+              Similar
+            </button>
+          </>
+        )}
+        {markError && <span className="error">{markError}</span>}
+        {transferMessage && <span className="error">{transferMessage}</span>}
         {onDiscard && (
           <button
             type="button"
@@ -107,37 +143,6 @@ export default function MediaBulkBar({
             {deletePending ? 'Working…' : 'Permanent delete'}
           </button>
         )}
-        {onAddTags && (
-          <button
-            type="button"
-            className={`btn btn-small${tagPickerOpen ? ' btn-primary' : ''}`}
-            disabled={selectedCount === 0 || busy}
-            onClick={() => setTagPickerOpen((open) => !open)}
-            aria-expanded={tagPickerOpen}
-          >
-            Add tags
-          </button>
-        )}
-        <span>Mark as</span>
-        <button
-          type="button"
-          className="btn btn-small"
-          disabled={markDisabled}
-          title={markTitle}
-          onClick={() => onMark('identical')}
-        >
-          Identical
-        </button>
-        <button
-          type="button"
-          className="btn btn-small"
-          disabled={markDisabled}
-          title={markTitle}
-          onClick={() => onMark('similar')}
-        >
-          Similar
-        </button>
-        {markError && <span className="error">{markError}</span>}
       </div>
       {onAddTags && tagPickerOpen && (
         <div className="media-bulk-tag-picker">

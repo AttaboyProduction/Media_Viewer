@@ -22,6 +22,7 @@ import { useMediaMultiSelect } from '../hooks/useMediaMultiSelect'
 import { excludeTagsForMediaQuery } from '../utils/contentHide'
 import { paginationTotalPages } from '../utils/pagination'
 import { fileIndexOnPage } from '../utils/mediaViewerActions'
+import { registerEscapeHandler } from '../utils/escapeStack'
 import ContentHideMedia from './ContentHideMedia'
 import MediaCardThumb from './MediaCardThumb'
 import MediaDetailModal from './MediaDetailModal'
@@ -94,11 +95,17 @@ function RecentCard({
       <div className="media-card-meta recent-scrape-meta">
         <span>
           #{item.source_post_id} · {item.media_type}
-          {item.duplicate_of_id != null
+          {item.duplicate_of_id != null && item.duplicate_kind !== 'dismissed'
             ? item.duplicate_kind === 'identical'
               ? ' · identical'
               : ' · similar'
             : ''}
+          {item.is_discarded ? (
+            <>
+              {' · '}
+              <span className="media-card-discarded">discarded</span>
+            </>
+          ) : null}
         </span>
         {!selectMode && (
           <button
@@ -406,6 +413,13 @@ export default function RecentScrapedMediaPanel() {
     toggleGridSelect()
   }
 
+  useEffect(() => {
+    if (!selectMode || selectedId != null) return
+    return registerEscapeHandler(() => {
+      toggleSelectMode()
+    })
+  }, [selectMode, selectedId])
+
   const handleDelete = async (item: MediaItem) => {
     const ok = await confirm({
       title: 'Delete media?',
@@ -484,14 +498,19 @@ export default function RecentScrapedMediaPanel() {
             setPage(1)
           },
           toolbarActions: (
-            <button
-              type="button"
-              className={`btn btn-small${selectMode ? ' btn-primary' : ''}`}
-              disabled={clearMutation.isPending || bulkBusy || items.length === 0}
-              onClick={toggleSelectMode}
-            >
-              {selectMode ? 'Clear selection' : 'Select'}
-            </button>
+            <>
+              <button
+                type="button"
+                className={`btn btn-small${selectMode ? ' btn-primary' : ''}`}
+                disabled={clearMutation.isPending || bulkBusy || items.length === 0}
+                onClick={toggleSelectMode}
+              >
+                {selectMode ? 'Clear selection' : 'Select'}
+              </button>
+              {selectMode && (
+                <span className="viewer-selected-count">{selectedIds.length} selected</span>
+              )}
+            </>
           ),
         }}
         beforeGrid={

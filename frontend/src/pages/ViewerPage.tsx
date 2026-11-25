@@ -35,6 +35,7 @@ import { paginationTotalPages } from '../utils/pagination'
 import { columnCountForViewerGrid } from '../utils/viewerGrid'
 import { previewSizeForTile, type PreviewSize } from '../utils/mediaPreview'
 import { fileIndexOnPage } from '../utils/mediaViewerActions'
+import { registerEscapeHandler } from '../utils/escapeStack'
 import MediaCardThumb from '../components/MediaCardThumb'
 import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 
@@ -129,8 +130,20 @@ function MediaCard({
         {item.rating.my_rating ? <StarsDisplay score={item.rating.my_rating} size="sm" /> : 'Unrated'}
         {' · '}
         {item.media_type}
-        {/* Only later/related items — not the primary (lowest-id) file in a similar set */}
-        {item.duplicate_of_id != null && item.id > item.duplicate_of_id ? ' · similar' : ''}
+        {/* Only unresolved later/related items — dismissed keep-both pairs stay quiet */}
+        {item.duplicate_of_id != null &&
+        item.id > item.duplicate_of_id &&
+        item.duplicate_kind !== 'dismissed'
+          ? item.duplicate_kind === 'identical'
+            ? ' · identical'
+            : ' · similar'
+          : ''}
+        {item.is_discarded ? (
+          <>
+            {' · '}
+            <span className="media-card-discarded">discarded</span>
+          </>
+        ) : null}
       </div>
     </div>
   )
@@ -165,32 +178,34 @@ export default function ViewerPage() {
   const [minRating, setMinRating] = useState<number | undefined>()
   // null until settings load — avoids first fetch with wrong hide/discarded defaults
   const [includeDiscarded, setIncludeDiscarded] = useState<boolean | null>(null)
-  const [sort, setSort] = useState<ViewerSort | null>(null)
-  /** Present while sort is random; new value only on reload or picking Random again. */
-  const [randomSeed, setRandomSeed] = useState<number | null>(null)
+  const settingsReady = appSettings != null
+  /** Device-local so leaving Viewer / alt-tab does not reset to Settings default. */
+  const [sort, setSort] = useDevicePref('viewer_sort', {
+    ready: settingsReady,
+    seed: appSettings?.viewer_sort ?? null,
+  })
+  const [randomSeed, setRandomSeed] = useDevicePref('viewer_random_seed', {
+    ready: settingsReady,
+    seed: 0,
+  })
   const [hideExcluded, setHideExcluded] = useState<boolean | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
 
   const applyDefaults = useCallback((s: typeof prefs) => {
-    setSort(s.viewer_sort)
-    if (s.viewer_sort === 'random') {
-      setRandomSeed((prev) => prev ?? newRandomSeed())
-    } else {
-      setRandomSeed(null)
-    }
     setIncludeDiscarded(s.viewer_include_discarded)
     setHideExcluded(s.viewer_hide_excluded_tags)
   }, [])
   useApplyAppDefaults(appSettings, applyDefaults)
 
   useEffect(() => {
-    if (sort === 'random' && randomSeed == null) {
+    if (!settingsReady) return
+    if (sort === 'random' && randomSeed <= 0) {
       setRandomSeed(newRandomSeed())
     }
-    if (sort != null && sort !== 'random' && randomSeed != null) {
-      setRandomSeed(null)
+    if (sort !== 'random' && randomSeed !== 0) {
+      setRandomSeed(0)
     }
-  }, [sort, randomSeed])
+  }, [settingsReady, sort, randomSeed, setRandomSeed])
   const resetBrowseSession = useCallback(() => {
     setListCursor(null)
     setPage(1)
@@ -293,16 +308,23 @@ export default function ViewerPage() {
   const mediaQueryEnabled =
     hideExcluded !== null &&
     includeDiscarded !== null &&
-    sort !== null &&
+    settingsReady &&
     pageSizeReady &&
-    (sort !== 'random' || randomSeed != null)
+    (sort !== 'random' || randomSeed > 0)
 
   const toggleHideExcluded = () => {
     if (!hasHiddenConfig || hideExcluded === null) return
     const next = !hideExcluded
     setHideExcluded(next)
-    resetBrowseSession()
+    // Keep the current page; usePageClamp moves to the last page if the list shrinks.
     hideExcludedMutation.mutate(next)
+  }
+
+  const toggleIncludeDiscarded = () => {
+    if (includeDiscarded === null) return
+    const next = !includeDiscarded
+    setIncludeDiscarded(next)
+    includeDiscardedMutation.mutate(next)
   }
 
   const requestCursor =
@@ -337,7 +359,7 @@ export default function ViewerPage() {
         include_discarded: includeDiscarded!,
         exclude_tags: mediaExcludeTags,
         exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
-        sort: sort!,
+        sort,
         cursor: requestCursor,
         seed: sort === 'random' ? randomSeed : undefined,
       }),
@@ -401,7 +423,7 @@ export default function ViewerPage() {
             include_discarded: includeDiscarded!,
             exclude_tags: mediaExcludeTags,
             exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
-            sort: sort!,
+            sort,
             cursor,
             seed: sort === 'random' ? randomSeed : undefined,
           }),
@@ -502,6 +524,13 @@ export default function ViewerPage() {
     if (!selectMode) setSelectedId(null)
     toggleGridSelect()
   }
+
+  useEffect(() => {
+    if (!selectMode || selectedId != null) return
+    return registerEscapeHandler(() => {
+      toggleSelectMode()
+    })
+  }, [selectMode, selectedId])
 
   const {
     bulkBusy,
@@ -619,7 +648,7 @@ export default function ViewerPage() {
             include_discarded: includeDiscarded!,
             exclude_tags: mediaExcludeTags,
             exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
-            sort: sort!,
+            sort,
             cursor,
             seed: sort === 'random' ? randomSeed : undefined,
           }),
@@ -648,7 +677,6 @@ export default function ViewerPage() {
       mediaQueryEnabled &&
       data?.page === page &&
       pageSize != null &&
-      sort != null &&
       includeDiscarded != null,
     sessionKey: previewSessionKey,
     page,
@@ -686,11 +714,7 @@ export default function ViewerPage() {
           ))}
         </select>
         <select
-          value={
-            sort === 'random' && randomSeed != null
-              ? `random:${randomSeed}`
-              : (sort ?? prefs.viewer_sort)
-          }
+          value={sort === 'random' && randomSeed > 0 ? `random:${randomSeed}` : sort}
           onChange={(e) => {
             const raw = e.target.value
             if (raw === 'random' || raw.startsWith('random:')) {
@@ -701,16 +725,16 @@ export default function ViewerPage() {
               return
             }
             setSort(raw as ViewerSort)
-            setRandomSeed(null)
+            setRandomSeed(0)
             resetBrowseSession()
           }}
-          disabled={sort === null}
+          disabled={!settingsReady}
         >
           <option value="date_desc">Newest</option>
           <option value="date_asc">Oldest</option>
           <option value="rating_desc">Highest rated</option>
           <option value="rating_asc">Lowest rated</option>
-          {sort === 'random' && randomSeed != null ? (
+          {sort === 'random' && randomSeed > 0 ? (
             <option value={`random:${randomSeed}`} hidden>
               Random
             </option>
@@ -719,7 +743,13 @@ export default function ViewerPage() {
         </select>
         <button
           type="button"
-          className={`btn${hideExcluded && hasHiddenConfig ? ' btn-primary' : ''}`}
+          className={`btn${
+            hideExcluded === true && hasHiddenConfig
+              ? ' btn-muted-reveal'
+              : hideExcluded === false && hasHiddenConfig
+                ? ' btn-primary'
+                : ''
+          }`}
           disabled={
             hideExcluded === null || !hasHiddenConfig || hideExcludedMutation.isPending
           }
@@ -747,20 +777,20 @@ export default function ViewerPage() {
             Show hidden content
           </button>
         )}
-        <label>
-          <input
-            type="checkbox"
-            checked={includeDiscarded ?? false}
-            disabled={includeDiscarded === null || includeDiscardedMutation.isPending}
-            onChange={(e) => {
-              const next = e.target.checked
-              setIncludeDiscarded(next)
-              resetBrowseSession()
-              includeDiscardedMutation.mutate(next)
-            }}
-          />{' '}
-          Show discarded
-        </label>
+        <button
+          type="button"
+          className={`btn${
+            includeDiscarded === false
+              ? ' btn-muted-reveal'
+              : includeDiscarded
+                ? ' btn-primary'
+                : ''
+          }`}
+          disabled={includeDiscarded === null || includeDiscardedMutation.isPending}
+          onClick={toggleIncludeDiscarded}
+        >
+          {includeDiscarded ? 'Hide discarded' : 'Show discarded'}
+        </button>
         {hasDuplicates && (
           <button type="button" className="btn btn-small" onClick={openResolveDuplicates}>
             Resolve similar
@@ -775,6 +805,9 @@ export default function ViewerPage() {
           >
             {selectMode ? 'Clear selection' : 'Select'}
           </button>
+        )}
+        {sidebarLayout && selectMode && (
+          <span className="viewer-selected-count">{selectedIds.length} selected</span>
         )}
       </div>
 
@@ -886,14 +919,19 @@ export default function ViewerPage() {
               resetBrowseSession()
             },
             toolbarActions: (
-              <button
-                type="button"
-                className={`btn btn-small${selectMode ? ' btn-primary' : ''}`}
-                disabled={bulkBusy || data.items.length === 0}
-                onClick={toggleSelectMode}
-              >
-                {selectMode ? 'Clear selection' : 'Select'}
-              </button>
+              <>
+                <button
+                  type="button"
+                  className={`btn btn-small${selectMode ? ' btn-primary' : ''}`}
+                  disabled={bulkBusy || data.items.length === 0}
+                  onClick={toggleSelectMode}
+                >
+                  {selectMode ? 'Clear selection' : 'Select'}
+                </button>
+                {selectMode && (
+                  <span className="viewer-selected-count">{selectedIds.length} selected</span>
+                )}
+              </>
             ),
           }}
           beforeGrid={

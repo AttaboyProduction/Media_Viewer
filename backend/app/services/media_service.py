@@ -283,8 +283,14 @@ def build_media_summaries(db: Session, items: Sequence[MediaItem]) -> list[Media
                 thumbnail_url=file_url,
                 tags=tag_outs,
                 rating=ratings[media.id],
-                duplicate_of_id=media.duplicate_of_id,
-                duplicate_kind=media.duplicate_kind,
+                # Keep-both / Keep-all "dismissed" links stay in the DB for rematch,
+                # but the UI must treat those files as unmarked.
+                duplicate_of_id=(
+                    None if media.duplicate_kind == "dismissed" else media.duplicate_of_id
+                ),
+                duplicate_kind=(
+                    None if media.duplicate_kind == "dismissed" else media.duplicate_kind
+                ),
                 file_size=media.file_size,
                 source_posted_at=media.source_posted_at,
             )
@@ -726,8 +732,17 @@ def bulk_media_action(
 
     paths: list[Path] = []
     if action == "discard":
+        discarded_ids = set(processed)
         for media_id in processed:
-            by_id[media_id].is_discarded = True
+            item = by_id[media_id]
+            item.is_discarded = True
+            item.duplicate_of_id = None
+            item.duplicate_kind = None
+        if discarded_ids:
+            db.query(MediaItem).filter(MediaItem.duplicate_of_id.in_(discarded_ids)).update(
+                {"duplicate_of_id": None, "duplicate_kind": None},
+                synchronize_session=False,
+            )
     elif action == "delete":
         for media_id in processed:
             path = _delete_media_rows(db, by_id[media_id])

@@ -195,7 +195,7 @@ export default function DuplicateGroupCard({
           className="btn"
           disabled={busy}
           onClick={() => keep.mutate(group.items.map((item) => item.id))}
-          title="Keep every file in this group and clear the identical/similar link"
+          title="Keep every file in this group; they will not show as similar/identical again"
         >
           Keep all
         </button>

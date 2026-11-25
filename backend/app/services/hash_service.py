@@ -171,6 +171,21 @@ def classify_phash(left: str | None, right: str | None, threshold: int | None = 
         return None
 
 
+def _is_dismissed_pair(db: Session, left_id: int, right_id: int) -> bool:
+    """True when the user already chose Keep all / keep both for this pair."""
+    lo, hi = (left_id, right_id) if left_id < right_id else (right_id, left_id)
+    return (
+        db.query(MediaItem.id)
+        .filter(
+            MediaItem.id == hi,
+            MediaItem.duplicate_of_id == lo,
+            MediaItem.duplicate_kind == "dismissed",
+        )
+        .first()
+        is not None
+    )
+
+
 def find_earlier_phash_match(
     db: Session,
     phash: str | None,
@@ -187,6 +202,8 @@ def find_earlier_phash_match(
     for other_id, other_hash in query.order_by(MediaItem.id.asc()).all():
         kind = classify_stored_hash(phash, other_hash, threshold)
         if kind:
+            if exclude_id is not None and _is_dismissed_pair(db, exclude_id, other_id):
+                continue
             item = db.query(MediaItem).filter(MediaItem.id == other_id).first()
             if item is not None:
                 return item, kind

@@ -487,14 +487,21 @@ class BulkActionTests(MediaListTestCase):
     def test_discard_marks_existing_and_reports_missing(self):
         a = self._add_media("a")
         b = self._add_media("b", minutes=1)
+        child = self._add_media("child", minutes=2, duplicate_of=a)
         self.db.commit()
 
         result = self._bulk([a.id, b.id, 9999, a.id], "discard")
 
         self.assertEqual(result.processed, [a.id, b.id])
         self.assertEqual(result.missing, [9999])
-        self.assertEqual(self._list().total, 0)
-        self.assertEqual(self._list(include_discarded=True).total, 2)
+        self.assertEqual(self._list().total, 1)
+        self.assertEqual(self._list(include_discarded=True).total, 3)
+        self.db.refresh(a)
+        self.db.refresh(child)
+        self.assertIsNone(a.duplicate_of_id)
+        self.assertIsNone(a.duplicate_kind)
+        self.assertIsNone(child.duplicate_of_id)
+        self.assertIsNone(child.duplicate_kind)
 
     def test_delete_removes_rows_links_and_clears_duplicate_refs(self):
         tag = self._add_tag("kitty")

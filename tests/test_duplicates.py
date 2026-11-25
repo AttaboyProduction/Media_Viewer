@@ -23,6 +23,7 @@ from backend.app.services.duplicate_service import (
     merge_identical,
     resolve_duplicate,
 )
+from backend.app.services.media_service import build_media_summary
 from backend.app.services.hash_service import classify_distance, classify_video_hash, find_earlier_phash_match
 
 BASE_TIME = datetime(2026, 1, 1, 12, 0, 0)
@@ -104,6 +105,31 @@ class GroupListTests(DuplicateHarness):
         self.assertEqual(len(review.similar), 1)
         self.assertEqual([i.source_post_id for i in review.similar[0].items], ["a", "c"])
 
+    def test_groups_omit_when_primary_is_discarded(self):
+        primary = self._add("a", discarded=True)
+        self._add("b", duplicate_of=primary, kind="identical")
+        self._add("c", duplicate_of=primary, kind="similar")
+        review = list_duplicates(db=self.db)
+        self.assertEqual(review.identical, [])
+        self.assertEqual(review.similar, [])
+
+    def test_keep_all_dismisses_marks_so_group_leaves_resolve_queue(self):
+        primary = self._add("a")
+        other = self._add("b", duplicate_of=primary, kind="similar")
+        keep_group_members(self.db, [primary.id, other.id], [primary.id, other.id])
+        self.db.refresh(primary)
+        self.db.refresh(other)
+        self.assertIsNone(primary.duplicate_of_id)
+        self.assertEqual(other.duplicate_of_id, primary.id)
+        self.assertEqual(other.duplicate_kind, "dismissed")
+        review = list_duplicates(db=self.db)
+        self.assertEqual(review.identical, [])
+        self.assertEqual(review.similar, [])
+        # API summaries hide dismissed so cards never show a mark.
+        summary = build_media_summary(self.db, other)
+        self.assertIsNone(summary.duplicate_of_id)
+        self.assertIsNone(summary.duplicate_kind)
+
 
 class MergeTests(DuplicateHarness):
     def test_merge_unions_tags_urls_and_chosen_rating(self):
@@ -153,7 +179,8 @@ class MergeTests(DuplicateHarness):
         child = self._add("c", duplicate_of=primary, kind="identical")
         resolve_duplicate(self.db, child.id, "keep_both")
         self.db.refresh(child)
-        self.assertIsNone(child.duplicate_of_id)
+        self.assertEqual(child.duplicate_of_id, primary.id)
+        self.assertEqual(child.duplicate_kind, "dismissed")
         other = self._add("o", duplicate_of=primary, kind="similar")
         resolve_duplicate(self.db, other.id, "discard")
         self.db.refresh(other)
@@ -211,7 +238,8 @@ class KeepMembersTests(DuplicateHarness):
         self.db.refresh(drop)
         self.db.refresh(similar)
         self.assertIsNone(primary.duplicate_of_id)
-        self.assertIsNone(keep.duplicate_of_id)
+        self.assertEqual(keep.duplicate_of_id, primary.id)
+        self.assertEqual(keep.duplicate_kind, "dismissed")
         self.assertTrue(drop.is_discarded)
         self.assertIsNone(drop.duplicate_of_id)
         self.assertIsNone(drop.duplicate_kind)

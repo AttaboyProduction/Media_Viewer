@@ -15,9 +15,13 @@ from backend.app.services.media_service import (
     update_media_urls,
 )
 
+# Keep-both / Keep-all: stay linked so hash backfill does not re-queue the pair,
+# but resolve mode and card "similar" badges ignore this kind.
+DISMISSED_KIND = "dismissed"
+
 
 def _ensure_kind(item: MediaItem, primary: MediaItem) -> str:
-    if item.duplicate_kind in {"identical", "similar"}:
+    if item.duplicate_kind in {"identical", "similar", DISMISSED_KIND}:
         return item.duplicate_kind
     if item.content_hash and item.content_hash == primary.content_hash:
         return "identical"
@@ -72,10 +76,14 @@ def list_duplicate_groups(db: Session) -> tuple[list[DuplicateGroupOut], list[Du
     similar_members: dict[int, list[MediaItem]] = {}
     for child in children:
         primary = primaries.get(child.duplicate_of_id)
-        if primary is None:
+        # Discarded files are out of resolve mode (primary or member).
+        if primary is None or primary.is_discarded:
             continue
         kind = _ensure_kind(child, primary)
         child.duplicate_kind = kind
+        # User already chose to keep both — do not show in Resolve similar again.
+        if kind == DISMISSED_KIND:
+            continue
         bucket = identical_members if kind == "identical" else similar_members
         bucket.setdefault(primary.id, []).append(child)
 
@@ -107,7 +115,11 @@ def group_for_media(db: Session, media_id: int) -> DuplicateGroupOut | None:
     members = _children(db, primary.id)
     for child in members:
         child.duplicate_kind = _ensure_kind(child, primary)
-    visible = [item for item in members if not item.is_discarded]
+    visible = [
+        item
+        for item in members
+        if not item.is_discarded and item.duplicate_kind != DISMISSED_KIND
+    ]
     items = ([] if primary.is_discarded else [primary]) + visible
     if len(items) < 2:
         return None
@@ -115,14 +127,34 @@ def group_for_media(db: Session, media_id: int) -> DuplicateGroupOut | None:
 
 
 def unlink_duplicate(db: Session, media_id: int) -> MediaItem:
+    """Keep both: dismiss the similar/identical mark without deleting either file."""
     media = db.query(MediaItem).filter(MediaItem.id == media_id).first()
     if not media or not media.duplicate_of_id:
         raise ValueError("Duplicate item not found")
-    media.duplicate_of_id = None
-    media.duplicate_kind = None
+    media.duplicate_kind = DISMISSED_KIND
     db.flush()
     db.refresh(media)
     return media
+
+
+def dismiss_kept_members(db: Session, keep_ids: list[int]) -> None:
+    """Mark kept files as resolved-together so auto-rematch will not re-queue them."""
+    unique = list(dict.fromkeys(keep_ids))
+    if len(unique) < 2:
+        for item in db.query(MediaItem).filter(MediaItem.id.in_(unique)).all():
+            item.duplicate_of_id = None
+            item.duplicate_kind = None
+        return
+    items = db.query(MediaItem).filter(MediaItem.id.in_(unique)).all()
+    by_id = {item.id: item for item in items}
+    ordered = [by_id[item_id] for item_id in sorted(by_id)]
+    primary = ordered[0]
+    primary.duplicate_of_id = None
+    primary.duplicate_kind = None
+    for item in ordered[1:]:
+        item.duplicate_of_id = primary.id
+        item.duplicate_kind = DISMISSED_KIND
+    db.flush()
 
 
 def _retarget_children(db: Session, old_id: int, new_id: int) -> None:
@@ -354,8 +386,5 @@ def keep_group_members(db: Session, keep_ids: list[int], scope_ids: list[int] | 
         raise ValueError("Selection is not in this group")
     for media_id in [item.id for item in group.items if item.id in scope and item.id not in keep]:
         discard_duplicate_member(db, media_id)
-    for item in db.query(MediaItem).filter(MediaItem.id.in_(keep)).all():
-        item.duplicate_of_id = None
-        item.duplicate_kind = None
-    db.flush()
+    dismiss_kept_members(db, list(keep))
 

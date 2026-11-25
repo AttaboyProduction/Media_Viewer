@@ -5,6 +5,7 @@
 import {
   DEFAULT_APP_SETTINGS,
   type GridThumbnailSize,
+  type ViewerSort,
   type ViewerTagLayout,
 } from '../types/appSettings'
 
@@ -14,6 +15,8 @@ export type DevicePrefKey =
   | 'scrape_downloads_page_size'
   | 'grid_thumbnail_size'
   | 'viewer_tag_layout'
+  | 'viewer_sort'
+  | 'viewer_random_seed'
 
 export type DevicePrefs = {
   viewer_page_size: number
@@ -21,11 +24,21 @@ export type DevicePrefs = {
   scrape_downloads_page_size: number
   grid_thumbnail_size: GridThumbnailSize
   viewer_tag_layout: ViewerTagLayout
+  viewer_sort: ViewerSort
+  /** 0 = unset; used only while viewer_sort is random. */
+  viewer_random_seed: number
 }
 
 const STORAGE_KEY = 'scrap_device_prefs'
 const GRID_SIZES = new Set<GridThumbnailSize>(['compact', 'normal', 'large'])
 const TAG_LAYOUTS = new Set<ViewerTagLayout>(['chips', 'sidebar'])
+const VIEWER_SORTS = new Set<ViewerSort>([
+  'date_desc',
+  'date_asc',
+  'rating_desc',
+  'rating_asc',
+  'random',
+])
 
 function readBag(): Partial<DevicePrefs> {
   try {
@@ -88,13 +101,22 @@ function parseDevicePref<K extends DevicePrefKey>(
       ? (raw as DevicePrefs[K])
       : null
   }
+  if (key === 'viewer_sort') {
+    return typeof raw === 'string' && VIEWER_SORTS.has(raw as ViewerSort)
+      ? (raw as DevicePrefs[K])
+      : null
+  }
   const n = asInt(raw)
   if (n === null) return null
   if (key === 'tags_page_size' && n === 0) return 0 as DevicePrefs[K]
+  if (key === 'viewer_random_seed') {
+    return n >= 0 ? (n as DevicePrefs[K]) : null
+  }
   if (n < 0) return null
   return n as DevicePrefs[K]
 }
 
 export function defaultDevicePref<K extends DevicePrefKey>(key: K): DevicePrefs[K] {
-  return DEFAULT_APP_SETTINGS[key] as DevicePrefs[K]
+  if (key === 'viewer_random_seed') return 0 as DevicePrefs[K]
+  return DEFAULT_APP_SETTINGS[key as keyof typeof DEFAULT_APP_SETTINGS] as DevicePrefs[K]
 }

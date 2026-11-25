@@ -48,7 +48,7 @@ def _find_duplicate_target(db, item: MediaItem) -> tuple[MediaItem, str] | None:
 
 
 def _fill_kind(item: MediaItem, target: MediaItem) -> str:
-    if item.duplicate_kind in {"identical", "similar"}:
+    if item.duplicate_kind in {"identical", "similar", "dismissed"}:
         return item.duplicate_kind
     if item.content_hash and item.content_hash == target.content_hash:
         return "identical"
@@ -60,9 +60,16 @@ def rematch_duplicate_kinds() -> dict[str, int]:
 
     SHA-256 matches stay identical. pHash/video hashes are reclassified; pairs that
     fall outside the sensitivity setting are unlinked. Returns counts.
+    User-dismissed (keep both) links are left alone.
     """
     db = SessionLocal()
-    stats = {"identical": 0, "similar": 0, "unlinked": 0, "unchanged_sha": 0}
+    stats = {
+        "identical": 0,
+        "similar": 0,
+        "unlinked": 0,
+        "unchanged_sha": 0,
+        "dismissed": 0,
+    }
     try:
         items = (
             db.query(MediaItem)
@@ -71,6 +78,9 @@ def rematch_duplicate_kinds() -> dict[str, int]:
             .all()
         )
         for item in items:
+            if item.duplicate_kind == "dismissed":
+                stats["dismissed"] += 1
+                continue
             target = db.query(MediaItem).filter(MediaItem.id == item.duplicate_of_id).first()
             if target is None or (item.duplicate_of_id is not None and item.duplicate_of_id >= item.id):
                 item.duplicate_of_id = None
@@ -148,6 +158,9 @@ def run_hash_backfill() -> None:
                 item.duplicate_of_id = None
                 item.duplicate_kind = None
             if item.duplicate_of_id:
+                # Keep-all / keep-both dismissals must survive reload/backfill.
+                if item.duplicate_kind == "dismissed":
+                    continue
                 target = db.query(MediaItem).filter(MediaItem.id == item.duplicate_of_id).first()
                 if target:
                     item.duplicate_kind = _fill_kind(item, target)

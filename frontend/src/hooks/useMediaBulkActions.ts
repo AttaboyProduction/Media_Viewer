@@ -14,7 +14,6 @@ import {
   formatFileSize,
   prepareShareMediaFiles,
   shareMediaFileOrDownload,
-  shareMediaFilesMessage,
   sharePreparedBatch,
   suggestedMediaFilename,
   WEB_SHARE_MAX_BYTES,
@@ -152,7 +151,6 @@ export function useMediaBulkActions({
       const files = transferFilesFrom(rows)
       if (files.length === 0) return
       await downloadMediaFiles(files)
-      setTransferMessage(files.length === 1 ? 'Downloaded' : `Downloaded ${files.length} files`)
     } catch (err) {
       setTransferMessage(err instanceof Error ? err.message : 'Download failed')
     } finally {
@@ -182,37 +180,15 @@ export function useMediaBulkActions({
           })
           if (!ok) return
           await downloadMediaFiles(files)
-          setTransferMessage(
-            shareMediaFilesMessage({
-              kind: 'downloaded_fallback',
-              sharedCount: 0,
-              downloadedCount: 1,
-              remainingCount: 0,
-              sharedIndexes: [],
-              downloadedIndexes: [0],
-            }),
-          )
           if (setSelectedIds) setSelectedIds(() => [])
           return
         }
         const result = await shareMediaFileOrDownload(only.url, only.filename, only.mediaType)
         if (result === 'cancelled') return
-        if (result === 'shared') {
-          setTransferMessage('Shared')
+        if (result === 'shared' || result === 'downloaded_fallback') {
           if (setSelectedIds) setSelectedIds(() => [])
           return
         }
-        setTransferMessage(
-          shareMediaFilesMessage({
-            kind: 'downloaded_fallback',
-            sharedCount: 0,
-            downloadedCount: 1,
-            remainingCount: 0,
-            sharedIndexes: [],
-            downloadedIndexes: [0],
-          }),
-        )
-        if (setSelectedIds) setSelectedIds(() => [])
         return
       }
 
@@ -278,10 +254,8 @@ export function useMediaBulkActions({
           }
         }
 
-        let downloadedCount = 0
         if (prepared.tooLarge.length) {
           await downloadMediaFiles(prepared.tooLarge.map((i) => prepared.downloadMeta[i]))
-          downloadedCount = prepared.tooLarge.length
           for (const index of prepared.tooLarge) {
             const id = selectedIds[index]
             if (typeof id === 'number') dropIds.add(id)
@@ -289,53 +263,6 @@ export function useMediaBulkActions({
           if (setSelectedIds && dropIds.size) {
             setSelectedIds((prev) => prev.filter((id) => !dropIds.has(id)))
           }
-        }
-
-        const remainingShare = prepared.batches.flat().length - sharedCount
-        if (sharedCount > 0 && remainingShare > 0) {
-          setTransferMessage(
-            shareMediaFilesMessage({
-              kind: 'shared_more',
-              sharedCount,
-              downloadedCount,
-              remainingCount: remainingShare,
-              sharedIndexes: [],
-              downloadedIndexes: prepared.tooLarge,
-            }),
-          )
-        } else if (sharedCount > 0 && downloadedCount > 0) {
-          setTransferMessage(
-            shareMediaFilesMessage({
-              kind: 'shared_partial',
-              sharedCount,
-              downloadedCount,
-              remainingCount: 0,
-              sharedIndexes: [],
-              downloadedIndexes: prepared.tooLarge,
-            }),
-          )
-        } else if (sharedCount > 0) {
-          setTransferMessage(
-            shareMediaFilesMessage({
-              kind: 'shared',
-              sharedCount,
-              downloadedCount: 0,
-              remainingCount: 0,
-              sharedIndexes: [],
-              downloadedIndexes: [],
-            }),
-          )
-        } else if (downloadedCount > 0) {
-          setTransferMessage(
-            shareMediaFilesMessage({
-              kind: 'downloaded_fallback',
-              sharedCount: 0,
-              downloadedCount,
-              remainingCount: 0,
-              sharedIndexes: [],
-              downloadedIndexes: prepared.tooLarge,
-            }),
-          )
         }
         return
       }
@@ -352,8 +279,6 @@ export function useMediaBulkActions({
           setSelectedIds((prev) => prev.filter((id) => !dropIds.has(id)))
         }
       }
-      const message = shareMediaFilesMessage(outcome)
-      if (message) setTransferMessage(message)
     } catch (err) {
       setTransferMessage(err instanceof Error ? err.message : 'Share failed')
     } finally {

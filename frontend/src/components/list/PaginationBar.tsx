@@ -58,6 +58,16 @@ export default function PaginationBar({
     <div className={['pagination', className].filter(Boolean).join(' ')}>
       <button
         type="button"
+        className="btn pagination-edge-btn"
+        disabled={page <= 1}
+        onClick={() => onPageChange(1)}
+        title="First page"
+        aria-label="First page"
+      >
+        ⇤
+      </button>
+      <button
+        type="button"
         className="btn"
         disabled={page <= 1}
         onClick={() => onPageChange(Math.max(1, page - 1))}
@@ -97,6 +107,16 @@ export default function PaginationBar({
         onClick={() => onPageChange(Math.min(pages, page + 1))}
       >
         Next
+      </button>
+      <button
+        type="button"
+        className="btn pagination-edge-btn"
+        disabled={page >= pages}
+        onClick={() => onPageChange(pages)}
+        title="Last page"
+        aria-label="Last page"
+      >
+        ⇥
       </button>
       <span className="pagination-item-count">
         ({paginationItemCount(shown, total, noun)})

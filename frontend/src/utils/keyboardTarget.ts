@@ -35,3 +35,15 @@ export function shouldSkipKeyboardShortcut(event: KeyboardEvent): boolean {
   if (typeof document !== 'undefined' && isKeyboardTypingTarget(document.activeElement)) return true
   return false
 }
+
+/**
+ * Like shouldSkipKeyboardShortcut but allows Ctrl/Meta (for chords such as Ctrl+Delete).
+ * Still skips Alt and real typing fields; never skips when video/audio is involved.
+ */
+export function shouldSkipKeyboardChord(event: KeyboardEvent): boolean {
+  if (event.altKey) return true
+  if (pathHasMedia(event)) return false
+  if (isKeyboardTypingTarget(event.target)) return true
+  if (typeof document !== 'undefined' && isKeyboardTypingTarget(document.activeElement)) return true
+  return false
+}

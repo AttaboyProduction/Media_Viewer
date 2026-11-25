@@ -436,6 +436,14 @@ def patch_discard(
     if not media:
         raise HTTPException(status_code=404, detail="Media not found")
     media.is_discarded = payload.is_discarded
+    if payload.is_discarded:
+        # Drop similar/identical marks so resolve mode never revisits discarded files.
+        media.duplicate_of_id = None
+        media.duplicate_kind = None
+        db.query(MediaItem).filter(MediaItem.duplicate_of_id == media.id).update(
+            {"duplicate_of_id": None, "duplicate_kind": None},
+            synchronize_session=False,
+        )
     db.commit()
     return build_media_summary(db, media)
 

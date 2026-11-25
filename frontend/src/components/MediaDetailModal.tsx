@@ -24,7 +24,10 @@ import { useKeyboardRating } from '../hooks/useKeyboardRating'
 import { DEFAULT_APP_SETTINGS } from '../types/appSettings'
 import { registerEscapeHandler } from '../utils/escapeStack'
 import { useHorizontalWheelNav } from '../hooks/useHorizontalWheelNav'
-import { shouldSkipKeyboardShortcut } from '../utils/keyboardTarget'
+import {
+  shouldSkipKeyboardChord,
+  shouldSkipKeyboardShortcut,
+} from '../utils/keyboardTarget'
 import { formatFileSize, formatPixelSize } from '../utils/mediaViewerActions'
 
 interface Props {
@@ -113,9 +116,11 @@ export default function MediaDetailModal({
   useKeyboardRating(Boolean(media), mediaId, (score) => ratingMutation.mutate(score))
   const discardMutation = useMutation({
     mutationFn: (discarded: boolean) => discardMedia(mediaId, discarded),
-    onSuccess: (_, discarded) => {
+    onSuccess: (updated) => {
+      // Stay open so Discard ↔ Restore (and Delete key) can toggle without reopening.
+      queryClient.setQueryData(['media', mediaId], updated)
       queryClient.invalidateQueries({ queryKey: ['media'] })
-      if (discarded) onClose()
+      queryClient.invalidateQueries({ queryKey: ['duplicates'] })
     },
   })
   const rescrapeMutation = useMutation({
@@ -161,6 +166,45 @@ export default function MediaDetailModal({
     },
   })
   const isLinked = media?.storage_kind === 'linked'
+  const actionBusy =
+    discardMutation.isPending ||
+    deleteMutation.isPending ||
+    deleteLocalFileMutation.isPending ||
+    rescrapeMutation.isPending ||
+    refreshTagsMutation.isPending ||
+    urlsMutation.isPending
+
+  const promptDiscard = useCallback(async () => {
+    if (!media || actionBusy) return
+    if (media.is_discarded) {
+      const ok = await confirm({
+        title: 'Restore media',
+        message: 'Restore this item to the viewer?',
+        confirmLabel: 'Restore',
+      })
+      if (ok) discardMutation.mutate(false)
+      return
+    }
+    const ok = await confirm({
+      title: 'Discard media',
+      message: 'Discard this item from viewing?',
+      confirmLabel: 'Discard',
+    })
+    if (ok) discardMutation.mutate(true)
+  }, [media, actionBusy, confirm, discardMutation])
+
+  const promptDeletePermanent = useCallback(async () => {
+    if (!media || actionBusy) return
+    const ok = await confirm({
+      title: 'Delete media',
+      message: isLinked
+        ? 'Remove this item from the library? The file on disk will not be deleted.'
+        : 'Permanently delete this file and all metadata (tags, ratings)? This cannot be undone.',
+      confirmLabel: 'Delete',
+      danger: true,
+    })
+    if (ok) deleteMutation.mutate()
+  }, [media, actionBusy, confirm, isLinked, deleteMutation])
   // Keep expanded full view across ‹ › / arrow navigation; only reset per-item chrome.
   useEffect(() => {
     setUrlAddOpen(false)
@@ -247,8 +291,23 @@ export default function MediaDetailModal({
       }
       return null
     }
-    // Capture so ←/→/F/↑/↓ still work when the <video> (or its controls) has focus.
+    // Capture so ←/→/F/↑/↓/Delete still work when the <video> (or its controls) has focus.
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Delete' || e.code === 'Delete') {
+        if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+          if (shouldSkipKeyboardChord(e)) return
+          e.preventDefault()
+          e.stopPropagation()
+          void promptDeletePermanent()
+          return
+        }
+        if (e.ctrlKey || e.metaKey || e.altKey) return
+        if (shouldSkipKeyboardShortcut(e)) return
+        e.preventDefault()
+        e.stopPropagation()
+        void promptDiscard()
+        return
+      }
       if (shouldSkipKeyboardShortcut(e)) return
       if (e.key === 'f' || e.key === 'F') {
         e.preventDefault()
@@ -278,7 +337,7 @@ export default function MediaDetailModal({
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [canPrev, canNext, onNavigateAdjacent, navBusy, expanded, step])
+  }, [canPrev, canNext, navBusy, step, promptDeletePermanent, promptDiscard])
 
   useHorizontalWheelNav(
     backdropRef,
@@ -505,11 +564,112 @@ export default function MediaDetailModal({
       onClick={onClose}
     >
       {mediaControls}
+      <button
+        type="button"
+        className="modal-viewer-close"
+        onClick={(e) => {
+          e.stopPropagation()
+          onClose()
+        }}
+        disabled={busy}
+        title="Close"
+        aria-label="Close"
+      >
+        ×
+      </button>
       <MediaViewerChrome
         media={media}
         index={fileIndex}
         total={fileTotal}
         onRotate={() => setRotationDeg((deg) => (deg + 90) % 360)}
+        detailActions={
+          <>
+            <div className="modal-viewer-info-actions-row">
+              {scrapeEnabled && sourceUrls.length > 0 && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-small"
+                    disabled={busy || contentLocked}
+                    onClick={() => refreshTagsMutation.mutate()}
+                  >
+                    {refreshTagsMutation.isPending ? 'Updating tags…' : 'Update tags from URLs'}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-small btn-primary"
+                    disabled={busy}
+                    onClick={() => rescrapeMutation.mutate()}
+                  >
+                    {rescrapeMutation.isPending ? 'Rescraping…' : 'Rescrape media'}
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className={`btn btn-small${relatedOpen ? ' btn-primary' : ''}`}
+                disabled={busy}
+                onClick={() => {
+                  setRelatedOpen((open) => {
+                    const next = !open
+                    if (next) setExpanded(false)
+                    return next
+                  })
+                }}
+                aria-expanded={relatedOpen}
+              >
+                Add related files
+              </button>
+            </div>
+            <div className="modal-viewer-info-actions-row">
+              <button
+                type="button"
+                className={`btn btn-small btn-compact${media.is_discarded ? ' btn-primary' : ''}`}
+                disabled={busy}
+                title={media.is_discarded ? 'Restore (Delete)' : 'Discard (Delete)'}
+                aria-keyshortcuts="Delete"
+                onClick={() => void promptDiscard()}
+              >
+                {media.is_discarded ? 'Restore' : 'Discard'}
+              </button>
+              <button
+                type="button"
+                className="btn btn-small btn-danger btn-compact"
+                disabled={busy}
+                title="Delete permanently (Ctrl+Delete)"
+                onClick={() => void promptDeletePermanent()}
+              >
+                {deleteMutation.isPending ? 'Deleting…' : 'Delete permanently'}
+              </button>
+              {isLinked && (
+                <button
+                  type="button"
+                  className="btn btn-small btn-danger btn-compact"
+                  disabled={busy}
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: 'Delete from local folder',
+                      message:
+                        'Delete the file from its folder and keep a copy in the library, like a scraped file? The folder file cannot be restored.',
+                      confirmLabel: 'Delete file',
+                      danger: true,
+                    })
+                    if (ok) deleteLocalFileMutation.mutate()
+                  }}
+                >
+                  {deleteLocalFileMutation.isPending
+                    ? 'Deleting file…'
+                    : 'Delete from local folder'}
+                </button>
+              )}
+            </div>
+            <p className="modal-viewer-info-hint">
+              {expanded
+                ? 'Use ← → to navigate · Esc exits full view · F toggles full view · Delete discards · Ctrl+Delete deletes · Ctrl+scroll to zoom'
+                : 'Use ← → to navigate · F full view · Esc closes · Delete discards/restores · Ctrl+Delete deletes'}
+            </p>
+          </>
+        }
       />
       <div className="modal-stage">
         {/* Empty stage/backdrop closes; only the panel and control bar keep the click. */}
@@ -809,105 +969,6 @@ export default function MediaDetailModal({
               : 'Delete from folder failed'}
           </div>
         )}
-        <div className="actions">
-          {scrapeEnabled && sourceUrls.length > 0 && (
-            <>
-              <button
-                type="button"
-                className="btn"
-                disabled={busy || contentLocked}
-                onClick={() => refreshTagsMutation.mutate()}
-              >
-                {refreshTagsMutation.isPending ? 'Updating tags…' : 'Update tags from URLs'}
-              </button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                disabled={busy}
-                onClick={() => rescrapeMutation.mutate()}
-              >
-                {rescrapeMutation.isPending ? 'Rescraping…' : 'Rescrape media'}
-              </button>
-            </>
-          )}
-          {media.is_discarded ? (
-            <button
-              type="button"
-              className="btn"
-              disabled={busy}
-              onClick={() => discardMutation.mutate(false)}
-            >
-              Restore
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn"
-              disabled={busy}
-              onClick={async () => {
-                const ok = await confirm({
-                  title: 'Discard media',
-                  message: 'Discard this item from viewing?',
-                  confirmLabel: 'Discard',
-                })
-                if (ok) discardMutation.mutate(true)
-              }}
-            >
-              Discard
-            </button>
-          )}
-          <button
-            type="button"
-            className="btn btn-danger"
-            disabled={busy}
-            onClick={async () => {
-              const ok = await confirm({
-                title: 'Delete media',
-                message: isLinked
-                  ? 'Remove this item from the library? The file on disk will not be deleted.'
-                  : 'Permanently delete this file and all metadata (tags, ratings)? This cannot be undone.',
-                confirmLabel: 'Delete',
-                danger: true,
-              })
-              if (ok) deleteMutation.mutate()
-            }}
-          >
-            {deleteMutation.isPending ? 'Deleting…' : 'Delete permanently'}
-          </button>
-          {isLinked && (
-            <button
-              type="button"
-              className="btn btn-danger"
-              disabled={busy}
-              onClick={async () => {
-                const ok = await confirm({
-                  title: 'Delete from local folder',
-                  message:
-                    'Delete the file from its folder and keep a copy in the library, like a scraped file? The folder file cannot be restored.',
-                  confirmLabel: 'Delete file',
-                  danger: true,
-                })
-                if (ok) deleteLocalFileMutation.mutate()
-              }}
-            >
-              {deleteLocalFileMutation.isPending
-                ? 'Deleting file…'
-                : 'Delete from local folder'}
-            </button>
-          )}
-          <button
-            type="button"
-            className={`btn${relatedOpen ? ' btn-primary' : ''}`}
-            disabled={busy}
-            onClick={() => setRelatedOpen((open) => !open)}
-            aria-expanded={relatedOpen}
-          >
-            Add related files
-          </button>
-          <button type="button" className="btn" onClick={onClose} disabled={busy}>
-            Close
-          </button>
-        </div>
         {relatedOpen && (
           <div className="duplicate-detail">
             <h3>Add related files</h3>
@@ -923,7 +984,8 @@ export default function MediaDetailModal({
                 const identicalItems = [
                   primary,
                   ...related.items.filter(
-                    (item) => item.id !== primary.id && item.duplicate_kind !== 'similar',
+                    (item) =>
+                      item.id !== primary.id && item.duplicate_kind === 'identical',
                   ),
                 ]
                 const similarItems = [
@@ -955,16 +1017,7 @@ export default function MediaDetailModal({
               })()}
           </div>
         )}
-        <div style={{ fontSize: '0.75rem', color: '#8b95a5', marginTop: 8 }}>
-          Use ← → or &lt; &gt; to navigate · F toggles full view · Esc closes full view first
-        </div>
             </>
-          )}
-          {expanded && (
-            <div style={{ fontSize: '0.75rem', color: '#8b95a5', marginTop: 8 }}>
-              Use ← → or &lt; &gt; to navigate · Esc exits full view · F toggles full view ·
-              Ctrl+scroll to zoom
-            </div>
           )}
         </div>
       </div>
