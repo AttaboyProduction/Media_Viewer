@@ -40,6 +40,8 @@ interface Props {
   onClose: () => void
   /** Move one file; may load the previous/next page when at a page edge. */
   onNavigateAdjacent: (direction: 'prev' | 'next') => void | Promise<void>
+  selectedFilterTags?: string[]
+  onToggleViewerFilter?: (name: string) => void
 }
 
 const ZOOM_MIN = 1
@@ -69,6 +71,8 @@ export default function MediaDetailModal({
   canNext,
   onClose,
   onNavigateAdjacent,
+  selectedFilterTags,
+  onToggleViewerFilter,
 }: Props) {
   const queryClient = useQueryClient()
   const { confirm } = useConfirm()
@@ -939,7 +943,11 @@ export default function MediaDetailModal({
             </button>
           </div>
         ) : (
-          <TagEditor media={media} />
+          <TagEditor
+            media={media}
+            selectedFilterTags={selectedFilterTags}
+            onToggleViewerFilter={onToggleViewerFilter}
+          />
         )}
         {refreshTagsMutation.isError && (
           <div className="error">

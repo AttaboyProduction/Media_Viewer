@@ -1007,6 +1007,8 @@ export default function ViewerPage() {
           canNext={canDetailNext}
           onClose={() => setSelectedId(null)}
           onNavigateAdjacent={navigateDetailAdjacent}
+          selectedFilterTags={selectedTags}
+          onToggleViewerFilter={toggleTagFilter}
         />
       )}
     </div>

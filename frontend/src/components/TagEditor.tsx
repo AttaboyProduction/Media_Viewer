@@ -16,9 +16,12 @@ const TOGGLE_TAG_COLOR = '#4a4a4a'
 
 interface Props {
   media: MediaItem
+  /** When set, clicking a tag chip toggles this name in the viewer filter (chip body only; × still removes). */
+  selectedFilterTags?: string[]
+  onToggleViewerFilter?: (name: string) => void
 }
 
-export default function TagEditor({ media }: Props) {
+export default function TagEditor({ media, selectedFilterTags, onToggleViewerFilter }: Props) {
   const [pickerOpen, setPickerOpen] = useState(false)
   const { search, setSearch, matches, filterProps, groupFilterIds } = useTagSearch()
   /** null = follow setting; once user toggles, keep that choice across media. */
@@ -116,6 +119,10 @@ export default function TagEditor({ media }: Props) {
           <TagDisplayChip
             key={tag.id}
             tag={tag}
+            active={selectedFilterTags?.includes(tag.name)}
+            onClick={
+              onToggleViewerFilter ? () => onToggleViewerFilter(tag.name) : undefined
+            }
             onRemove={() => mutation.mutate({ add: [], remove: [tag.name] })}
           />
         ))}
