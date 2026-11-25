@@ -50,6 +50,12 @@ function cursorFromSearch(params: URLSearchParams): number | null {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : null
 }
 
+/** Stable across pages/refetch until Random is chosen again or the page reloads. */
+function newRandomSeed(): number {
+  const value = (Math.floor(Math.random() * 0xffffffff) >>> 0) || 1
+  return value
+}
+
 const TILE_MIN: Record<GridThumbnailSize, number> = {
   compact: 120,
   normal: 180,
@@ -160,15 +166,31 @@ export default function ViewerPage() {
   // null until settings load — avoids first fetch with wrong hide/discarded defaults
   const [includeDiscarded, setIncludeDiscarded] = useState<boolean | null>(null)
   const [sort, setSort] = useState<ViewerSort | null>(null)
+  /** Present while sort is random; new value only on reload or picking Random again. */
+  const [randomSeed, setRandomSeed] = useState<number | null>(null)
   const [hideExcluded, setHideExcluded] = useState<boolean | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
 
   const applyDefaults = useCallback((s: typeof prefs) => {
     setSort(s.viewer_sort)
+    if (s.viewer_sort === 'random') {
+      setRandomSeed((prev) => prev ?? newRandomSeed())
+    } else {
+      setRandomSeed(null)
+    }
     setIncludeDiscarded(s.viewer_include_discarded)
     setHideExcluded(s.viewer_hide_excluded_tags)
   }, [])
   useApplyAppDefaults(appSettings, applyDefaults)
+
+  useEffect(() => {
+    if (sort === 'random' && randomSeed == null) {
+      setRandomSeed(newRandomSeed())
+    }
+    if (sort != null && sort !== 'random' && randomSeed != null) {
+      setRandomSeed(null)
+    }
+  }, [sort, randomSeed])
   const resetBrowseSession = useCallback(() => {
     setListCursor(null)
     setPage(1)
@@ -267,8 +289,13 @@ export default function ViewerPage() {
   )
 
   // Groups are expanded server-side, so the first fetch only waits for settings.
+  // Random waits for a seed so the first page is not reshuffled on the next request.
   const mediaQueryEnabled =
-    hideExcluded !== null && includeDiscarded !== null && sort !== null && pageSizeReady
+    hideExcluded !== null &&
+    includeDiscarded !== null &&
+    sort !== null &&
+    pageSizeReady &&
+    (sort !== 'random' || randomSeed != null)
 
   const toggleHideExcluded = () => {
     if (!hasHiddenConfig || hideExcluded === null) return
@@ -297,6 +324,7 @@ export default function ViewerPage() {
       mediaExcludeTags,
       sort,
       requestCursor ?? null,
+      sort === 'random' ? randomSeed : null,
     ],
     queryFn: () =>
       fetchMedia({
@@ -311,6 +339,7 @@ export default function ViewerPage() {
         exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
         sort: sort!,
         cursor: requestCursor,
+        seed: sort === 'random' ? randomSeed : undefined,
       }),
     enabled: mediaQueryEnabled,
     // Keep the visible page while refetching (no "Loading..." blank on tag clicks or paging),
@@ -359,6 +388,7 @@ export default function ViewerPage() {
           mediaExcludeTags,
           sort,
           cursor ?? null,
+          sort === 'random' ? randomSeed : null,
         ],
         queryFn: () =>
           fetchMedia({
@@ -373,6 +403,7 @@ export default function ViewerPage() {
             exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
             sort: sort!,
             cursor,
+            seed: sort === 'random' ? randomSeed : undefined,
           }),
       })
     },
@@ -390,6 +421,7 @@ export default function ViewerPage() {
       mediaExcludeTags,
       sort,
       listCursor,
+      randomSeed,
     ],
   )
 
@@ -534,6 +566,7 @@ export default function ViewerPage() {
         mediaExcludeTags,
         sort,
         listCursor,
+        randomSeed,
         previewSize,
       }),
     [
@@ -549,6 +582,7 @@ export default function ViewerPage() {
       mediaExcludeTags,
       sort,
       listCursor,
+      randomSeed,
       previewSize,
     ],
   )
@@ -572,6 +606,7 @@ export default function ViewerPage() {
           mediaExcludeTags,
           sort,
           cursor ?? null,
+          sort === 'random' ? randomSeed : null,
         ],
         queryFn: () =>
           fetchMedia({
@@ -586,6 +621,7 @@ export default function ViewerPage() {
             exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
             sort: sort!,
             cursor,
+            seed: sort === 'random' ? randomSeed : undefined,
           }),
       })
     },
@@ -603,6 +639,7 @@ export default function ViewerPage() {
       mediaExcludeTags,
       sort,
       listCursor,
+      randomSeed,
     ],
   )
   usePreviewPageWindow({
@@ -649,9 +686,22 @@ export default function ViewerPage() {
           ))}
         </select>
         <select
-          value={sort ?? prefs.viewer_sort}
+          value={
+            sort === 'random' && randomSeed != null
+              ? `random:${randomSeed}`
+              : (sort ?? prefs.viewer_sort)
+          }
           onChange={(e) => {
-            setSort(e.target.value as ViewerSort)
+            const raw = e.target.value
+            if (raw === 'random' || raw.startsWith('random:')) {
+              // Picking Random again (even when already selected) gets a new seed.
+              setSort('random')
+              setRandomSeed(newRandomSeed())
+              resetBrowseSession()
+              return
+            }
+            setSort(raw as ViewerSort)
+            setRandomSeed(null)
             resetBrowseSession()
           }}
           disabled={sort === null}
@@ -660,6 +710,11 @@ export default function ViewerPage() {
           <option value="date_asc">Oldest</option>
           <option value="rating_desc">Highest rated</option>
           <option value="rating_asc">Lowest rated</option>
+          {sort === 'random' && randomSeed != null ? (
+            <option value={`random:${randomSeed}`} hidden>
+              Random
+            </option>
+          ) : null}
           <option value="random">Random</option>
         </select>
         <button

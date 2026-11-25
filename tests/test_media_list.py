@@ -120,6 +120,7 @@ class MediaListTestCase(unittest.TestCase):
             "exclude_id": None,
             "sort": "date_desc",
             "cursor": None,
+            "seed": None,
             "tag_mode": "and",
             "db": self.db,
         }
@@ -288,7 +289,7 @@ class SortAndPageTests(MediaListTestCase):
         # Unknown sort values fall back to newest-first.
         self.assertEqual(self._post_ids(sort="bogus"), ["m2", "m1", "m0"])
 
-    def test_rating_sorts_use_average_and_treat_unrated_as_zero(self):
+    def test_rating_sorts_rated_first_then_by_average(self):
         low = self._add_media("low", minutes=0)
         high = self._add_media("high", minutes=1)
         mixed = self._add_media("mixed", minutes=2)
@@ -302,19 +303,32 @@ class SortAndPageTests(MediaListTestCase):
         self._rate(mixed, 4, user=second_user)  # avg 3
 
         self.assertEqual(self._post_ids(sort="rating_desc"), ["high", "mixed", "low", "unrated"])
-        self.assertEqual(self._post_ids(sort="rating_asc"), ["unrated", "low", "mixed", "high"])
+        # Unrated come after every rated file for both directions.
+        self.assertEqual(self._post_ids(sort="rating_asc"), ["low", "mixed", "high", "unrated"])
 
     def test_random_sort_pages_the_whole_filtered_set(self):
         for index in range(7):
             self._add_media(f"m{index}", minutes=index)
         self._add_media("discarded", is_discarded=True, minutes=99)
 
-        first = self._list(sort="random", page_size=4)
-        second = self._list(sort="random", page=2, page_size=4)
+        first = self._list(sort="random", page_size=4, seed=42)
+        second = self._list(sort="random", page=2, page_size=4, seed=42)
         self.assertEqual(first.total, 7)
         self.assertEqual(len(first.items), 4)
         self.assertEqual(len(second.items), 3)
         self.assertIsNone(first.cursor)
+        # Same seed keeps a single permutation across pages (no overlap, full cover).
+        ids = [item.id for item in first.items] + [item.id for item in second.items]
+        self.assertEqual(len(ids), len(set(ids)))
+        again_first = self._list(sort="random", page_size=4, seed=42)
+        self.assertEqual(
+            [item.id for item in again_first.items],
+            [item.id for item in first.items],
+        )
+        full_a = [item.id for item in self._list(sort="random", page_size=7, seed=42).items]
+        full_b = [item.id for item in self._list(sort="random", page_size=7, seed=99).items]
+        self.assertEqual(sorted(full_a), sorted(full_b), "both seeds cover the same files")
+        self.assertNotEqual(full_a, full_b, "different seeds change order")
 
     def test_cursor_freezes_page_when_newer_media_arrives(self):
         for index in range(4):

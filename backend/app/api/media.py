@@ -2,7 +2,7 @@ import random
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
-from sqlalchemy import func
+from sqlalchemy import case, func, literal
 from sqlalchemy.orm import Session
 
 from backend.app.db.models import MediaItem, Rating
@@ -81,6 +81,10 @@ def list_media(
         None,
         description="Frozen max media id for this browse session; newer ids stay off the list",
     ),
+    seed: int | None = Query(
+        None,
+        description="Random-sort seed; same seed + filters keeps page order stable across requests",
+    ),
     db: Session = Depends(get_db),
 ) -> MediaListOut:
     query = db.query(MediaItem)
@@ -126,10 +130,18 @@ def list_media(
     start = (page - 1) * page_size
 
     if sort == "random":
-        # Shuffling needs the whole id set; rows for the page are fetched afterwards.
-        ids = [row[0] for row in query.with_entities(MediaItem.id).all()]
-        random.shuffle(ids)
-        page_items = _fetch_media_in_id_order(db, ids[start : start + page_size])
+        # Deterministic order in SQL (no full id list in Python). Same seed ⇒ same
+        # page slices; OFFSET/LIMIT only materializes the current page of rows.
+        mix = int(seed) if seed is not None else random.randrange(1, 0x7FFFFFFF)
+        mix = (mix & 0x7FFFFFFF) or 1
+        # Seed enters before multiply so different seeds reshuffle strongly.
+        order_key = ((MediaItem.id + literal(mix)) * literal(2654435761)) % literal(2147483647)
+        page_items = (
+            query.order_by(order_key.asc(), MediaItem.id.asc())
+            .offset(start)
+            .limit(page_size)
+            .all()
+        )
     else:
         if sort in ("rating_desc", "rating_asc"):
             avg_ratings = (
@@ -140,9 +152,15 @@ def list_media(
                 .group_by(Rating.media_id)
                 .subquery()
             )
-            score = func.coalesce(avg_ratings.c.avg_score, 0)
+            # Rated files first, then unrated; within rated, sort by average score.
+            rated_first = case((avg_ratings.c.avg_score.isnot(None), 0), else_=1)
+            score = avg_ratings.c.avg_score
             query = query.outerjoin(avg_ratings, avg_ratings.c.media_id == MediaItem.id)
-            order_by = [score.asc() if sort == "rating_asc" else score.desc(), MediaItem.id.desc()]
+            order_by = [
+                rated_first.asc(),
+                score.asc() if sort == "rating_asc" else score.desc(),
+                MediaItem.id.desc(),
+            ]
         elif sort == "date_asc":
             order_by = [MediaItem.scraped_at.asc(), MediaItem.id.asc()]
         else:
@@ -156,13 +174,6 @@ def list_media(
         page_size=page_size,
         cursor=session_cursor,
     )
-
-
-def _fetch_media_in_id_order(db: Session, ids: list[int]) -> list[MediaItem]:
-    if not ids:
-        return []
-    by_id = {item.id: item for item in db.query(MediaItem).filter(MediaItem.id.in_(ids)).all()}
-    return [by_id[media_id] for media_id in ids if media_id in by_id]
 
 
 @router.get("/duplicates", response_model=DuplicateReviewOut)
