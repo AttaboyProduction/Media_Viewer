@@ -34,10 +34,21 @@ import { parseCommaSeparatedTags } from '../utils/tagList'
 import { paginationTotalPages } from '../utils/pagination'
 import { columnCountForViewerGrid } from '../utils/viewerGrid'
 import { previewSizeForTile, type PreviewSize } from '../utils/mediaPreview'
-import { fileIndexOnPage } from '../utils/mediaViewerActions'
+import {
+  detailCanNavigateAdjacent,
+  fileIndexOnPage,
+  targetGlobalIndexForDetailNav,
+} from '../utils/mediaViewerActions'
 import { registerEscapeHandler } from '../utils/escapeStack'
 import MediaCardThumb from '../components/MediaCardThumb'
-import { useCallback, useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 
 function pageFromSearch(params: URLSearchParams): number {
   const raw = Number(params.get('page') || '1')
@@ -197,6 +208,7 @@ export default function ViewerPage() {
   })
   const [hideExcluded, setHideExcluded] = useState<boolean | null>(null)
   const [selectedId, setSelectedId] = useState<number | null>(null)
+  const detailListIndexRef = useRef<number | null>(null)
 
   const applyDefaults = useCallback((s: typeof prefs) => {
     setIncludeDiscarded(s.viewer_include_discarded)
@@ -394,8 +406,30 @@ export default function ViewerPage() {
     selectedId != null && pageSize
       ? fileIndexOnPage(page, pageSize, pageIds, selectedId)
       : -1
-  const canDetailPrev = fileIndex > 0
-  const canDetailNext = fileIndex >= 0 && fileIndex < fileTotal - 1
+
+  useEffect(() => {
+    if (selectedId == null) {
+      detailListIndexRef.current = null
+      return
+    }
+    if (fileIndex >= 0) detailListIndexRef.current = fileIndex
+  }, [selectedId, fileIndex])
+
+  const detailListIndex =
+    fileIndex >= 0
+      ? fileIndex
+      : selectedId != null
+        ? detailListIndexRef.current
+        : null
+  const detailNavCtx = {
+    fileIndex,
+    fileTotal,
+    page,
+    totalPages,
+    listIndex: detailListIndex,
+  }
+  const canDetailPrev = detailCanNavigateAdjacent('prev', detailNavCtx)
+  const canDetailNext = detailCanNavigateAdjacent('next', detailNavCtx)
 
   const fetchViewerPage = useCallback(
     async (targetPage: number) => {
@@ -457,30 +491,75 @@ export default function ViewerPage() {
   const navigateDetailAdjacent = useCallback(
     async (direction: 'prev' | 'next') => {
       if (selectedId == null || pageSize == null) return
+      const listIndex =
+        fileIndex >= 0 ? fileIndex : detailListIndexRef.current
       const local = pageIds.indexOf(selectedId)
-      if (direction === 'next') {
-        if (local >= 0 && local < pageIds.length - 1) {
-          setSelectedId(pageIds[local + 1])
+      if (local >= 0) {
+        if (direction === 'next') {
+          if (local < pageIds.length - 1) {
+            setSelectedId(pageIds[local + 1])
+            return
+          }
+          if (page >= totalPages) return
+          const result = await fetchViewerPage(page + 1)
+          if (!result.items.length) return
+          goToPage(page + 1)
+          setSelectedId(result.items[0].id)
           return
         }
+        if (local > 0) {
+          setSelectedId(pageIds[local - 1])
+          return
+        }
+        if (page <= 1) return
+        const result = await fetchViewerPage(page - 1)
+        if (!result.items.length) return
+        goToPage(page - 1)
+        setSelectedId(result.items[result.items.length - 1].id)
+        return
+      }
+
+      const targetGlobal = targetGlobalIndexForDetailNav(direction, fileIndex, listIndex)
+      if (targetGlobal == null) return
+      if (targetGlobal < 0) {
+        if (page <= 1) return
+        const result = await fetchViewerPage(page - 1)
+        if (!result.items.length) return
+        goToPage(page - 1)
+        setSelectedId(result.items[result.items.length - 1].id)
+        return
+      }
+      if (targetGlobal >= fileTotal) {
         if (page >= totalPages) return
         const result = await fetchViewerPage(page + 1)
         if (!result.items.length) return
-        setPage(page + 1)
+        goToPage(page + 1)
         setSelectedId(result.items[0].id)
         return
       }
-      if (local > 0) {
-        setSelectedId(pageIds[local - 1])
+
+      const targetPage = Math.floor(targetGlobal / pageSize) + 1
+      const localOnTarget = targetGlobal - (targetPage - 1) * pageSize
+      if (targetPage === page && localOnTarget >= 0 && localOnTarget < pageIds.length) {
+        setSelectedId(pageIds[localOnTarget])
         return
       }
-      if (page <= 1) return
-      const result = await fetchViewerPage(page - 1)
-      if (!result.items.length) return
-      goToPage(page - 1)
-      setSelectedId(result.items[result.items.length - 1].id)
+      const result = await fetchViewerPage(targetPage)
+      if (localOnTarget < 0 || localOnTarget >= result.items.length) return
+      goToPage(targetPage)
+      setSelectedId(result.items[localOnTarget].id)
     },
-    [selectedId, pageSize, pageIds, page, totalPages, fetchViewerPage, goToPage],
+    [
+      selectedId,
+      pageSize,
+      fileIndex,
+      pageIds,
+      page,
+      totalPages,
+      fileTotal,
+      fetchViewerPage,
+      goToPage,
+    ],
   )
 
   const {

@@ -114,9 +114,9 @@ export default function TagListSearch<T extends SearchableTag>({
           disabled={disabled}
           onClick={() => setSearchOpen((open) => !open)}
           aria-expanded={searchOpen}
-          aria-label={searchOpen ? 'Hide tag search' : 'Search tags'}
+          aria-label={searchOpen ? 'Hide tag search' : compact ? 'Tag search' : 'Search tags'}
         >
-          {compact ? (searchOpen ? 'Hide' : 'Tags') : searchOpen ? 'Hide search' : 'Search tags'}
+          {compact ? (searchOpen ? 'Hide' : 'Tag search') : searchOpen ? 'Hide search' : 'Search tags'}
         </button>
         {onTagModeChange && (
           <div className="search-match-toggle" role="group" aria-label="How selected tags combine">

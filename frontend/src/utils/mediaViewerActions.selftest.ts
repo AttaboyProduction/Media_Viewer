@@ -1,7 +1,9 @@
 import {
+  detailCanNavigateAdjacent,
   formatFileSize,
   formatPixelSize,
   packWebShareBatches,
+  targetGlobalIndexForDetailNav,
   WEB_SHARE_MAX_BYTES,
   WEB_SHARE_MAX_FILES,
   webShareNeedsNotice,
@@ -83,6 +85,34 @@ function assert(cond: boolean, message: string) {
   })
   assert(notice.message.toLowerCase().includes('50'), 'oversized notice mentions 50 MB')
   assert((notice.detailLines || []).some((line) => line.includes('big.mp4')), 'lists oversized names')
+}
+
+{
+  assert(
+    targetGlobalIndexForDetailNav('next', -1, 2) === 2,
+    'next after drop keeps successor index',
+  )
+  assert(targetGlobalIndexForDetailNav('prev', -1, 2) === 1, 'prev after drop')
+  assert(
+    detailCanNavigateAdjacent('next', {
+      fileIndex: -1,
+      fileTotal: 5,
+      page: 1,
+      totalPages: 1,
+      listIndex: 2,
+    }),
+    'next while open file left list',
+  )
+  assert(
+    !detailCanNavigateAdjacent('next', {
+      fileIndex: -1,
+      fileTotal: 5,
+      page: 1,
+      totalPages: 1,
+      listIndex: 5,
+    }),
+    'no next when removed item was last',
+  )
 }
 
 {

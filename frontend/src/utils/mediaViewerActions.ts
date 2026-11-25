@@ -713,3 +713,43 @@ export function fileIndexOnPage(
   if (local < 0 || pageSize <= 0 || page < 1) return -1
   return (page - 1) * pageSize + local
 }
+
+/**
+ * Whether prev/next is available while detail is open.
+ * When the open file left the list (filters), `listIndex` is its last known global index.
+ */
+export function detailCanNavigateAdjacent(
+  direction: 'prev' | 'next',
+  args: {
+    fileIndex: number
+    fileTotal: number
+    page: number
+    totalPages: number
+    listIndex: number | null
+  },
+): boolean {
+  const { fileIndex, fileTotal, page, totalPages, listIndex } = args
+  if (fileIndex >= 0) {
+    return direction === 'next' ? fileIndex < fileTotal - 1 : fileIndex > 0
+  }
+  if (listIndex == null || fileTotal <= 0) return false
+  if (direction === 'next') {
+    if (listIndex < fileTotal) return true
+    return page < totalPages
+  }
+  if (listIndex > 0) return true
+  return page > 1
+}
+
+/** Target global index for prev/next; open file missing from list uses `listIndex`. */
+export function targetGlobalIndexForDetailNav(
+  direction: 'prev' | 'next',
+  fileIndex: number,
+  listIndex: number | null,
+): number | null {
+  if (fileIndex >= 0) {
+    return direction === 'next' ? fileIndex + 1 : fileIndex - 1
+  }
+  if (listIndex == null) return null
+  return direction === 'next' ? listIndex : listIndex - 1
+}
