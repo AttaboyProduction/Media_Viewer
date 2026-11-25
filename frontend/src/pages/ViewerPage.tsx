@@ -806,7 +806,9 @@ export default function ViewerPage() {
           <option value="">Any rating</option>
           <option value="unrated">Without rating</option>
           {[5, 4, 3, 2, 1].map((r) => (
-            <option key={r} value={r}>{r}+ stars</option>
+            <option key={r} value={r}>
+              {r}{r != 5 ? '+' : ``} stars
+            </option>
           ))}
         </select>
         <select
