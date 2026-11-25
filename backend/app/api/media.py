@@ -2,7 +2,7 @@ import random
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
-from sqlalchemy import case, func, literal
+from sqlalchemy import case, exists, func, literal
 from sqlalchemy.orm import Session
 
 from backend.app.db.models import MediaItem, Rating
@@ -73,6 +73,7 @@ def list_media(
     ),
     media_type: str | None = None,
     min_rating: int | None = Query(None, ge=1, le=5),
+    unrated_only: bool = False,
     include_discarded: bool = False,
     exclude_id: int | None = None,
     sort: str = "date_desc",
@@ -108,7 +109,9 @@ def list_media(
     if excluded_ids is not None:
         query = query.filter(~MediaItem.id.in_(excluded_ids))
 
-    if min_rating:
+    if unrated_only:
+        query = query.filter(~exists().where(Rating.media_id == MediaItem.id))
+    elif min_rating:
         query = query.filter(
             MediaItem.id.in_(
                 db.query(Rating.media_id)

@@ -175,7 +175,14 @@ export default function ViewerPage() {
   const [tagMode, setTagMode] = useState<TagMatchMode>('and')
   const [tagsFilterExpanded, setTagsFilterExpanded] = useState(false)
   const [mediaType, setMediaType] = useState('')
-  const [minRating, setMinRating] = useState<number | undefined>()
+  type RatingFilter = '' | 'unrated' | number
+  const [ratingFilter, setRatingFilter] = useState<RatingFilter>('')
+  const ratingFilterApi = (filter: RatingFilter) =>
+    filter === 'unrated'
+      ? { unrated_only: true as const }
+      : typeof filter === 'number'
+        ? { min_rating: filter }
+        : {}
   // null until settings load — avoids first fetch with wrong hide/discarded defaults
   const [includeDiscarded, setIncludeDiscarded] = useState<boolean | null>(null)
   const settingsReady = appSettings != null
@@ -338,7 +345,7 @@ export default function ViewerPage() {
       selectedTags,
       tagMode,
       mediaType,
-      minRating,
+      ratingFilter,
       includeDiscarded,
       hideExcluded,
       hiddenTagNames,
@@ -355,7 +362,7 @@ export default function ViewerPage() {
         tags: selectedTags,
         tag_mode: tagMode,
         media_type: mediaType || undefined,
-        min_rating: minRating,
+        ...ratingFilterApi(ratingFilter),
         include_discarded: includeDiscarded!,
         exclude_tags: mediaExcludeTags,
         exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
@@ -402,7 +409,7 @@ export default function ViewerPage() {
           selectedTags,
           tagMode,
           mediaType,
-          minRating,
+          ratingFilter,
           includeDiscarded,
           hideExcluded,
           hiddenTagNames,
@@ -419,7 +426,7 @@ export default function ViewerPage() {
             tags: selectedTags,
             tag_mode: tagMode,
             media_type: mediaType || undefined,
-            min_rating: minRating,
+            ...ratingFilterApi(ratingFilter),
             include_discarded: includeDiscarded!,
             exclude_tags: mediaExcludeTags,
             exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
@@ -435,7 +442,7 @@ export default function ViewerPage() {
       selectedTags,
       tagMode,
       mediaType,
-      minRating,
+      ratingFilter,
       includeDiscarded,
       hideExcluded,
       hiddenTagNames,
@@ -493,7 +500,7 @@ export default function ViewerPage() {
     selectedTags,
     tagMode,
     mediaType,
-    minRating,
+    ratingFilter,
     includeDiscarded,
     hideExcluded,
     sort,
@@ -587,7 +594,7 @@ export default function ViewerPage() {
         selectedTags,
         tagMode,
         mediaType,
-        minRating,
+        ratingFilter,
         includeDiscarded,
         hideExcluded,
         hiddenTagNames,
@@ -603,7 +610,7 @@ export default function ViewerPage() {
       selectedTags,
       tagMode,
       mediaType,
-      minRating,
+      ratingFilter,
       includeDiscarded,
       hideExcluded,
       hiddenTagNames,
@@ -627,7 +634,7 @@ export default function ViewerPage() {
           selectedTags,
           tagMode,
           mediaType,
-          minRating,
+          ratingFilter,
           includeDiscarded,
           hideExcluded,
           hiddenTagNames,
@@ -644,7 +651,7 @@ export default function ViewerPage() {
             tags: selectedTags,
             tag_mode: tagMode,
             media_type: mediaType || undefined,
-            min_rating: minRating,
+            ...ratingFilterApi(ratingFilter),
             include_discarded: includeDiscarded!,
             exclude_tags: mediaExcludeTags,
             exclude_tag_groups: hideExcluded ? hiddenGroupKeys : undefined,
@@ -660,7 +667,7 @@ export default function ViewerPage() {
       selectedTags,
       tagMode,
       mediaType,
-      minRating,
+      ratingFilter,
       includeDiscarded,
       hideExcluded,
       hiddenTagNames,
@@ -702,13 +709,23 @@ export default function ViewerPage() {
           <option value="video">Videos</option>
         </select>
         <select
-          value={minRating ?? ''}
+          value={
+            ratingFilter === 'unrated'
+              ? 'unrated'
+              : ratingFilter === ''
+                ? ''
+                : String(ratingFilter)
+          }
           onChange={(e) => {
-            setMinRating(e.target.value ? Number(e.target.value) : undefined)
+            const raw = e.target.value
+            setRatingFilter(
+              raw === '' ? '' : raw === 'unrated' ? 'unrated' : Number(raw),
+            )
             resetBrowseSession()
           }}
         >
           <option value="">Any rating</option>
+          <option value="unrated">Without rating</option>
           {[5, 4, 3, 2, 1].map((r) => (
             <option key={r} value={r}>{r}+ stars</option>
           ))}

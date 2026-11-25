@@ -38,6 +38,7 @@ export interface MediaFilters {
   tag_mode?: TagMatchMode
   media_type?: string
   min_rating?: number
+  unrated_only?: boolean
   include_discarded?: boolean
   exclude_tags?: string[]
   exclude_tag_groups?: string[]
@@ -59,6 +60,7 @@ export function fetchMedia(filters: MediaFilters = {}) {
   }
   if (filters.media_type) params.set('media_type', filters.media_type)
   if (filters.min_rating) params.set('min_rating', String(filters.min_rating))
+  if (filters.unrated_only) params.set('unrated_only', 'true')
   if (filters.include_discarded) params.set('include_discarded', 'true')
   if (filters.exclude_tags?.length) params.set('exclude_tags', filters.exclude_tags.join(','))
   if (filters.exclude_tag_groups?.length) {

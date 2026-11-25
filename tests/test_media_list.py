@@ -116,6 +116,7 @@ class MediaListTestCase(unittest.TestCase):
             "exclude_tag_groups": None,
             "media_type": None,
             "min_rating": None,
+            "unrated_only": False,
             "include_discarded": False,
             "exclude_id": None,
             "sort": "date_desc",
@@ -150,6 +151,12 @@ class FilterTests(MediaListTestCase):
         self.assertEqual(self._post_ids(media_type="video"), ["vid"])
         self.assertEqual(self._post_ids(min_rating=4), ["vid"])
         self.assertEqual(sorted(self._post_ids(min_rating=1)), ["img", "vid"])
+
+    def test_unrated_only_lists_items_with_no_ratings(self):
+        rated = self._add_media("rated")
+        self._add_media("plain")
+        self._rate(rated, 3)
+        self.assertEqual(sorted(self._post_ids(unrated_only=True)), ["plain"])
 
     def test_tag_filter_requires_every_tag(self):
         red = self._add_tag("red")
