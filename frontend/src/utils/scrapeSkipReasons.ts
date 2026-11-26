@@ -1,10 +1,15 @@
+/** Raw skip reasons rolled into the Already in library Skipped group. */
+export const ALREADY_IN_LIBRARY_SKIP_REASONS = new Set([
+  'already_have',
+  'identical',
+  'duplicate_hash',
+])
+
 /** Stable ordering for skip-reason groups in scrape panels. */
 export const SCRAPE_SKIP_REASON_ORDER = [
   'unavailable',
   'interrupted',
   'already_have',
-  'identical',
-  'duplicate_hash',
   'library_updated',
   'excluded_tag',
   'tag_mismatch',
@@ -22,8 +27,6 @@ export const LIBRARY_SKIP_REASONS = new Set([
 
 const LABELS: Record<string, string> = {
   already_have: 'Already in library',
-  identical: 'Identical file',
-  duplicate_hash: 'Duplicate file',
   library_updated: 'Updated info/file',
   unavailable: 'Unavailable',
   excluded_tag: 'Excluded tag',
@@ -31,6 +34,13 @@ const LABELS: Record<string, string> = {
   media_type: 'Media type filter',
   date_range: 'Date range filter',
   interrupted: 'Interrupted',
+}
+
+/** Per-row hint inside the merged Already in library group. */
+const ALREADY_IN_LIBRARY_SUBLABELS: Record<string, string> = {
+  already_have: 'Same post',
+  duplicate_hash: 'Same file',
+  identical: 'Identical image',
 }
 
 export function scrapeLibraryUpdatedDetail(detail: string | undefined): string | null {
@@ -50,7 +60,13 @@ export function scrapeLibraryUpdatedLine(item: {
 }
 
 export function scrapeSkipReasonGroupKey(reason: string): string {
-  return reason.trim() || 'other'
+  const key = reason.trim() || 'other'
+  if (ALREADY_IN_LIBRARY_SKIP_REASONS.has(key)) return 'already_have'
+  return key
+}
+
+export function scrapeSkipReasonSublabel(reason: string): string | null {
+  return ALREADY_IN_LIBRARY_SUBLABELS[reason.trim()] ?? null
 }
 
 export function scrapeSkipReasonLabel(reason: string): string {

@@ -6,6 +6,7 @@ import {
   scrapeLibraryUpdatedLine,
   scrapeSkipReasonGroupKey,
   scrapeSkipReasonLabel,
+  scrapeSkipReasonSublabel,
   sortScrapeSkipReasons,
 } from '../utils/scrapeSkipReasons'
 
@@ -424,7 +425,7 @@ export default function ScrapeSourcePanel({
                   const group = skippedByReason.get(reason) ?? []
                   const label = scrapeSkipReasonLabel(reason)
                   const showLibraryDetail = reason === 'library_updated'
-                  const showIdenticalHint = reason === 'identical'
+                  const showAlreadyInLibrarySubline = reason === 'already_have'
                   const open = skippedReasonOpen[reason] ?? false
                   return (
                     <QueueSection
@@ -455,7 +456,11 @@ export default function ScrapeSourcePanel({
                       onRetry={() => onRetry('skipped', reason)}
                     >
                       <ul className={queueListClass(group.length)}>
-                        {group.map((item) => (
+                        {group.map((item) => {
+                          const librarySubline = showAlreadyInLibrarySubline
+                            ? scrapeSkipReasonSublabel(item.reason)
+                            : null
+                          return (
                           <li key={`${item.url}:${item.reason}:${item.detail || ''}`}>
                             <UrlLine url={item.url} />
                             <SkippedLibraryLink item={item} onOpen={onOpenLibraryMedia} />
@@ -463,8 +468,8 @@ export default function ScrapeSourcePanel({
                               <span className="scrape-skipped-reason">
                                 {scrapeLibraryUpdatedLine(item)}
                               </span>
-                            ) : showIdenticalHint ? (
-                              <span className="scrape-skipped-reason">No changes</span>
+                            ) : librarySubline ? (
+                              <span className="scrape-skipped-reason">{librarySubline}</span>
                             ) : item.detail &&
                               item.reason !== 'unavailable' &&
                               item.reason !== 'interrupted' ? (
@@ -474,7 +479,8 @@ export default function ScrapeSourcePanel({
                               </details>
                             ) : null}
                           </li>
-                        ))}
+                          )
+                        })}
                       </ul>
                     </QueueSection>
                   )

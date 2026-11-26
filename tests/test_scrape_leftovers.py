@@ -1099,6 +1099,29 @@ class ScrapeLeftoverTests(unittest.TestCase):
             {"already_have"},
         )
 
+    def test_clear_already_have_merges_identical_and_duplicate_hash(self) -> None:
+        urls = [
+            ("https://gallery.test/post/1", "already_have"),
+            ("https://gallery.test/post/2", "identical"),
+            ("https://gallery.test/post/3", "duplicate_hash"),
+            ("https://gallery.test/post/4", "tag_mismatch"),
+        ]
+        for url, reason in urls:
+            scrape_leftovers.remember_unfinished(url, reason, "", "site_a")
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "site_a", "Site A")
+        status.skipped_items = [SkippedItem(url=u, reason=r) for u, r in urls]
+        status.skipped = len(urls)
+
+        out = scrape_api.post_clear_queues("site_a", which="skipped", skip_reason="already_have")
+        panel = self._panel(out, "site_a")
+        self.assertEqual(len(panel.skipped_items), 1)
+        self.assertEqual(panel.skipped_items[0].reason, "tag_mismatch")
+        self.assertEqual(
+            {item["reason"] for item in scrape_leftovers.unfinished_items("site_a")},
+            {"tag_mismatch"},
+        )
+
     def test_retry_skipped_by_reason_only(self) -> None:
         have = "https://gallery.test/post/1"
         identical = "https://gallery.test/post/2"

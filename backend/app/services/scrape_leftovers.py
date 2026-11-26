@@ -76,6 +76,8 @@ SOURCE_UNSUPPORTED = "unsupported"
 LIBRARY_MATCH_REASONS = frozenset(
     {"library_updated", "already_have", "identical", "duplicate_hash"}
 )
+# Skipped UI group "Already in library" — clear/retry uses skip_reason=already_have.
+ALREADY_IN_LIBRARY_REASONS = frozenset({"already_have", "identical", "duplicate_hash"})
 
 
 def skip_reason_matches(item_reason: str, filter_reason: str | None) -> bool:
@@ -85,6 +87,8 @@ def skip_reason_matches(item_reason: str, filter_reason: str | None) -> bool:
     reason = (item_reason or "").strip()
     if filter_reason == "library_updated":
         return reason == "library_updated"
+    if filter_reason == "already_have":
+        return reason in ALREADY_IN_LIBRARY_REASONS
     if filter_reason in LIBRARY_MATCH_REASONS:
         return reason == filter_reason
     return reason == filter_reason
