@@ -42,6 +42,8 @@ interface Props {
   onNavigateAdjacent: (direction: 'prev' | 'next') => void | Promise<void>
   selectedFilterTags?: string[]
   onToggleViewerFilter?: (name: string) => void
+  /** Above resolve-similar overlay and nested inside another detail modal. */
+  stackElevated?: boolean
 }
 
 const ZOOM_MIN = 1
@@ -73,6 +75,7 @@ export default function MediaDetailModal({
   onNavigateAdjacent,
   selectedFilterTags,
   onToggleViewerFilter,
+  stackElevated = false,
 }: Props) {
   const queryClient = useQueryClient()
   const { confirm } = useConfirm()
@@ -331,9 +334,15 @@ export default function MediaDetailModal({
         return
       }
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        if (!stackElevated && document.querySelector('.modal-backdrop-elevated')) {
+          return
+        }
         // Always consume so grid page ←/→ does not fire under an open detail view.
         e.preventDefault()
         e.stopPropagation()
+        if (stackElevated) {
+          e.stopImmediatePropagation()
+        }
         if (navBusy) return
         if (e.key === 'ArrowLeft' && canPrev) void step('prev')
         if (e.key === 'ArrowRight' && canNext) void step('next')
@@ -341,7 +350,7 @@ export default function MediaDetailModal({
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [canPrev, canNext, navBusy, step, promptDeletePermanent, promptDiscard])
+  }, [canPrev, canNext, navBusy, step, promptDeletePermanent, promptDiscard, stackElevated])
 
   useHorizontalWheelNav(
     backdropRef,
@@ -564,7 +573,9 @@ export default function MediaDetailModal({
   return (
     <div
       ref={backdropRef}
-      className={`modal-backdrop${expanded ? ' modal-backdrop-expanded' : ''}`}
+      className={`modal-backdrop${expanded ? ' modal-backdrop-expanded' : ''}${
+        stackElevated ? ' modal-backdrop-elevated' : ''
+      }`}
       onClick={onClose}
     >
       {mediaControls}

@@ -5,6 +5,7 @@ import { keepDuplicates, mergeDuplicates, resolveDuplicate } from '../api/client
 import type { DuplicateGroup, MediaItem } from '../types'
 import ContentHideMedia from './ContentHideMedia'
 import MediaCardThumb from './MediaCardThumb'
+import MediaDetailModal from './MediaDetailModal'
 
 function formatSize(bytes: number | null) {
   if (bytes == null || bytes <= 0) return ''
@@ -13,12 +14,35 @@ function formatSize(bytes: number | null) {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function Preview({ item, selected }: { item: MediaItem; selected: boolean }) {
+function Preview({
+  item,
+  selected,
+  onOpen,
+}: {
+  item: MediaItem
+  selected: boolean
+  onOpen?: (id: number) => void
+}) {
+  const thumb = (
+    <ContentHideMedia item={item}>
+      <MediaCardThumb item={item} size="large" alt={item.source_post_id} />
+    </ContentHideMedia>
+  )
   return (
     <div className={`duplicate-preview${selected ? ' selected' : ''}`}>
-      <ContentHideMedia item={item}>
-        <MediaCardThumb item={item} size="large" alt={item.source_post_id} />
-      </ContentHideMedia>
+      {onOpen ? (
+        <button
+          type="button"
+          className="duplicate-preview-open"
+          title="Open to compare in the viewer"
+          aria-label={`Open file ${item.source_post_id} to compare`}
+          onClick={() => onOpen(item.id)}
+        >
+          {thumb}
+        </button>
+      ) : (
+        thumb
+      )}
       <div className="media-card-meta">
         #{item.source_post_id} · {item.media_type}
         {formatSize(item.file_size) ? ` · ${formatSize(item.file_size)}` : ''}
@@ -55,10 +79,18 @@ export default function DuplicateGroupCard({
   )
   const [pickingKeep, setPickingKeep] = useState(() => wizard && kind === 'similar')
   const [checkedKeep, setCheckedKeep] = useState<number[]>(() => group.items.map((item) => item.id))
+  const [compareId, setCompareId] = useState<number | null>(null)
+  const compareIds = useMemo(() => group.items.map((item) => item.id), [group.items])
 
   useEffect(() => {
     if (wizard && kind === 'similar') setPickingKeep(true)
   }, [wizard, kind, group.primary_id])
+
+  useEffect(() => {
+    if (compareId != null && !compareIds.includes(compareId)) {
+      setCompareId(null)
+    }
+  }, [compareId, compareIds])
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ['duplicates'] })
@@ -139,7 +171,11 @@ export default function DuplicateGroupCard({
               {!canMerge && !pickingKeep && (
                 <h3>{item.id === group.primary_id ? 'Existing' : 'Match'}</h3>
               )}
-              <Preview item={item} selected={canMerge && keepId === item.id} />
+              <Preview
+                item={item}
+                selected={canMerge && keepId === item.id}
+                onOpen={setCompareId}
+              />
               <div className="duplicate-item-actions">
                 <button
                   type="button"
@@ -244,6 +280,28 @@ export default function DuplicateGroupCard({
           {resolve.error instanceof Error ? resolve.error.message : 'Action failed'}
         </p>
       )}
+      {compareId !== null ? (
+        <MediaDetailModal
+          mediaId={compareId}
+          fileIndex={Math.max(0, compareIds.indexOf(compareId))}
+          fileTotal={compareIds.length}
+          canPrev={compareIds.indexOf(compareId) > 0}
+          canNext={compareIds.indexOf(compareId) < compareIds.length - 1}
+          stackElevated
+          onClose={() => {
+            setCompareId(null)
+            invalidate()
+          }}
+          onNavigateAdjacent={(direction) => {
+            const index = compareIds.indexOf(compareId)
+            if (index < 0) return
+            const next = direction === 'prev' ? index - 1 : index + 1
+            if (next >= 0 && next < compareIds.length) {
+              setCompareId(compareIds[next])
+            }
+          }}
+        />
+      ) : null}
     </div>
   )
 }

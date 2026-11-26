@@ -889,6 +889,10 @@ tr.drop-guide-after td {
   user-select: none;
 }
 
+.modal-backdrop-elevated {
+  z-index: 300;
+}
+
 .resolve-duplicates-overlay {
   position: fixed;
   inset: 0;
@@ -2763,6 +2767,30 @@ tr.selected {
 .duplicate-col h3 {
   margin: 0 0 0.5rem;
   font-size: 0.9rem;
+}
+
+.duplicate-preview-open {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+  text-align: inherit;
+  border-radius: 6px;
+}
+
+.duplicate-preview-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.duplicate-preview-open .content-hide-media,
+.duplicate-preview-open img,
+.duplicate-preview-open video {
+  width: 100%;
+  display: block;
 }
 
 .duplicate-preview img,

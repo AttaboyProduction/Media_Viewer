@@ -109,6 +109,7 @@ export default function ResolveDuplicatesOverlay({ onClose }: { onClose: () => v
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      if (document.querySelector('.modal-backdrop-elevated')) return
       // Capture + stop so Viewer page ←/→ behind this overlay never runs.
       event.preventDefault()
       event.stopPropagation()
@@ -158,7 +159,8 @@ export default function ResolveDuplicatesOverlay({ onClose }: { onClose: () => v
           </button>
         </div>
         <p className="hint">
-          Identical groups first (merge into the larger file), then similar groups. With this panel
+          Identical groups first (merge into the larger file), then similar groups. Click a preview
+          to open the file viewer and ← / → only move between files in that group. With this panel
           focused, ← / → move between groups (the Viewer behind does not change page).{' '}
           <strong>Keep all</strong> keeps every file and clears the similar/identical mark so this
           pair will not return after reload.{' '}

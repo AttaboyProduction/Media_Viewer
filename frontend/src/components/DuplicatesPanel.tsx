@@ -56,7 +56,8 @@ export default function DuplicatesPanel() {
           <p className="hint">
             Identical files look like the same picture or the same video (including different resolution).
             Similar files are close picture matches such as crops or watermarks. Exact byte matches
-            were skipped while scraping.
+            were skipped while scraping. Click a preview to compare files in the viewer (← / → stay
+            in that group only).
           </p>
           {isLoading && <div className="empty">Loading...</div>}
           {error && <div className="error">Failed to load duplicates</div>}
