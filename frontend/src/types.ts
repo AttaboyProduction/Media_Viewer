@@ -67,12 +67,19 @@ export interface Tag {
   sort_order: number
 }
 
-export type ScrapeFilterType = 'tag' | 'date_range' | 'url' | 'media_type'
+export type ScrapeFilterType =
+  | 'tag_or'
+  | 'tag_and'
+  | 'tag'
+  | 'date_range'
+  | 'url'
+  | 'media_type'
 
 /** Filter row sent to the scrape API. For `date_range`, value is `from..to`
  * where each side is optional ISO local datetime (`YYYY-MM-DD` or
  * `YYYY-MM-DDTHH:mm[:ss]`) from `datetime-local` inputs. */
 export interface ScrapeFilter {
+  /** `tag_or` / `tag_and` values are newline-separated tag names. */
   type: ScrapeFilterType
   value: string
 }

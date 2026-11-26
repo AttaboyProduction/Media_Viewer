@@ -289,7 +289,7 @@ def _enqueue_probe_duplicate(
     tag_names = {tag.name for tag in post.tags}
     if _excluded(tag_names, job.exclude_tags):
         return None
-    if job.tags and not _post_matches_tags(tag_names, job.tags, job.tag_mode):
+    if not _post_matches_job_tags(tag_names, job):
         return None
     if job.media_type and post.media_type != job.media_type:
         return None
@@ -984,6 +984,24 @@ def _post_matches_tags(post_tag_names: set[str], required: list[str], mode: str 
     return all(tag in post_tag_names for tag in required)
 
 
+def _post_matches_job_tags(post_tag_names: set[str], job: ScrapeJob) -> bool:
+    constraints = job.tag_constraints
+    if constraints:
+        if len(constraints) == 1:
+            mode, tags = constraints[0]
+            return _post_matches_tags(post_tag_names, tags, mode)
+        if job.tag_mode == "or":
+            return any(
+                _post_matches_tags(post_tag_names, tags, mode) for mode, tags in constraints
+            )
+        return all(
+            _post_matches_tags(post_tag_names, tags, mode) for mode, tags in constraints
+        )
+    if job.tags:
+        return _post_matches_tags(post_tag_names, job.tags, job.tag_mode)
+    return True
+
+
 def _excluded(post_tag_names: set[str], extra_exclude: list[str]) -> bool:
     blocked = {normalize_tag_name(tag) for tag in extra_exclude}
     return bool(blocked) and any(tag in post_tag_names for tag in blocked)
@@ -1111,7 +1129,7 @@ def _process_post_url(
             if _excluded(tag_names, job.exclude_tags):
                 _complete_skip(post_url, "excluded_tag")
                 return "ok"
-            if job.tags and not _post_matches_tags(tag_names, job.tags, job.tag_mode):
+            if not _post_matches_job_tags(tag_names, job):
                 _complete_skip(post_url, "tag_mismatch")
                 return "ok"
             if job.media_type and post.media_type != job.media_type:

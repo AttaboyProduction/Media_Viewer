@@ -27,21 +27,27 @@ export default function TagSearchSuggest({
   items,
   query,
   onPick,
+  selectedNames,
 }: {
   items: SuggestItem[]
   query: string
   onPick?: (name: string) => void
+  /** Names already chosen in the parent picker — shown bold in the list. */
+  selectedNames?: ReadonlySet<string>
 }) {
   const shown = items.slice(0, 8)
   if (!query.trim() || shown.length === 0) return null
   return (
     <ul className="tag-suggest" role="listbox">
-      {shown.map((item) => (
+      {shown.map((item) => {
+        const picked = selectedNames?.has(item.name) ?? false
+        return (
         <li key={item.id}>
           <button
             type="button"
-            className="tag-suggest-row"
+            className={`tag-suggest-row${picked ? ' tag-suggest-row--selected' : ''}`}
             style={item.color ? { color: item.color } : undefined}
+            aria-selected={picked}
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onPick?.(item.name)}
           >
@@ -51,7 +57,8 @@ export default function TagSearchSuggest({
             )}
           </button>
         </li>
-      ))}
+        )
+      })}
     </ul>
   )
 }

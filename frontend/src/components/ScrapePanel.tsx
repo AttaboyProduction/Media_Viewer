@@ -33,20 +33,25 @@ import MediaDetailModal from './MediaDetailModal'
 import ScrapeSourcePanel from './ScrapeSourcePanel'
 import { ensureScrapeNotificationPermission } from '../utils/scrapeNotification'
 import { scrapeSkipReasonLabel } from '../utils/scrapeSkipReasons'
-import { SearchableTagSingleSelect } from './TagChipSelect'
+import ScrapeFilterTagsField from './ScrapeFilterTagsField'
 
 interface FilterRow {
   id: string
   type: ScrapeFilterType
   value: string
+  tagNames: string[]
   dateFrom: string
   dateTo: string
 }
 
+function isTagFilterType(type: ScrapeFilterType): boolean {
+  return type === 'tag_or' || type === 'tag_and' || type === 'tag'
+}
+
 let rowSeq = 1
 
-function newRow(type: ScrapeFilterType = 'tag'): FilterRow {
-  return { id: `f${rowSeq++}`, type, value: '', dateFrom: '', dateTo: '' }
+function newRow(type: ScrapeFilterType = 'tag_or'): FilterRow {
+  return { id: `f${rowSeq++}`, type, value: '', tagNames: [], dateFrom: '', dateTo: '' }
 }
 
 /** Only one date range / media type; tags and URLs may repeat. */
@@ -73,18 +78,32 @@ function toFilters(rows: FilterRow[]): ScrapeFilter[] {
       }
       continue
     }
+    if (row.type === 'tag_or' || row.type === 'tag_and') {
+      if (row.tagNames.length > 0) {
+        out.push({ type: row.type, value: row.tagNames.join('\n') })
+      }
+      continue
+    }
+    if (row.type === 'tag') {
+      const names =
+        row.tagNames.length > 0
+          ? row.tagNames
+          : row.value.trim()
+            ? [row.value.trim()]
+            : []
+      if (names.length > 0) {
+        out.push({ type: 'tag_or', value: names.join('\n') })
+      }
+      continue
+    }
     if (!row.value.trim()) continue
     out.push({ type: row.type, value: row.value.trim() })
   }
   return out
 }
 
-function joinerLabel(
-  prev: FilterRow,
-  curr: FilterRow,
-  tagMode: 'and' | 'or',
-): string {
-  if (prev.type === 'tag' && curr.type === 'tag') {
+function joinerLabel(prev: FilterRow, curr: FilterRow, tagMode: 'and' | 'or'): string {
+  if (isTagFilterType(prev.type) && isTagFilterType(curr.type)) {
     return tagMode === 'or' ? 'OR' : 'AND'
   }
   return '+'
@@ -151,7 +170,7 @@ function comparePanels(a: ScrapeSourcePanelData, b: ScrapeSourcePanelData): numb
 export default function ScrapePanel({ onFinished }: { onFinished: () => void }) {
   const queryClient = useQueryClient()
   const { confirm } = useConfirm()
-  const [rows, setRows] = useState<FilterRow[]>([newRow('tag')])
+  const [rows, setRows] = useState<FilterRow[]>([newRow('tag_or')])
   const [tagMode, setTagMode] = useState<'and' | 'or'>('and')
   const [sort, setSort] = useState<'date_desc' | 'date_asc'>('date_desc')
   const [limit, setLimit] = useState(0)
@@ -366,7 +385,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     [rows],
   )
 
-  const tagRowCount = useMemo(() => rows.filter((row) => row.type === 'tag').length, [rows])
+  const tagRowCount = useMemo(() => rows.filter((row) => isTagFilterType(row.type)).length, [rows])
   const hasUrlFilters = useMemo(
     () => rows.some((row) => row.type === 'url' && splitUrlValues(row.value).length > 0),
     [rows],
@@ -382,7 +401,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
       if (prev.length === 1) {
         // Keep the last row; clear its values instead of deleting it.
         return prev.map((row) =>
-          row.id === id ? { ...row, value: '', dateFrom: '', dateTo: '' } : row,
+          row.id === id ? { ...row, value: '', tagNames: [], dateFrom: '', dateTo: '' } : row,
         )
       }
       return prev.filter((row) => row.id !== id)
@@ -968,7 +987,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
         <>
       <div className="scrape-tag-mode">
         <span className="scrape-tag-mode-label">Filters</span>
-        <div className="scrape-tag-mode-toggle" role="group" aria-label="How multiple Tag rows combine">
+        <div className="scrape-tag-mode-toggle" role="group" aria-label="How multiple tag rows combine">
           <button
             type="button"
             className={`btn btn-small${tagMode === 'and' ? ' active' : ''}`}
@@ -986,48 +1005,64 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
         </div>
         <span className="scrape-tag-mode-hint">
           {tagRowCount < 2
-            ? 'Add Tag, URL, date, or media-type rows. AND / OR applies when you have multiple Tag rows.'
+            ? 'Add tag, URL, date, or media-type rows. AND / OR applies when you have multiple tag rows.'
             : tagMode === 'and'
-              ? 'Posts must include every listed tag; URL, date, and media-type filters still apply.'
-              : 'Posts matching any listed tag; URL, date, and media-type filters still apply.'}
+              ? 'Every tag row must match; URL, date, and media-type filters still apply.'
+              : 'A post may match any tag row; URL, date, and media-type filters still apply.'}
+          {' '}
+          Tags — or / Tags — and control tags inside each row.
         </span>
       </div>
       <div className="filter-builder">
         {rows.map((row, index) => (
-          <div className="filter-row" key={row.id}>
+          <div
+            className={`filter-row${isTagFilterType(row.type) ? ' filter-row--tags' : ''}`}
+            key={row.id}
+          >
             {index > 0 && (
-              <span className={`filter-and${rows[index - 1].type === 'tag' && row.type === 'tag' ? ' filter-joiner-tags' : ''}`}>
+              <span
+                className={`filter-and${
+                  isTagFilterType(rows[index - 1].type) && isTagFilterType(row.type)
+                    ? ' filter-joiner-tags'
+                    : ''
+                }`}
+              >
                 {joinerLabel(rows[index - 1], row, tagMode)}
               </span>
             )}
-            <select
-              value={row.type}
-              onChange={(e) => {
-                const type = e.target.value as ScrapeFilterType
-                updateRow(row.id, { type, value: '', dateFrom: '', dateTo: '' })
-              }}
-            >
-              <option value="tag">Tag</option>
-              <option
-                value="date_range"
-                disabled={usedUnique.has('date_range') && row.type !== 'date_range'}
-              >
-                Date &amp; time
-              </option>
-              <option value="url">URL</option>
-              <option
-                value="media_type"
-                disabled={usedUnique.has('media_type') && row.type !== 'media_type'}
-              >
-                Media type
-              </option>
-            </select>
-            {row.type === 'tag' && (
-              <input
-                value={row.value}
-                onChange={(e) => updateRow(row.id, { value: e.target.value })}
-                placeholder="Type any site tag or pick below"
+            {isTagFilterType(row.type) ? (
+              <ScrapeFilterTagsField
+                rowType={row.type === 'tag_and' ? 'tag_and' : 'tag_or'}
+                onRowTypeChange={(type) =>
+                  updateRow(row.id, { type, value: '', tagNames: row.tagNames })
+                }
+                tags={tags ?? []}
+                selectedNames={row.tagNames}
+                onChange={(names) => updateRow(row.id, { tagNames: names })}
+                onRemove={() => removeRow(row.id)}
               />
+            ) : (
+              <select
+                value={row.type}
+                onChange={(e) => {
+                  const type = e.target.value as ScrapeFilterType
+                  updateRow(row.id, { type, value: '', tagNames: [], dateFrom: '', dateTo: '' })
+                }}
+              >
+                <option
+                  value="date_range"
+                  disabled={usedUnique.has('date_range') && row.type !== 'date_range'}
+                >
+                  Date &amp; time
+                </option>
+                <option value="url">URL</option>
+                <option
+                  value="media_type"
+                  disabled={usedUnique.has('media_type') && row.type !== 'media_type'}
+                >
+                  Media type
+                </option>
+              </select>
             )}
             {row.type === 'url' && (
               <UrlFilterField
@@ -1062,29 +1097,19 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                 />
               </>
             )}
-            <button type="button" className="btn" onClick={() => removeRow(row.id)}>
-              Remove
-            </button>
-            {row.type === 'tag' && (
-              <div className="filter-row-tag-picker">
-                <SearchableTagSingleSelect
-                  tags={tags ?? []}
-                  selectedId={(tags ?? []).find((tag) => tag.name === row.value.trim())?.id ?? ''}
-                  onChange={(id) =>
-                    updateRow(row.id, {
-                      value: id === '' ? '' : ((tags ?? []).find((tag) => tag.id === id)?.name ?? ''),
-                    })
-                  }
-                  searchPlaceholder="Search library tags..."
-                  chipsOnlyWhileSearching
-                />
-              </div>
+            {!isTagFilterType(row.type) && (
+              <button type="button" className="btn" onClick={() => removeRow(row.id)}>
+                Remove
+              </button>
             )}
           </div>
         ))}
         <div className="filter-add-row">
-          <button type="button" className="btn btn-add" onClick={() => addRow('tag')}>
-            + Tag
+          <button type="button" className="btn btn-add" onClick={() => addRow('tag_or')}>
+            + Tags — or
+          </button>
+          <button type="button" className="btn btn-add" onClick={() => addRow('tag_and')}>
+            + Tags — and
           </button>
           <button type="button" className="btn btn-add" onClick={() => addRow('url')}>
             + URL

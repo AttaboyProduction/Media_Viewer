@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { fetchTagGroups } from '../api/client'
 import { useTagSearch, type SearchableTag } from '../hooks/useTagSearch'
@@ -6,6 +6,8 @@ import { registerEscapeHandler } from '../utils/escapeStack'
 import { matchesTagSearch, tagBelongsToGroups } from '../utils/tagSort'
 import TagSearchFilters, { GroupFilterPanel } from './TagSearchFilters'
 import TagSearchSuggest from './TagSearchSuggest'
+import FloatingPopover from './FloatingPopover'
+import TagSearchSuggestFloating from './TagSearchSuggestFloating'
 
 interface Props<T extends SearchableTag> {
   items: T[]
@@ -31,6 +33,12 @@ interface Props<T extends SearchableTag> {
   /** Short labels for the viewer sidebar. */
   compact?: boolean
   onSuggestPick?: (name: string) => void
+  /** Always show the search field on the toolbar row (no Search tags toggle). */
+  pinnedSearch?: boolean
+  /** With pinned search, float the suggest list under the field instead of a full-width row. */
+  suggestOverlay?: boolean
+  /** Tag names already selected in the parent — bold in the suggest list. */
+  suggestSelectedNames?: string[]
 }
 
 /** Shared collapsible search + group-filter toolbar for tag lists and pickers. */
@@ -47,9 +55,15 @@ export default function TagListSearch<T extends SearchableTag>({
   onTagModeChange,
   compact = false,
   onSuggestPick,
+  pinnedSearch = false,
+  suggestOverlay = false,
+  suggestSelectedNames,
 }: Props<T>) {
-  const [searchOpen, setSearchOpen] = useState(false)
+  const searchAnchorRef = useRef<HTMLDivElement>(null)
+  const groupSearchBtnRef = useRef<HTMLButtonElement>(null)
+  const [searchOpen, setSearchOpen] = useState(pinnedSearch)
   const [groupSearchOpen, setGroupSearchOpen] = useState(false)
+  const [tagSuggestOpen, setTagSuggestOpen] = useState(false)
   const [includeAllGroupTags, setIncludeAllGroupTags] = useState(false)
   const { search, matchMode, groupFilterIds, matches, active, filterProps } = useTagSearch()
   const { data: groups = [] } = useQuery({
@@ -58,9 +72,12 @@ export default function TagListSearch<T extends SearchableTag>({
     staleTime: 60_000,
   })
 
-  const textActive = searchOpen && search.trim().length > 0
+  const searchExpanded = pinnedSearch || searchOpen
+  const textActive = searchExpanded && search.trim().length > 0
   const groupActive = groupFilterIds.size > 0
-  const filtersActive = separateGroupSearch ? textActive || groupActive : searchOpen && active
+  const filtersActive = separateGroupSearch
+    ? textActive || groupActive
+    : searchExpanded && active
   // Text search always uses the library. A group filter uses the current page until Include all tags.
   const useCatalog =
     Boolean(searchCatalog) &&
@@ -103,21 +120,86 @@ export default function TagListSearch<T extends SearchableTag>({
     return registerEscapeHandler(() => setGroupSearchOpen(false))
   }, [groupSearchOpen])
 
+  useEffect(() => {
+    if (textActive) setTagSuggestOpen(true)
+  }, [search, textActive])
+
   const showGroupSearch = separateGroupSearch && groups.length > 0
+
+  const suggestSelectedSet = useMemo(
+    () => (suggestSelectedNames?.length ? new Set(suggestSelectedNames) : undefined),
+    [suggestSelectedNames],
+  )
+
+  const suggestListItems = useMemo(
+    () =>
+      filteredItems.map((tag, index) => {
+        const extra = tag as T & { id?: number; color?: string; usage_count?: number }
+        return {
+          id: extra.id ?? `${tag.name}-${index}`,
+          name: tag.name,
+          color: extra.color,
+          usage_count: extra.usage_count,
+        }
+      }),
+    [filteredItems],
+  )
+
+  const suggestDropdown =
+    textActive && onSuggestPick && !disabled ? (
+      <TagSearchSuggest
+        query={search}
+        items={suggestListItems}
+        onPick={onSuggestPick}
+        selectedNames={suggestSelectedSet}
+      />
+    ) : null
 
   return (
     <>
-      <div className="tag-filter-toolbar">
-        <button
-          type="button"
-          className={`btn btn-small${searchOpen ? ' btn-primary' : ''}`}
-          disabled={disabled}
-          onClick={() => setSearchOpen((open) => !open)}
-          aria-expanded={searchOpen}
-          aria-label={searchOpen ? 'Hide tag search' : compact ? 'Tag search' : 'Search tags'}
-        >
-          {compact ? (searchOpen ? 'Hide' : 'Tag search') : searchOpen ? 'Hide search' : 'Search tags'}
-        </button>
+      <div
+        className={`tag-filter-toolbar${pinnedSearch ? ' tag-filter-toolbar--pinned' : ''}`}
+      >
+        {pinnedSearch ? (
+          !disabled && (
+            <div
+              ref={suggestOverlay ? searchAnchorRef : undefined}
+              className={`tag-filter-toolbar-search-grow${
+                suggestOverlay ? ' tag-filter-toolbar-search-anchor' : ''
+              }`}
+              onMouseDown={() => {
+                if (suggestOverlay && textActive) setTagSuggestOpen(true)
+              }}
+            >
+              <TagSearchFilters
+                groups={groups}
+                placeholder={placeholder}
+                showGroups={!separateGroupSearch}
+                stackedSearch={false}
+                {...filterProps}
+                onSearchKeyDown={(event) => {
+                  if (event.key !== 'Enter' || !onSuggestPick) return
+                  event.preventDefault()
+                  const first = filteredItems[0]
+                  if (!first) return
+                  onSuggestPick(first.name)
+                  filterProps.onSearchChange('')
+                }}
+              />
+            </div>
+          )
+        ) : (
+          <button
+            type="button"
+            className={`btn btn-small${searchOpen ? ' btn-primary' : ''}`}
+            disabled={disabled}
+            onClick={() => setSearchOpen((open) => !open)}
+            aria-expanded={searchOpen}
+            aria-label={searchOpen ? 'Hide tag search' : compact ? 'Tag search' : 'Search tags'}
+          >
+            {compact ? (searchOpen ? 'Hide' : 'Tag search') : searchOpen ? 'Hide search' : 'Search tags'}
+          </button>
+        )}
         {onTagModeChange && (
           <div className="search-match-toggle" role="group" aria-label="How selected tags combine">
             <button
@@ -140,6 +222,7 @@ export default function TagListSearch<T extends SearchableTag>({
         )}
         {showGroupSearch && (
           <button
+            ref={suggestOverlay ? groupSearchBtnRef : undefined}
             type="button"
             className={`btn btn-small${groupSearchOpen ? ' btn-primary' : ''}`}
             onClick={() => setGroupSearchOpen((open) => !open)}
@@ -176,7 +259,32 @@ export default function TagListSearch<T extends SearchableTag>({
         )}
       </div>
 
-      {showGroupSearch && groupSearchOpen && (
+      {showGroupSearch && groupSearchOpen && suggestOverlay && (
+        <FloatingPopover
+          open
+          anchorRef={groupSearchBtnRef}
+          className="tag-filter-group-panel-floating tag-add-panel tag-filter-search-panel"
+          minWidth={320}
+          maxWidth={520}
+          onClickOutside={() => setGroupSearchOpen(false)}
+        >
+          <GroupFilterPanel
+            groups={groups}
+            groupFilterIds={filterProps.groupFilterIds}
+            onToggleGroup={filterProps.onToggleGroup}
+            onClearGroups={filterProps.onClearGroups}
+            stackedSearch={compact}
+            includeAllTags={includeAllGroupTags}
+            onIncludeAllTags={
+              searchCatalog && !textActive && groupActive
+                ? () => setIncludeAllGroupTags((on) => !on)
+                : undefined
+            }
+          />
+        </FloatingPopover>
+      )}
+
+      {showGroupSearch && groupSearchOpen && !suggestOverlay && (
         <div className="tag-add-panel tag-filter-search-panel">
           <GroupFilterPanel
             groups={groups}
@@ -194,7 +302,7 @@ export default function TagListSearch<T extends SearchableTag>({
         </div>
       )}
 
-      {searchOpen && !disabled && (
+      {!pinnedSearch && searchOpen && !disabled && (
         <div className="tag-add-panel tag-filter-search-panel">
           <TagSearchFilters
             groups={groups}
@@ -224,9 +332,25 @@ export default function TagListSearch<T extends SearchableTag>({
                 }
               })}
               onPick={onSuggestPick}
+              selectedNames={suggestSelectedSet}
             />
           )}
         </div>
+      )}
+
+      {suggestOverlay && textActive && tagSuggestOpen && onSuggestPick && !disabled && (
+        <TagSearchSuggestFloating
+          anchorRef={searchAnchorRef}
+          query={search}
+          items={suggestListItems}
+          onPick={onSuggestPick}
+          onClickOutside={() => setTagSuggestOpen(false)}
+          selectedNames={suggestSelectedSet}
+        />
+      )}
+
+      {pinnedSearch && !suggestOverlay && suggestDropdown && (
+        <div className="tag-filter-search-suggest-wrap">{suggestDropdown}</div>
       )}
 
       {children(filteredItems, filtersActive, textActive)}

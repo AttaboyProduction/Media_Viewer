@@ -195,7 +195,7 @@ class TagGroupMergeRequest(BaseModel):
 
 
 class ScrapeFilterIn(BaseModel):
-    type: Literal["tag", "date_range", "url", "media_type"]
+    type: Literal["tag", "tag_or", "tag_and", "date_range", "url", "media_type"]
     value: str = ""
 
 

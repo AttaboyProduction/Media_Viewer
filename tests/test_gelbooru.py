@@ -128,14 +128,20 @@ class ListSeedTests(unittest.TestCase):
     def test_and_or_and_empty_filters(self) -> None:
         from backend.app.schemas import ScrapeFilterIn
 
-        and_job = self._job(filters=[ScrapeFilterIn(type="tag", value="djcomps"), ScrapeFilterIn(type="tag", value="solo")])
+        and_job = self._job(
+            filters=[ScrapeFilterIn(type="tag_and", value="djcomps\nsolo")],
+        )
         self.assertEqual(
             and_job.seed_urls,
             ["https://rule34.xxx/index.php?page=post&s=list&tags=djcomps%20solo"],
         )
+        and_legacy = self._job(
+            filters=[ScrapeFilterIn(type="tag", value="djcomps"), ScrapeFilterIn(type="tag", value="solo")],
+            tag_mode="and",
+        )
+        self.assertEqual(and_legacy.seed_urls, and_job.seed_urls)
         or_job = self._job(
-            filters=[ScrapeFilterIn(type="tag", value="a"), ScrapeFilterIn(type="tag", value="b")],
-            tag_mode="or",
+            filters=[ScrapeFilterIn(type="tag_or", value="a\nb")],
         )
         self.assertEqual(
             or_job.seed_urls,
@@ -144,6 +150,11 @@ class ListSeedTests(unittest.TestCase):
                 "https://rule34.xxx/index.php?page=post&s=list&tags=b",
             ],
         )
+        or_legacy = self._job(
+            filters=[ScrapeFilterIn(type="tag", value="a"), ScrapeFilterIn(type="tag", value="b")],
+            tag_mode="or",
+        )
+        self.assertEqual(or_legacy.seed_urls, or_job.seed_urls)
         empty = self._job(filters=[])
         self.assertEqual(empty.seed_urls, [SITE["default_gallery_url"]])
 

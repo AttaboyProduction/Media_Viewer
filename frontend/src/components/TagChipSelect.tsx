@@ -34,6 +34,14 @@ interface MultiProps {
   chipsOnlyWhileSearching?: boolean
   /** When false, only the Search tags toolbar (and optional actions) — no chip list. */
   showChipList?: boolean
+  /** Group filter in its own Search groups panel (media grid style). */
+  separateGroupSearch?: boolean
+  /** Full tag catalog for search while the chip list stays page-scoped. */
+  searchCatalog?: Tag[]
+  pinnedSearch?: boolean
+  /** Suggest list floats under the search field (scrape filters). */
+  suggestOverlay?: boolean
+  panelClassName?: string
 }
 
 export function SearchableTagMultiSelect({
@@ -47,6 +55,11 @@ export function SearchableTagMultiSelect({
   showSelectedPanel = true,
   chipsOnlyWhileSearching = false,
   showChipList = true,
+  separateGroupSearch = false,
+  searchCatalog,
+  pinnedSearch = false,
+  suggestOverlay = false,
+  panelClassName,
 }: MultiProps) {
   const { data: appSettings } = useQuery({
     queryKey: ['app-settings'],
@@ -69,8 +82,18 @@ export function SearchableTagMultiSelect({
 
   const showPanel = showSelectedPanel && displayMode === 'panel' && panel.length > 0
 
+  const suggestSelectedNames = useMemo(
+    () =>
+      selectedIds
+        .map((id) => tags.find((t) => t.id === id)?.name)
+        .filter((name): name is string => Boolean(name)),
+    [selectedIds, tags],
+  )
+
   return (
-    <div className="tag-picker-select-panel">
+    <div
+      className={`tag-picker-select-panel${panelClassName ? ` ${panelClassName}` : ''}`}
+    >
       {showPanel && (
         <div className="tag-picker-selected" aria-label="Selected tags">
           {panel.map((tag) => (
@@ -85,9 +108,15 @@ export function SearchableTagMultiSelect({
       )}
       <TagListSearch
         items={list}
+        searchCatalog={searchCatalog ?? tags}
+        separateGroupSearch={separateGroupSearch}
+        pinnedSearch={pinnedSearch}
+        suggestOverlay={suggestOverlay}
         placeholder={searchPlaceholder}
         toolbarActions={toolbarActions}
         disabled={candidates.length === 0}
+        onClearSelected={selectedIds.length > 0 ? () => onChange([]) : undefined}
+        suggestSelectedNames={suggestSelectedNames}
         onSuggestPick={(name) => {
           const tag = candidates.find((item) => item.name === name)
           if (!tag) return
@@ -165,6 +194,12 @@ export function SearchableTagSingleSelect({
 
   const showPanel = displayMode === 'panel' && panel.length > 0
 
+  const suggestSelectedNames = useMemo(() => {
+    if (selectedId === '') return []
+    const name = tags.find((t) => t.id === selectedId)?.name
+    return name ? [name] : []
+  }, [selectedId, tags])
+
   return (
     <div className="tag-picker-select-panel">
       {showPanel && (
@@ -184,6 +219,7 @@ export function SearchableTagSingleSelect({
         placeholder={searchPlaceholder}
         toolbarActions={toolbarActions}
         disabled={candidates.length === 0}
+        suggestSelectedNames={suggestSelectedNames}
         onSuggestPick={(name) => {
           const tag = candidates.find((item) => item.name === name)
           if (tag) onChange(tag.id)
