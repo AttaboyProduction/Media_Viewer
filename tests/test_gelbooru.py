@@ -47,6 +47,22 @@ class PostIdTests(unittest.TestCase):
             )
 
 
+class ParseListTests(unittest.TestCase):
+    def test_index_list_rejects_lone_post_dict(self) -> None:
+        lone = {"id": 1, "file_url": "https://cdn.example/a.png", "tags": "a"}
+        self.assertIsNone(gelbooru.parse_post_index_list(lone))
+        self.assertEqual(gelbooru.parse_post_record(lone), lone)
+
+    def test_index_list_accepts_wrapped_and_array(self) -> None:
+        rows = [{"id": 1, "file_url": "https://a"}, {"id": 2, "file_url": "https://b"}]
+        self.assertEqual(gelbooru.parse_post_index_list(rows), rows)
+        self.assertEqual(gelbooru.parse_post_index_list({"post": rows}), rows)
+        self.assertEqual(
+            gelbooru.parse_post_index_list({"0": rows[0], "1": rows[1]}),
+            rows,
+        )
+
+
 class FileUrlTests(unittest.TestCase):
     def test_original_file_url_and_tag_groups(self) -> None:
         def fake(url: str, *, referer: str):
@@ -131,13 +147,55 @@ class ListSeedTests(unittest.TestCase):
         empty = self._job(filters=[])
         self.assertEqual(empty.seed_urls, [SITE["default_gallery_url"]])
 
+    def test_empty_api_list_falls_through_to_html(self) -> None:
+        seen: list[str] = []
+
+        def fake_html(client, site, gallery_url, *, sort, should_stop):
+            del client, site, gallery_url, sort, should_stop
+            seen.append("html")
+            yield "https://rule34.xxx/index.php?page=post&s=view&id=1"
+
+        with (
+            patch.object(gelbooru, "_api_listing_enabled", return_value=True),
+            patch.object(gelbooru, "_ApiPass") as pass_cls,
+            patch.object(gelbooru, "iter_html_posts", side_effect=fake_html),
+        ):
+            inst = pass_cls.return_value
+            inst.saw_list = True
+            inst.yielded = 0
+            inst.run.return_value = iter(())
+            urls = list(
+                gelbooru.iter_posts(
+                    object(),
+                    SITE,
+                    "https://rule34.xxx/index.php?page=post&s=list&tags=djcomps",
+                    sort="date_desc",
+                    should_stop=None,
+                )
+            )
+        self.assertEqual(seen, ["html"])
+        self.assertEqual(urls, ["https://rule34.xxx/index.php?page=post&s=view&id=1"])
+
+    def test_requires_auth_uses_html_without_credentials(self) -> None:
+        need_auth = {**SITE, "requires_api_auth": True, "api_user_id": "", "api_key": ""}
+        seen: list[str] = []
+
+        def fake_html(client, site, gallery_url, *, sort, should_stop):
+            del client, site, gallery_url, sort, should_stop
+            seen.append("html")
+            yield from ()
+
+        with patch.object(gelbooru, "iter_html_posts", side_effect=fake_html):
+            list(gelbooru.iter_posts(object(), need_auth, "https://example/list", sort="date_desc", should_stop=None))
+        self.assertEqual(seen, ["html"])
+
     def test_oldest_sort_tag_on_the_api_list(self) -> None:
         seen: list[str] = []
 
         def fake(url: str, *, referer: str):
             del referer
             seen.append(url)
-            return []
+            return [{"id": 9, "file_url": "https://cdn.example/x.jpg", "tags": "djcomps"}]
 
         with patch.object(gelbooru, "fetch_json", side_effect=fake):
             urls = list(
@@ -149,7 +207,7 @@ class ListSeedTests(unittest.TestCase):
                     should_stop=None,
                 )
             )
-        self.assertEqual(urls, [])
+        self.assertEqual(len(urls), 1)
         self.assertIn("sort%3Aid%3Aasc", seen[0])
         self.assertIn("djcomps", seen[0])
 

@@ -756,6 +756,7 @@ function SiteApiAuthSettingsBlock() {
     queryFn: fetchSiteApiAuth,
   })
   const [drafts, setDrafts] = useState<Record<string, { api_user_id: string; api_key: string }>>({})
+  const [apiKeyVisible, setApiKeyVisible] = useState<Record<string, boolean>>({})
 
   useEffect(() => {
     const next: Record<string, { api_user_id: string; api_key: string }> = {}
@@ -814,23 +815,52 @@ function SiteApiAuthSettingsBlock() {
               />
             </SettingsOption>
             <SettingsOption label="API key">
-              <input
-                type="password"
-                autoComplete="off"
-                value={draft.api_key}
-                onChange={(e) =>
-                  setDrafts((prev) => ({
-                    ...prev,
-                    [row.site_id]: { ...draft, api_key: e.target.value },
-                  }))
-                }
-                onBlur={() => void saveRow(row)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    e.currentTarget.blur()
+              <div className="settings-secret-input">
+                <input
+                  type={apiKeyVisible[row.site_id] ? 'text' : 'password'}
+                  autoComplete="off"
+                  value={draft.api_key}
+                  onChange={(e) =>
+                    setDrafts((prev) => ({
+                      ...prev,
+                      [row.site_id]: { ...draft, api_key: e.target.value },
+                    }))
                   }
-                }}
-              />
+                  onBlur={() => void saveRow(row)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.currentTarget.blur()
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="btn btn-small settings-secret-toggle"
+                  aria-label={apiKeyVisible[row.site_id] ? 'Hide API key' : 'Show API key'}
+                  aria-pressed={Boolean(apiKeyVisible[row.site_id])}
+                  onClick={() =>
+                    setApiKeyVisible((prev) => ({
+                      ...prev,
+                      [row.site_id]: !prev[row.site_id],
+                    }))
+                  }
+                >
+                  <span className="settings-secret-toggle-icon" aria-hidden>
+                    {apiKeyVisible[row.site_id] ? (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M3 3l18 18" />
+                        <path d="M10.58 10.58a2 2 0 0 0 2.84 2.84" />
+                        <path d="M9.88 5.09A10.9 10.9 0 0 1 12 5c5.5 0 9.5 4.5 10.5 7a11.6 11.6 0 0 1-2.2 3.6M6.6 6.6A11.6 11.6 0 0 0 1.5 12c1 2.5 5 7 10.5 7 .7 0 1.38-.07 2.05-.2" />
+                      </svg>
+                    ) : (
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M1.5 12s4-7 10.5-7 10.5 7 10.5 7-4 7-10.5 7S1.5 12 1.5 12z" />
+                        <circle cx="12" cy="12" r="3" />
+                      </svg>
+                    )}
+                  </span>
+                </button>
+              </div>
             </SettingsOption>
           </div>
         )

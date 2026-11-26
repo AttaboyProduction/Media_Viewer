@@ -17,6 +17,10 @@ export type DevicePrefKey =
   | 'viewer_tag_layout'
   | 'viewer_sort'
   | 'viewer_random_seed'
+  | 'viewer_filter_tags'
+  | 'viewer_tag_mode'
+
+export type ViewerTagMode = 'and' | 'or'
 
 export type DevicePrefs = {
   viewer_page_size: number
@@ -27,6 +31,9 @@ export type DevicePrefs = {
   viewer_sort: ViewerSort
   /** 0 = unset; used only while viewer_sort is random. */
   viewer_random_seed: number
+  /** Comma-separated tag names for the main viewer filter. */
+  viewer_filter_tags: string
+  viewer_tag_mode: ViewerTagMode
 }
 
 const STORAGE_KEY = 'scrap_device_prefs'
@@ -39,6 +46,7 @@ const VIEWER_SORTS = new Set<ViewerSort>([
   'rating_asc',
   'random',
 ])
+const VIEWER_TAG_MODES = new Set<ViewerTagMode>(['and', 'or'])
 
 function readBag(): Partial<DevicePrefs> {
   try {
@@ -106,6 +114,14 @@ function parseDevicePref<K extends DevicePrefKey>(
       ? (raw as DevicePrefs[K])
       : null
   }
+  if (key === 'viewer_filter_tags') {
+    return typeof raw === 'string' ? (raw as DevicePrefs[K]) : null
+  }
+  if (key === 'viewer_tag_mode') {
+    return typeof raw === 'string' && VIEWER_TAG_MODES.has(raw as ViewerTagMode)
+      ? (raw as DevicePrefs[K])
+      : null
+  }
   const n = asInt(raw)
   if (n === null) return null
   if (key === 'tags_page_size' && n === 0) return 0 as DevicePrefs[K]
@@ -118,5 +134,7 @@ function parseDevicePref<K extends DevicePrefKey>(
 
 export function defaultDevicePref<K extends DevicePrefKey>(key: K): DevicePrefs[K] {
   if (key === 'viewer_random_seed') return 0 as DevicePrefs[K]
+  if (key === 'viewer_filter_tags') return '' as DevicePrefs[K]
+  if (key === 'viewer_tag_mode') return 'and' as DevicePrefs[K]
   return DEFAULT_APP_SETTINGS[key as keyof typeof DEFAULT_APP_SETTINGS] as DevicePrefs[K]
 }

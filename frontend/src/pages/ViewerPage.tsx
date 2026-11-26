@@ -5,7 +5,6 @@ import {
   fetchDuplicates,
   fetchMedia,
   patchAppSettings,
-  type TagMatchMode,
 } from '../api/client'
 import { useResolveDuplicates } from '../context/ResolveDuplicatesContext'
 import { useApplyAppDefaults } from '../hooks/useAppDefaults'
@@ -30,7 +29,7 @@ import {
 } from '../types/appSettings'
 import type { MediaItem } from '../types'
 import { excludeTagsForMediaQuery } from '../utils/contentHide'
-import { parseCommaSeparatedTags } from '../utils/tagList'
+import { joinCommaSeparatedTags, parseCommaSeparatedTags } from '../utils/tagList'
 import { paginationTotalPages } from '../utils/pagination'
 import { columnCountForViewerGrid } from '../utils/viewerGrid'
 import { previewSizeForTile, type PreviewSize } from '../utils/mediaPreview'
@@ -182,8 +181,20 @@ export default function ViewerPage() {
   const [page, setPage] = useState(() => pageFromSearch(searchParams))
   /** Frozen max media id for this browse session; cleared on page 1 / filter / sort. */
   const [listCursor, setListCursor] = useState<number | null>(() => cursorFromSearch(searchParams))
-  const [selectedTags, setSelectedTags] = useState<string[]>([])
-  const [tagMode, setTagMode] = useState<TagMatchMode>('and')
+  const [filterTagsRaw, setFilterTagsRaw] = useDevicePref('viewer_filter_tags', { ready: true })
+  const [tagMode, setTagMode] = useDevicePref('viewer_tag_mode', { ready: true })
+  const selectedTags = useMemo(
+    () => parseCommaSeparatedTags(filterTagsRaw),
+    [filterTagsRaw],
+  )
+  const setSelectedTags = useCallback(
+    (next: string[] | ((prev: string[]) => string[])) => {
+      const prev = parseCommaSeparatedTags(filterTagsRaw)
+      const resolved = typeof next === 'function' ? next(prev) : next
+      setFilterTagsRaw(joinCommaSeparatedTags(resolved))
+    },
+    [filterTagsRaw, setFilterTagsRaw],
+  )
   const [tagsFilterExpanded, setTagsFilterExpanded] = useState(false)
   const [mediaType, setMediaType] = useState('')
   type RatingFilter = '' | 'unrated' | number

@@ -13,9 +13,18 @@ from urllib.parse import urlparse
 
 from backend.app.config import settings
 
-# Tried, but not downloaded. Intentional skips (already in the library, tag
-# filters, identical files) are not kept.
+# Tried, but not downloaded. Everything in ``PERSIST_UNFINISHED_REASONS`` is
+# written to scrape_leftovers.json so Skipped survives Reload / restart.
 RETRY_REASONS = {"error", "cancelled", "unavailable", "interrupted"}
+PERSIST_UNFINISHED_REASONS = RETRY_REASONS | {
+    "already_have",
+    "identical",
+    "duplicate_hash",
+    "excluded_tag",
+    "tag_mismatch",
+    "media_type",
+    "date_range",
+}
 
 _lock = threading.Lock()
 # One process owns this file. Keep the last copy so a scrape does not re-read it
@@ -30,14 +39,19 @@ def leftovers_path():
 
 
 def identity(url: str) -> str:
-    """Host and path only, so scheme, www, and query do not duplicate a page."""
+    """Stable page key: post id when known, else host+path (scheme/www/query ignored)."""
+    from backend.scraper.gallery import extract_post_id
+
     parsed = urlparse((url or "").strip())
     host = (parsed.hostname or "").lower()
     if host.startswith("www."):
         host = host[4:]
-    path = (parsed.path or "/").rstrip("/") or "/"
     if not host:
         return ""
+    post_id = extract_post_id(url)
+    if post_id:
+        return f"{host}/post/{post_id}"
+    path = (parsed.path or "/").rstrip("/") or "/"
     return f"{host}{path.lower()}"
 
 
@@ -112,14 +126,18 @@ def _parse(data: object) -> dict:
         url = item.get("url")
         if not isinstance(url, str) or not url.strip():
             continue
-        unfinished.append(
-            {
-                "url": url.strip(),
-                "reason": str(item.get("reason") or "error"),
-                "detail": str(item.get("detail") or ""),
-                "source": str(item.get("source") or ""),
-            }
-        )
+        row = {
+            "url": url.strip(),
+            "reason": str(item.get("reason") or "error"),
+            "detail": str(item.get("detail") or ""),
+            "source": str(item.get("source") or ""),
+        }
+        raw_id = item.get("existing_media_id")
+        if isinstance(raw_id, int) and raw_id > 0:
+            row["existing_media_id"] = raw_id
+        elif isinstance(raw_id, str) and raw_id.isdigit() and int(raw_id) > 0:
+            row["existing_media_id"] = int(raw_id)
+        unfinished.append(row)
     queue = [url.strip() for url in data.get("queue") or [] if isinstance(url, str) and url.strip()]
     open_urls = [url.strip() for url in data.get("open") or [] if isinstance(url, str) and url.strip()]
     page_urls: dict[str, str] = {}
@@ -270,7 +288,14 @@ def page_url_for(file_url: str) -> str | None:
         return value if isinstance(value, str) and value.strip() else None
 
 
-def remember_unfinished(url: str, reason: str, detail: str = "", source: str = "") -> list[str]:
+def remember_unfinished(
+    url: str,
+    reason: str,
+    detail: str = "",
+    source: str = "",
+    *,
+    existing_media_id: int | None = None,
+) -> list[str]:
     """Keep a tried-but-not-downloaded URL. ``source`` is the fallback panel; the one
     stored when the URL was queued or first skipped wins."""
     key = identity(url)
@@ -285,14 +310,15 @@ def remember_unfinished(url: str, reason: str, detail: str = "", source: str = "
         data["queue"] = _without(data["queue"], url)
         data["open"] = _without(data["open"], url)
         kept = [item for item in data["unfinished"] if identity(item["url"]) != key]
-        kept.append(
-            {
-                "url": url,
-                "reason": reason or "error",
-                "detail": detail or "",
-                "source": stored or source,
-            }
-        )
+        row = {
+            "url": url,
+            "reason": reason or "error",
+            "detail": detail or "",
+            "source": stored or source,
+        }
+        if existing_media_id is not None and existing_media_id > 0:
+            row["existing_media_id"] = int(existing_media_id)
+        kept.append(row)
         data["unfinished"] = kept
         _save(data)
         return list(data["queue"])
@@ -328,10 +354,17 @@ def note_outcome(
     reason: str = "",
     detail: str = "",
     source: str = "",
+    existing_media_id: int | None = None,
 ) -> list[str]:
-    if downloaded or reason not in RETRY_REASONS:
+    if downloaded or reason not in PERSIST_UNFINISHED_REASONS:
         return forget(url)
-    return remember_unfinished(url, reason, detail, source)
+    return remember_unfinished(
+        url,
+        reason,
+        detail,
+        source,
+        existing_media_id=existing_media_id,
+    )
 
 
 def sync_open(urls: list[str]) -> list[str]:
@@ -375,11 +408,17 @@ def adopt_open_as_unfinished() -> None:
         _save(data)
 
 
-def clear_queues(source: str | None = None, *, which: str | None = None) -> None:
+def clear_queues(
+    source: str | None = None,
+    *,
+    which: str | None = None,
+    skip_reason: str | None = None,
+) -> None:
     """Forget stored leftovers.
 
     ``which`` is ``queue``, ``skipped`` (unfinished except cancelled and error),
     ``errors`` (reason=error only), or ``cancelled``. Omitted clears all four.
+    With ``which=skipped``, ``skip_reason`` clears only that reason group.
     ``source`` limits that to one panel. A full clear also drops the in-flight
     (open) list; a partial clear leaves it.
     """
@@ -395,6 +434,7 @@ def clear_queues(source: str | None = None, *, which: str | None = None) -> None
                 if key:
                     gone_keys.add(key)
             data["queue"] = [url for url in data["queue"] if identity(url) not in gone_keys]
+        reason_filter = (skip_reason or "").strip() or None
         if which in (None, "skipped", "cancelled", "errors"):
             kept: list[dict] = []
             for item in data["unfinished"]:
@@ -409,6 +449,7 @@ def clear_queues(source: str | None = None, *, which: str | None = None) -> None
                     or (
                         which == "skipped"
                         and reason not in {"cancelled", "error"}
+                        and (reason_filter is None or reason == reason_filter)
                     )
                 )
                 if drop:

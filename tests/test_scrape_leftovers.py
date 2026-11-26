@@ -33,6 +33,24 @@ def _job(urls: list[str]) -> ScrapeJob:
     )
 
 
+class ScrapeLeftoverIdentityTests(unittest.TestCase):
+    def test_gelbooru_view_urls_differ_by_post_id(self) -> None:
+        site = {
+            "id": "rule34_xxx",
+            "extension": {
+                "post_id_patterns": [
+                    r"https?://(?:[\w-]+\.)?rule34\.xxx/index\.php\?(?=[^#]*page=post)(?=[^#]*s=view)[^#]*[?&]id=(\d+)"
+                ],
+            },
+        }
+        u1 = "https://rule34.xxx/index.php?page=post&s=view&id=1"
+        u2 = "https://rule34.xxx/index.php?page=post&s=view&id=2"
+        same = "http://www.rule34.xxx/index.php?page=post&s=view&id=1#top"
+        with patch("backend.scraper.sites.get_selected_site", return_value=site):
+            self.assertNotEqual(scrape_leftovers.identity(u1), scrape_leftovers.identity(u2))
+            self.assertEqual(scrape_leftovers.identity(u1), scrape_leftovers.identity(same))
+
+
 class ScrapeLeftoverTests(unittest.TestCase):
     def setUp(self) -> None:
         self._dir = tempfile.TemporaryDirectory()
@@ -73,6 +91,19 @@ class ScrapeLeftoverTests(unittest.TestCase):
     def tearDown(self) -> None:
         scrape_leftovers.leftovers_path = self._orig
         self._dir.cleanup()
+
+    def test_intentional_skip_is_kept_with_existing_media_id(self) -> None:
+        url = "https://gallery.test/post/keep"
+        scrape_leftovers.note_outcome(
+            url,
+            downloaded=False,
+            reason="already_have",
+            existing_media_id=42,
+            source="site_a",
+        )
+        rows = scrape_leftovers.unfinished_items("site_a")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["existing_media_id"], 42)
 
     def test_error_is_kept_and_a_download_clears_it(self) -> None:
         scrape_leftovers.note_outcome(
@@ -199,7 +230,11 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertNotIn(filtered, pipeline.scrape_status.finished_urls)
         self.assertNotIn(failed, pipeline.scrape_status.finished_urls)
         self.assertIn(failed, pipeline.scrape_status.processed_urls)
-        self.assertEqual(scrape_leftovers.unfinished_items()[0]["url"], failed)
+        unfinished = {row["url"]: row for row in scrape_leftovers.unfinished_items()}
+        self.assertIn(failed, unfinished)
+        self.assertEqual(unfinished[failed]["reason"], "error")
+        self.assertIn(filtered, unfinished)
+        self.assertEqual(unfinished[filtered]["reason"], "already_have")
 
         pipeline._record_cancelled("https://gallery.test/post/stop")
         self.assertEqual(pipeline.scrape_status.processed, 4)
@@ -846,6 +881,58 @@ class ScrapeLeftoverTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             scrape_api.post_clear_queues(which="nope")
         self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_clear_skipped_by_reason_only(self) -> None:
+        have = "https://gallery.test/post/1"
+        identical = "https://gallery.test/post/2"
+        scrape_leftovers.remember_unfinished(have, "already_have", "", "site_a")
+        scrape_leftovers.remember_unfinished(identical, "identical", "", "site_a")
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "site_a", "Site A")
+        status.skipped_items = [
+            SkippedItem(url=have, reason="already_have"),
+            SkippedItem(url=identical, reason="identical"),
+        ]
+        status.skipped = 2
+
+        out = scrape_api.post_clear_queues("site_a", which="skipped", skip_reason="identical")
+        panel = self._panel(out, "site_a")
+        self.assertEqual(len(panel.skipped_items), 1)
+        self.assertEqual(panel.skipped_items[0].url, have)
+        self.assertEqual(panel.skipped_items[0].reason, "already_have")
+        self.assertEqual(
+            {item["reason"] for item in scrape_leftovers.unfinished_items("site_a")},
+            {"already_have"},
+        )
+
+    def test_retry_skipped_by_reason_only(self) -> None:
+        have = "https://gallery.test/post/1"
+        identical = "https://gallery.test/post/2"
+        scrape_leftovers.remember_unfinished(have, "already_have", "", "site_a")
+        scrape_leftovers.remember_unfinished(identical, "identical", "", "site_a")
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "site_a", "Site A")
+        status.skipped_items = [
+            SkippedItem(url=have, reason="already_have"),
+            SkippedItem(url=identical, reason="identical"),
+        ]
+
+        def _compiled(payload: ScrapeRunRequest) -> ScrapeJob:
+            urls: list[str] = []
+            for item in payload.filters:
+                urls.extend(part for part in item.value.split("\n") if part)
+            return _job(urls)
+
+        with (
+            patch.object(
+                scrape_api, "get_selected_site", return_value={"id": "site_a", "name": "Site A"}
+            ),
+            patch.object(scrape_api, "compile_scrape_job", side_effect=_compiled),
+            patch.object(scrape_api.threading, "Thread"),
+        ):
+            scrape_api.post_retry_skipped("site_a", which="skipped", skip_reason="identical")
+        self.assertEqual(status.pending_urls, [identical])
+        self.assertNotIn(have, status.pending_urls)
 
     def test_retry_runs_only_skipped_and_errors(self) -> None:
         queued = "https://gallery.test/post/1"

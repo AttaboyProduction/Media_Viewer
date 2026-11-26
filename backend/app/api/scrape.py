@@ -90,7 +90,16 @@ def _status_out() -> ScrapeStatusOut:
         message=scrape_status.message,
         current_url=scrape_status.current_url,
         skipped_items=[
-            {"url": item.url, "reason": item.reason, "detail": item.detail}
+            {
+                "url": item.url,
+                "reason": item.reason,
+                "detail": item.detail,
+                **(
+                    {"existing_media_id": int(item.existing_media_id)}
+                    if getattr(item, "existing_media_id", None)
+                    else {}
+                ),
+            }
             for item in scrape_status.skipped_items
             if item.reason != "error"
         ],
@@ -478,18 +487,29 @@ def post_clear_recent() -> ScrapeStatusOut:
 
 
 @router.post("/clear-queues", response_model=ScrapeStatusOut)
-def post_clear_queues(source: str | None = None, which: str | None = None) -> ScrapeStatusOut:
+def post_clear_queues(
+    source: str | None = None,
+    which: str | None = None,
+    skip_reason: str | None = None,
+) -> ScrapeStatusOut:
     """Empty Queue to scrape, Skipped, Errors, and Cancelled. Session downloads stay.
 
     ``source`` (a panel key) clears only that source; omitted clears every panel.
     ``which`` is ``queue``, ``skipped``, ``errors``, or ``cancelled``; omitted clears all four.
+    ``skip_reason`` limits ``which=skipped`` to one reason group.
     """
     key = (source or "").strip() or None
     kind = (which or "").strip() or None
+    reason = (skip_reason or "").strip() or None
     if kind not in (None, "queue", "skipped", "errors", "cancelled"):
         raise HTTPException(
             status_code=400,
             detail="which must be queue, skipped, errors, or cancelled.",
+        )
+    if reason and kind != "skipped":
+        raise HTTPException(
+            status_code=400,
+            detail="skip_reason applies only when which is skipped.",
         )
     with scrape_lock:
         if scrape_status.running and (key is None or key == scrape_status.source_key):
@@ -497,23 +517,34 @@ def post_clear_queues(source: str | None = None, which: str | None = None) -> Sc
                 status_code=409,
                 detail="A scrape or import is running. Stop it before clearing the queues.",
             )
-        scrape_leftovers.clear_queues(key, which=kind)
-        scrape_panels.clear_panel(scrape_status, key, which=kind)
+        scrape_leftovers.clear_queues(key, which=kind, skip_reason=reason)
+        scrape_panels.clear_panel(scrape_status, key, which=kind, skip_reason=reason)
     return _status_out()
 
 
 @router.post("/retry", response_model=ScrapeStatusOut, dependencies=[Depends(require_scrape_page)])
-def post_retry_skipped(source: str, which: str | None = None) -> ScrapeStatusOut:
+def post_retry_skipped(
+    source: str,
+    which: str | None = None,
+    skip_reason: str | None = None,
+) -> ScrapeStatusOut:
     """Run this panel's Skipped and/or Errors files. Queue and Cancelled stay.
 
     ``which`` is ``skipped``, ``errors``, or omitted for both.
+    ``skip_reason`` limits a Skipped retry to one reason group.
     """
     key = (source or "").strip()
     if not key:
         raise HTTPException(status_code=400, detail="source is required.")
     kind = (which or "").strip() or None
+    reason = (skip_reason or "").strip() or None
     if kind not in (None, "skipped", "errors"):
         raise HTTPException(status_code=400, detail="which must be skipped or errors.")
+    if reason and kind == "errors":
+        raise HTTPException(
+            status_code=400,
+            detail="skip_reason applies only when which is skipped or omitted.",
+        )
     local = False
     urls: list[str] = []
     with scrape_lock:
@@ -522,7 +553,9 @@ def post_retry_skipped(source: str, which: str | None = None) -> ScrapeStatusOut
                 status_code=409,
                 detail="A scrape or import is running. Stop it before retrying.",
             )
-        urls = scrape_panels.retry_targets(scrape_status, key, which=kind)
+        urls = scrape_panels.retry_targets(
+            scrape_status, key, which=kind, skip_reason=reason
+        )
         if not urls:
             raise HTTPException(status_code=400, detail="Nothing skipped or failed to retry.")
         local = key == scrape_panels.SOURCE_LOCAL

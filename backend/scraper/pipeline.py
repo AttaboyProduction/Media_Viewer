@@ -12,7 +12,7 @@ from backend.app.db.seed import seed_database
 from backend.app.db.session import SessionLocal
 from backend.app.schemas import ScrapeRunRequest
 from backend.scraper.client import PlaywrightClient
-from backend.scraper.gallery import extract_post_id, iter_gallery_posts
+from backend.scraper.gallery import extract_post_id
 from backend.scraper.job import ScrapeJob, compile_scrape_job, date_in_range, should_stop_for_date
 from backend.scraper.post import normalize_tag_name, scrape_post, scrape_post_from_api
 from backend.scraper.storage import (
@@ -29,6 +29,7 @@ class SkippedItem:
     url: str
     reason: str
     detail: str = ""
+    existing_media_id: int | None = None
 
 
 @dataclass
@@ -257,8 +258,17 @@ def enqueue_discovered_urls(urls: list[str], *, site_id: str | None) -> list[str
         return []
     if site_id:
         added = append_scrape_urls(stored, site_id)
-        return added if added is not None else []
+        if added is not None:
+            return added
+
     with scrape_lock:
+        if not (
+            scrape_status.running
+            and scrape_status.kind == "scrape"
+            and scrape_status.queue_open
+            and (site_id is None or scrape_status.site_id == site_id)
+        ):
+            return []
         added = []
         known = {identity(url) for url in scrape_status.accepted_urls}
         known.update(identity(url) for url in scrape_status.pending_urls)
@@ -298,18 +308,11 @@ def _note_inflight(url: str, active: bool) -> None:
 
 
 def _listing_saturated(job: ScrapeJob) -> bool:
-    """Gallery paging stops once queued + in-flight + downloaded cover the limit.
+    """Gallery paging stops when the successful-download quota is met (Scrape limit).
 
-    Files already queued still download. The limit is what stops the listing
-    from enqueueing the rest of the gallery.
+    Skips do not count; queued-but-not-yet-downloaded files do not stop listing.
     """
-    if job.ignore_download_limit or job.limit <= 0:
-        return False
-    with scrape_lock:
-        outstanding = (
-            scrape_status.downloaded + len(_inflight_urls) + len(scrape_status.pending_urls)
-        )
-        return outstanding >= job.limit
+    return _quota_met(job)
 
 
 def _pop_pending() -> str | None:
@@ -502,7 +505,14 @@ def _drop_errors(url: str) -> None:
     scrape_status.error_items = [row for row in scrape_status.error_items if row.url != url]
 
 
-def _persist_outcome(url: str, *, downloaded: bool, reason: str = "", detail: str = "") -> None:
+def _persist_outcome(
+    url: str,
+    *,
+    downloaded: bool,
+    reason: str = "",
+    detail: str = "",
+    existing_media_id: int | None = None,
+) -> None:
     from backend.app.services.scrape_leftovers import note_outcome, queue_urls
 
     if url:
@@ -512,6 +522,7 @@ def _persist_outcome(url: str, *, downloaded: bool, reason: str = "", detail: st
             reason=reason,
             detail=detail,
             source=scrape_status.source_key,
+            existing_media_id=existing_media_id,
         )
     else:
         scrape_status.queue_urls = queue_urls()
@@ -532,12 +543,24 @@ def _complete_download_locked(url: str) -> None:
     _persist_outcome(url, downloaded=True)
 
 
-def _complete_skip(url: str, reason: str, detail: str = "") -> None:
+def _complete_skip(
+    url: str,
+    reason: str,
+    detail: str = "",
+    *,
+    existing_media_id: int | None = None,
+) -> None:
     with scrape_lock:
-        _complete_skip_locked(url, reason, detail)
+        _complete_skip_locked(url, reason, detail, existing_media_id=existing_media_id)
 
 
-def _complete_skip_locked(url: str, reason: str, detail: str = "") -> None:
+def _complete_skip_locked(
+    url: str,
+    reason: str,
+    detail: str = "",
+    *,
+    existing_media_id: int | None = None,
+) -> None:
     from backend.app.services.scrape_leftovers import RETRY_REASONS
 
     if reason == "error":
@@ -550,7 +573,13 @@ def _complete_skip_locked(url: str, reason: str, detail: str = "") -> None:
         # The old error is gone. This outcome stays in total and counts once.
         _count_settled(url)
         _release_download_slot(url)
-        _persist_outcome(url, downloaded=False, reason=reason, detail=detail)
+        _persist_outcome(
+            url,
+            downloaded=False,
+            reason=reason,
+            detail=detail,
+            existing_media_id=existing_media_id,
+        )
         return
     if reason not in RETRY_REASONS:
         # Already-have, filters, identical stay in total.
@@ -558,15 +587,27 @@ def _complete_skip_locked(url: str, reason: str, detail: str = "") -> None:
     elif url:
         scrape_status.counted_urls.add(url)
     _count_settled(url)
-    _record_skip(url, reason, detail)
+    _record_skip(url, reason, detail, existing_media_id=existing_media_id)
 
 
-def _record_skip(url: str, reason: str, detail: str = "") -> None:
+def _record_skip(
+    url: str,
+    reason: str,
+    detail: str = "",
+    *,
+    existing_media_id: int | None = None,
+) -> None:
     with scrape_lock:
-        _record_skip_locked(url, reason, detail)
+        _record_skip_locked(url, reason, detail, existing_media_id=existing_media_id)
 
 
-def _record_skip_locked(url: str, reason: str, detail: str = "") -> None:
+def _record_skip_locked(
+    url: str,
+    reason: str,
+    detail: str = "",
+    *,
+    existing_media_id: int | None = None,
+) -> None:
     if reason == "error":
         _record_error_locked(url, detail)
         return
@@ -575,11 +616,32 @@ def _record_skip_locked(url: str, reason: str, detail: str = "") -> None:
             if row.url == url:
                 row.reason = reason
                 row.detail = detail
-                _persist_outcome(url, downloaded=False, reason=reason, detail=detail)
+                if existing_media_id is not None:
+                    row.existing_media_id = existing_media_id
+                _persist_outcome(
+                    url,
+                    downloaded=False,
+                    reason=reason,
+                    detail=detail,
+                    existing_media_id=existing_media_id,
+                )
                 return
     scrape_status.skipped += 1
-    scrape_status.skipped_items.append(SkippedItem(url=url, reason=reason, detail=detail))
-    _persist_outcome(url, downloaded=False, reason=reason, detail=detail)
+    scrape_status.skipped_items.append(
+        SkippedItem(
+            url=url,
+            reason=reason,
+            detail=detail,
+            existing_media_id=existing_media_id,
+        )
+    )
+    _persist_outcome(
+        url,
+        downloaded=False,
+        reason=reason,
+        detail=detail,
+        existing_media_id=existing_media_id,
+    )
 
 
 ERROR_DOWNLOAD_ATTEMPTS = 3
@@ -683,35 +745,39 @@ def _quota_met(job: ScrapeJob) -> bool:
     return job.limit > 0 and scrape_status.downloaded >= job.limit
 
 
-def _maybe_upgrade_video(db, post_url: str, post_id: str) -> bool:
-    """Replace a saved smaller encode when the original file is available.
-
-    Explicit URL downloads only. A gallery pass still skips posts already saved.
-    """
-    from backend.app.services.media_service import absolute_path_for_media
-
+def _maybe_upgrade_existing(db, post_url: str, post_id: str | None) -> bool:
+    """Re-fetch a post already in the library and keep the download when it is heavier."""
+    if not post_id:
+        return False
     row = db.query(MediaItem).filter(MediaItem.source_post_id == post_id).first()
-    if row is None or row.media_type != "video" or not video_can_improve(row.local_path or ""):
+    if row is None:
+        return False
+    if row.media_type == "video" and not video_can_improve(row.local_path or ""):
         return False
     try:
         post = scrape_post_from_api(post_url)
     except Exception:  # noqa: BLE001 — keep the file we already have
         return False
-    if post is None or post.media_type != "video":
+    if post is None:
         return False
-    old = absolute_path_for_media(row)
-    stored = download_media(post)
-    if video_suffix_rank(stored.path.name) >= video_suffix_rank(Path(row.local_path or "").name):
-        if stored.path.exists() and stored.path.resolve() != old.resolve():
+    try:
+        stored = download_media(post)
+    except Exception:  # noqa: BLE001
+        return False
+    from backend.scraper.storage import new_download_beats_library, replace_library_file_if_larger
+
+    if not new_download_beats_library(row, stored, new_media_type=post.media_type):
+        from backend.app.services.media_service import absolute_path_for_media
+
+        kept_path = absolute_path_for_media(row)
+        if stored.path.exists() and stored.path.resolve() != kept_path.resolve():
             stored.path.unlink(missing_ok=True)
         return False
-    result = upsert_post(db, post, stored)
-    if old.exists() and old.resolve() != stored.path.resolve():
-        old.unlink(missing_ok=True)
+    if not replace_library_file_if_larger(db, row, post, stored):
+        return False
     db.commit()
-    if result.media is not None:
-        scrape_status.recent_media_ids.append(result.media.id)
-    return result.skipped_reason is None
+    scrape_status.recent_media_ids.append(row.id)
+    return True
 
 
 def _process_post_url(
@@ -737,10 +803,16 @@ def _process_post_url(
         already = bool(post_id and post_id in existing_posts)
         posted_at = existing_posts.get(post_id) if already else None
     if already:
-        if job.ignore_download_limit and _maybe_upgrade_video(db, post_url, post_id):
+        existing = (
+            db.query(MediaItem).filter(MediaItem.source_post_id == post_id).first()
+            if post_id
+            else None
+        )
+        existing_id = int(existing.id) if existing is not None else None
+        if _maybe_upgrade_existing(db, post_url, post_id):
             _complete_download(post_url)
             return "ok"
-        _complete_skip(post_url, "already_have")
+        _complete_skip(post_url, "already_have", existing_media_id=existing_id)
         if should_stop_for_date(posted_at, job):  # type: ignore[arg-type]
             scrape_status.message = "Reached date range boundary"
             scrape_status.current_url = None
@@ -807,7 +879,12 @@ def _process_post_url(
             result = upsert_post(db, post, stored)
             db.commit()
             if result.skipped_reason in {"duplicate_hash", "identical"}:
-                _complete_skip(post_url, result.skipped_reason)
+                media_id = int(result.media.id) if result.media is not None else None
+                _complete_skip(
+                    post_url,
+                    result.skipped_reason,
+                    existing_media_id=media_id,
+                )
             else:
                 _complete_download(post_url)
                 if result.media is not None:
@@ -1269,28 +1346,35 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
                         scrape_status.message = f"Collecting posts from {gallery_url}"
                         scrape_status.last_gallery_url = gallery_url
                         scrape_status.current_url = gallery_url
-                        for post_url in iter_gallery_posts(
-                                client,
-                                gallery_url,
-                                sort=job.sort,
-                                should_stop=lambda: (
-                                    _cancelled() or _quota_met(job) or _listing_saturated(job)
-                                ),
-                            ):
-                                if (
-                                    _cancelled()
-                                    or _quota_met(job)
-                                    or lanes.listing_stop
-                                    or _listing_saturated(job)
-                                ):
-                                    break
-                                enqueue_discovered_urls(
-                                    [post_url], site_id=scrape_status.site_id
-                                )
-                                lanes.fill()
-                                if lanes.listing_stop or _cancelled():
-                                    stop = lanes.listing_stop
-                                    break
+                        from backend.scraper.listing import run_gallery_discovery
+
+                        def _listing_should_stop() -> bool:
+                            return (
+                                _cancelled()
+                                or _quota_met(job)
+                                or _listing_saturated(job)
+                            )
+
+                        def _listing_should_abort() -> bool:
+                            return (
+                                _listing_should_stop()
+                                or lanes.listing_stop
+                            )
+
+                        run_gallery_discovery(
+                            client,
+                            gallery_url,
+                            sort=job.sort,
+                            should_stop=_listing_should_stop,
+                            should_abort=_listing_should_abort,
+                            site_id=scrape_status.site_id,
+                            on_discovered=lambda post_url: enqueue_discovered_urls(
+                                [post_url], site_id=scrape_status.site_id
+                            ),
+                            after_discovered=lanes.fill,
+                        )
+                        if lanes.listing_stop or _cancelled():
+                            stop = lanes.listing_stop
                         if stop or _cancelled() or _quota_met(job):
                             break
 

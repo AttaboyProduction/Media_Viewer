@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import threading
-from urllib.parse import urlparse
 
 from backend.app.config import settings
 
@@ -23,15 +22,10 @@ def queue_path():
 
 
 def queue_identity(url: str) -> str:
-    """Host and path only: scheme, www, query, and fragment do not count."""
-    parsed = urlparse((url or "").strip())
-    host = (parsed.hostname or "").lower()
-    if host.startswith("www."):
-        host = host[4:]
-    path = (parsed.path or "/").rstrip("/") or "/"
-    if not host:
-        return ""
-    return f"{host}{path.lower()}"
+    """Same dedupe rules as scrape leftovers (incl. gelbooru ``id=`` post URLs)."""
+    from backend.app.services.scrape_leftovers import identity
+
+    return identity(url)
 
 
 def _empty() -> dict:

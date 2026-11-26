@@ -82,15 +82,15 @@ class ParallelDownloadTests(unittest.TestCase):
         self.assertEqual(peak, 2)
         self.assertEqual(pipeline.scrape_status.pending_urls, [])
 
-    def test_listing_stops_enqueueing_once_the_limit_is_lined_up(self) -> None:
-        pipeline.scrape_status.downloaded = 1
-        pipeline.scrape_status.pending_urls = ["https://gallery.test/post/2"]
-        pipeline._inflight_urls.add("https://gallery.test/post/3")
+    def test_listing_stops_only_after_successful_download_quota(self) -> None:
+        pipeline.scrape_status.downloaded = 3
+        pipeline.scrape_status.pending_urls = ["https://gallery.test/post/9"]
+        pipeline._inflight_urls.add("https://gallery.test/post/8")
         job = _job()
         job.limit = 3
         job.ignore_download_limit = False
         self.assertTrue(pipeline._listing_saturated(job))
-        pipeline.scrape_status.downloaded = 0
+        pipeline.scrape_status.downloaded = 2
         self.assertFalse(pipeline._listing_saturated(job))
 
     def test_concurrency_one_stays_on_the_caller(self) -> None:

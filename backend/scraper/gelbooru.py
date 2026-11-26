@@ -110,23 +110,58 @@ def api_url(site: dict, **params: object) -> str:
     return base + joiner + urlencode(query)
 
 
-def parse_post_list(data: object) -> list[dict] | None:
-    """Post objects, or None when the body is not a post list (auth HTML, error text)."""
+def parse_post_index_list(data: object) -> list[dict] | None:
+    """DAPI ``post/index`` listing pages — not single-post-by-id bodies."""
     if isinstance(data, str):
         return None
     if isinstance(data, list):
-        posts = [item for item in data if isinstance(item, dict)]
-        return posts
+        return [item for item in data if isinstance(item, dict)]
     if isinstance(data, dict):
-        if data.get("file_url") or data.get("id"):
-            return [data]
         for key in ("post", "posts"):
             inner = data.get(key)
             if isinstance(inner, list):
                 return [item for item in inner if isinstance(item, dict)]
             if isinstance(inner, dict) and (inner.get("file_url") or inner.get("id")):
                 return [inner]
+        digit_keys = [key for key in data if str(key).isdigit()]
+        if digit_keys:
+            posts = [
+                data[key]
+                for key in sorted(digit_keys, key=lambda part: int(part))
+                if isinstance(data[key], dict)
+            ]
+            if posts:
+                return posts
+        # Lone post object without a list wrapper is a by-id response, not a gallery page.
+        if data.get("file_url") or data.get("id"):
+            return None
     return None
+
+
+def parse_post_record(data: object) -> dict | None:
+    """One post from DAPI ``post/index&id=`` (or equivalent)."""
+    if isinstance(data, str):
+        return None
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and (item.get("file_url") or item.get("id")):
+                return item
+        return None
+    if isinstance(data, dict):
+        for key in ("post", "posts"):
+            inner = data.get(key)
+            if isinstance(inner, dict) and (inner.get("file_url") or inner.get("id")):
+                return inner
+            if isinstance(inner, list) and inner and isinstance(inner[0], dict):
+                return inner[0]
+        if data.get("file_url") or data.get("id"):
+            return data
+    return None
+
+
+def parse_post_list(data: object) -> list[dict] | None:
+    """Backward-compatible alias for gallery index parsing."""
+    return parse_post_index_list(data)
 
 
 def media_from_file_url(file_url: str) -> tuple[str, str]:
@@ -187,14 +222,20 @@ def tag_pairs(names: list[str], types: dict[str, str]) -> list[tuple[str, str]]:
 def fetch_json(url: str, *, referer: str) -> object:
     """JSON from the DAPI. A non-JSON body is returned as text so the caller can fall back."""
     errors: list[str] = []
-    for label, fn in (
-        ("curl_cffi", _get_curl_cffi),
-        ("httpx", _get_httpx),
-        ("curl", _get_curl),
-        ("playwright_api", _get_playwright),
-    ):
+    chain: list[tuple[str, object]] = []
+    if _job_client is not None:
+        chain.append(("job_browser", _get_job_playwright))
+    chain.extend(
+        [
+            ("curl_cffi", _get_curl_cffi),
+            ("httpx", _get_httpx),
+            ("curl", _get_curl),
+            ("playwright_api", _get_playwright),
+        ]
+    )
+    for label, fn in chain:
         try:
-            return _decode(fn(url, referer))
+            return _decode(fn(url, referer))  # type: ignore[operator]
         except Exception as exc:  # noqa: BLE001 — next transport
             errors.append(f"{label}: {exc}")
     raise RuntimeError("; ".join(errors) if errors else f"Failed to fetch {url}")
@@ -269,6 +310,17 @@ def _get_curl(url: str, referer: str) -> str:
     if completed.returncode != 0:
         raise RuntimeError((completed.stderr or completed.stdout or "curl failed").strip())
     return completed.stdout
+
+
+def _get_job_playwright(url: str, referer: str) -> str:
+    client = _job_client
+    if client is None or client._engine is None:
+        raise RuntimeError("No active scrape browser for DAPI")
+    headers = _headers(url, referer)
+    response = client._engine._api_context().request.get(url, headers=headers, timeout=60_000)
+    if not response.ok:
+        raise RuntimeError(f"HTTP {response.status}")
+    return response.text()
 
 
 def _get_playwright(url: str, referer: str) -> str:
@@ -351,10 +403,9 @@ def api_post_record(site: dict, post_url: str, post_id: str) -> dict | None:
     """One post from the DAPI, or None when the body is not that post."""
     referer = post_url or _post_page(site, post_id)
     data = fetch_json(api_url(site, s="post", q="index", id=post_id, limit=1), referer=referer)
-    posts = parse_post_list(data)
-    if not posts:
+    item = parse_post_record(data)
+    if not item:
         return None
-    item = posts[0]
     file_url = item.get("file_url")
     if not isinstance(file_url, str) or not file_url.strip():
         return None
@@ -378,6 +429,7 @@ class _ApiPass:
 
     def __init__(self) -> None:
         self.saw_list = False
+        self.yielded = 0
 
     def run(self, site, gallery_url, sort, should_stop):
         include, exclude = _tags_in_url(gallery_url)
@@ -394,24 +446,36 @@ class _ApiPass:
                 pid=page_index,
                 tags=_tag_query(include, exclude, sort),
             )
-            try:
-                data = fetch_json(url, referer=referer)
-            except Exception as exc:  # noqa: BLE001
-                logger.info("Gelbooru list API missed: %s", exc)
+            data = None
+            last_exc: Exception | None = None
+            for attempt in range(3):
+                try:
+                    data = fetch_json(url, referer=referer)
+                    last_exc = None
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    if attempt < 2:
+                        continue
+            if data is None:
+                logger.info("Gelbooru list API missed: %s", last_exc)
                 if page_index == 0:
                     return
                 return
-            posts = parse_post_list(data)
+            posts = parse_post_index_list(data)
             if posts is None:
+                if page_index == 0:
+                    return
                 return
-            self.saw_list = True
             if not posts:
                 return
+            self.saw_list = True
             for item in posts:
                 pid = str(item.get("id") or "")
                 if not pid.isdigit():
                     continue
                 yielded += 1
+                self.yielded += 1
                 yield _post_page(site, pid)
                 if yielded >= _SOFT_CAP or (should_stop and should_stop()):
                     return
@@ -419,12 +483,21 @@ class _ApiPass:
                 return
 
 
+def _api_listing_enabled(site: dict) -> bool:
+    from backend.scraper.adapter_loader import site_api_auth_configured
+
+    if site.get("requires_api_auth") and not site_api_auth_configured(site):
+        return False
+    return True
+
+
 def iter_posts(client, site: dict, gallery_url: str, *, sort: str, should_stop):
     """DAPI pages first. HTML list when the first response is not a post list."""
-    passed = _ApiPass()
-    yield from passed.run(site, gallery_url, sort, should_stop)
-    if passed.saw_list:
-        return
+    if _api_listing_enabled(site):
+        passed = _ApiPass()
+        yield from passed.run(site, gallery_url, sort, should_stop)
+        if passed.saw_list and passed.yielded > 0:
+            return
     yield from iter_html_posts(client, site, gallery_url, sort=sort, should_stop=should_stop)
 
 

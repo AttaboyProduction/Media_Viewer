@@ -27,7 +27,9 @@ import type { ScrapeListName } from '../api/client'
 import type { ScrapeFilter, ScrapeFilterType, ScrapeSourcePanel as ScrapeSourcePanelData } from '../types'
 import ExcludeTagsPicker from './ExcludeTagsPicker'
 import ScrapeSelect, { scraperBusyDetail, sourceBusyDetail } from './ScrapeSelect'
+import MediaDetailModal from './MediaDetailModal'
 import ScrapeSourcePanel from './ScrapeSourcePanel'
+import { scrapeSkipReasonLabel } from '../utils/scrapeSkipReasons'
 import { SearchableTagSingleSelect } from './TagChipSelect'
 
 interface FilterRow {
@@ -152,6 +154,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
   const [limit, setLimit] = useState(0)
   const [excludeTags, setExcludeTags] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [libraryMediaId, setLibraryMediaId] = useState<number | null>(null)
   const [localFolders, setLocalFolders] = useState<string[]>([])
   const [localFiles, setLocalFiles] = useState<string[]>([])
   const [localRecursive, setLocalRecursive] = useState(true)
@@ -508,7 +511,11 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     queryClient.setQueryData(['scrape-status'], next)
   }
 
-  const clearQueues = async (panel: ScrapeSourcePanelData, which?: ScrapeListName) => {
+  const clearQueues = async (
+    panel: ScrapeSourcePanelData,
+    which?: ScrapeListName,
+    skipReason?: string,
+  ) => {
     const listName =
       which === 'queue'
         ? 'Queue to scrape'
@@ -519,10 +526,16 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
             : which === 'cancelled'
               ? 'Cancelled'
               : null
+    const reasonSuffix =
+      skipReason && which === 'skipped' ? ` — ${scrapeSkipReasonLabel(skipReason)}` : ''
     const ok = await confirm({
-      title: listName ? `Clear ${panel.label} ${listName}?` : `Clear ${panel.label} queues?`,
+      title: listName
+        ? `Clear ${panel.label} ${listName}${reasonSuffix}?`
+        : `Clear ${panel.label} queues?`,
       message: listName
-        ? `Remove everything from ${panel.label}'s ${listName}? The other lists, downloaded files, and other sources stay.`
+        ? skipReason && which === 'skipped'
+          ? `Remove only ${panel.label}'s Skipped files marked "${scrapeSkipReasonLabel(skipReason)}"? Other skip reasons and lists stay.`
+          : `Remove everything from ${panel.label}'s ${listName}? The other lists, downloaded files, and other sources stay.`
         : `Remove everything from ${panel.label}'s Queue to scrape, Skipped, Errors, and Cancelled? Downloaded files, the Downloaded previously list, and other sources stay.`,
       confirmLabel: listName ? 'Clear' : 'Clear queues',
       danger: true,
@@ -530,17 +543,21 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     if (!ok) return
     setError(null)
     try {
-      const next = await clearScrapeQueues(panel.key, which)
+      const next = await clearScrapeQueues(panel.key, which, skipReason)
       queryClient.setQueryData(['scrape-status'], next)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to clear queues')
     }
   }
 
-  const retryList = async (panel: ScrapeSourcePanelData, which?: 'skipped' | 'errors') => {
+  const retryList = async (
+    panel: ScrapeSourcePanelData,
+    which?: 'skipped' | 'errors',
+    skipReason?: string,
+  ) => {
     setError(null)
     try {
-      const next = await retryScrapeSkipped(panel.key, which)
+      const next = await retryScrapeSkipped(panel.key, which, skipReason)
       queryClient.setQueryData(['scrape-status'], next)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to retry files')
@@ -1081,8 +1098,8 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                 onRun={() => void start(panel.key)}
                 onStop={stop}
                 onClear={() => void clearQueues(panel)}
-                onClearList={(which) => void clearQueues(panel, which)}
-                onRetry={(which) => void retryList(panel, which)}
+                onClearList={(which, skipReason) => void clearQueues(panel, which, skipReason)}
+                onRetry={(which, skipReason) => void retryList(panel, which, skipReason)}
                 neverAutoRun={appSettings?.never_auto_run_scrape ?? false}
                 onNeverAutoRunChange={(value) => {
                   queryClient.setQueryData(['app-settings'], (prev: typeof appSettings) =>
@@ -1092,10 +1109,27 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                     queryClient.setQueryData(['app-settings'], next)
                   })
                 }}
+                onOpenLibraryMedia={setLibraryMediaId}
               />
             )
           })}
         </div>
+      ) : null}
+
+      {libraryMediaId !== null ? (
+        <MediaDetailModal
+          mediaId={libraryMediaId}
+          fileIndex={0}
+          fileTotal={1}
+          canPrev={false}
+          canNext={false}
+          onClose={() => {
+            setLibraryMediaId(null)
+            void queryClient.invalidateQueries({ queryKey: ['media'] })
+            void queryClient.invalidateQueries({ queryKey: ['scrape-status'] })
+          }}
+          onNavigateAdjacent={() => {}}
+        />
       ) : null}
     </>
   )

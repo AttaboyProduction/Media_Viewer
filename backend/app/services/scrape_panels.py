@@ -113,19 +113,37 @@ def activate(status, key: str, label: str = "") -> None:
     status.source_label = name
 
 
-def _without_skipped(items, *, drop_cancelled: bool, drop_other: bool):
+def _without_skipped(
+    items,
+    *,
+    drop_cancelled: bool,
+    drop_other: bool,
+    skip_reason: str | None = None,
+):
     kept = []
+    reason_filter = (skip_reason or "").strip() or None
     for row in items:
-        cancelled = getattr(row, "reason", "") == "cancelled"
-        if cancelled and drop_cancelled:
+        row_reason = getattr(row, "reason", "") or ""
+        cancelled = row_reason == "cancelled"
+        if cancelled:
+            if drop_cancelled:
+                continue
+            kept.append(row)
             continue
-        if not cancelled and drop_other:
-            continue
+        if drop_other:
+            if reason_filter is None or row_reason == reason_filter:
+                continue
         kept.append(row)
     return kept, len(items) - len(kept)
 
 
-def clear_panel(status, key: str | None = None, *, which: str | None = None) -> None:
+def clear_panel(
+    status,
+    key: str | None = None,
+    *,
+    which: str | None = None,
+    skip_reason: str | None = None,
+) -> None:
     """Empty one list, or every list, for one source (``key`` omitted = every source).
 
     ``which`` is ``queue``, ``skipped`` (non-cancelled intentional skips), ``errors``,
@@ -190,9 +208,14 @@ def clear_panel(status, key: str | None = None, *, which: str | None = None) -> 
                 int(target["processed"]), int(target.get("total") or 0) - removed
             )
 
+    reason_filter = (skip_reason or "").strip() or None if drop_other else None
+
     def _apply_lists(skipped_items, cancelled_urls, skipped, errors, error_items):
         next_items, removed = _without_skipped(
-            skipped_items, drop_cancelled=drop_cancelled, drop_other=drop_other
+            skipped_items,
+            drop_cancelled=drop_cancelled,
+            drop_other=drop_other,
+            skip_reason=reason_filter,
         )
         # Never leave reason=error under Skipped after a clear.
         if drop_other:
@@ -266,17 +289,25 @@ def clear_panel(status, key: str | None = None, *, which: str | None = None) -> 
         if int(snap.get("total") or 0) < int(snap.get("processed") or 0):
             snap["total"] = int(snap.get("processed") or 0)
 
-def retry_targets(status, key: str, *, which: str | None = None) -> list[str]:
+def retry_targets(
+    status,
+    key: str,
+    *,
+    which: str | None = None,
+    skip_reason: str | None = None,
+) -> list[str]:
     """URLs to retry for one panel.
 
     ``which`` is ``skipped`` (non-cancelled skips only), ``errors`` (Errors queue),
     or omitted for both. Cancelled and Queue to scrape stay out.
+    ``skip_reason`` limits the Skipped list to one reason when ``which`` is skipped or omitted.
     """
     key = (key or "").strip()
     if not key:
         return []
     want_skipped = which in (None, "skipped")
     want_errors = which in (None, "errors")
+    reason_filter = (skip_reason or "").strip() or None
     if key == status.source_key:
         items = status.skipped_items if want_skipped else []
         error_items = getattr(status, "error_items", []) or [] if want_errors else []
@@ -301,6 +332,8 @@ def retry_targets(status, key: str, *, which: str | None = None) -> list[str]:
     for row in items:
         reason = getattr(row, "reason", "")
         if reason in {"cancelled", "error"}:
+            continue
+        if reason_filter and reason != reason_filter:
             continue
         add(getattr(row, "url", ""))
     for row in error_items:
@@ -358,7 +391,17 @@ def restore(status, items: list[dict]) -> None:
     for key, rows in groups.items():
         _labels[key] = label_for(key)
         skipped = [
-            SkippedItem(url=row["url"], reason=row["reason"], detail=row["detail"])
+            SkippedItem(
+                url=row["url"],
+                reason=row["reason"],
+                detail=row["detail"],
+                existing_media_id=(
+                    int(row["existing_media_id"])
+                    if isinstance(row.get("existing_media_id"), int)
+                    and int(row["existing_media_id"]) > 0
+                    else None
+                ),
+            )
             for row in rows
             if row.get("reason") not in {"cancelled", "error"}
         ]
@@ -565,7 +608,16 @@ def panels(status, queues: dict[str, list[str]]) -> list[dict]:
                 "last_gallery_url": snap["last_gallery_url"],
                 "errors": list(snap["errors"]),
                 "skipped_items": [
-                    {"url": row.url, "reason": row.reason, "detail": row.detail}
+                    {
+                        "url": row.url,
+                        "reason": row.reason,
+                        "detail": row.detail,
+                        **(
+                            {"existing_media_id": int(row.existing_media_id)}
+                            if getattr(row, "existing_media_id", None)
+                            else {}
+                        ),
+                    }
                     for row in snap["skipped_items"]
                     if getattr(row, "reason", "") != "error"
                 ],

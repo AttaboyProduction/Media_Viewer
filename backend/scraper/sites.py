@@ -281,6 +281,40 @@ def get_selected_site() -> dict[str, Any] | None:
     return dict(site) if site else None
 
 
+def site_by_id(site_id: str | None) -> dict[str, Any] | None:
+    if not site_id:
+        return None
+    row = KNOWN_SITES.get(site_id)
+    return dict(row) if row else None
+
+
+def resolve_listing_site(*, gallery_url: str, site_id: str | None = None) -> dict[str, Any]:
+    """Site metadata for a gallery listing (DAPI vs browser paths)."""
+    from urllib.parse import urlparse
+
+    from backend.scraper.gelbooru import is_gelbooru_site
+
+    if site_id:
+        site = site_by_id(site_id)
+        if site:
+            return site
+    selected = get_selected_site()
+    if selected:
+        return selected
+    host = (urlparse(gallery_url).hostname or "").lower()
+    if host.startswith("www."):
+        host = host[4:]
+    for candidate in KNOWN_SITES.values():
+        if not is_gelbooru_site(candidate):
+            continue
+        base = (urlparse(str(candidate.get("base_url") or "")).hostname or "").lower()
+        if base.startswith("www."):
+            base = base[4:]
+        if host and base and host == base:
+            return dict(candidate)
+    return {}
+
+
 def get_selected_scraper() -> dict[str, Any] | None:
     data = load_session_settings()
     scraper_id = data.get("selected_scraper_id")

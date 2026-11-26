@@ -295,18 +295,28 @@ export type ScrapeRetryWhich = 'skipped' | 'errors'
 /** Clear one source panel's lists (`source`), or every panel when omitted.
  * `which` clears only that list; omitted clears Queue, Skipped, Errors, and Cancelled.
  */
-export function clearScrapeQueues(source?: string, which?: ScrapeListName) {
+export function clearScrapeQueues(
+  source?: string,
+  which?: ScrapeListName,
+  skipReason?: string,
+) {
   const params = new URLSearchParams()
   if (source) params.set('source', source)
   if (which) params.set('which', which)
+  if (skipReason) params.set('skip_reason', skipReason)
   const query = params.toString()
   return request<ScrapeStatus>(`/scrape/clear-queues${query ? `?${query}` : ''}`, { method: 'POST' })
 }
 
 /** Run this panel's Skipped and/or Errors files. Queue and Cancelled stay. */
-export function retryScrapeSkipped(source: string, which?: ScrapeRetryWhich) {
+export function retryScrapeSkipped(
+  source: string,
+  which?: ScrapeRetryWhich,
+  skipReason?: string,
+) {
   const params = new URLSearchParams({ source })
   if (which) params.set('which', which)
+  if (skipReason) params.set('skip_reason', skipReason)
   return request<ScrapeStatus>(`/scrape/retry?${params}`, { method: 'POST' })
 }
 

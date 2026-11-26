@@ -224,6 +224,7 @@ class ScrapeSkippedItemOut(BaseModel):
     url: str
     reason: str
     detail: str = ""
+    existing_media_id: int | None = None
 
 
 class ScrapeSourcePanelOut(BaseModel):

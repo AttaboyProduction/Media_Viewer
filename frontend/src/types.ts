@@ -156,6 +156,7 @@ export interface ScrapeSkippedItem {
   url: string
   reason: string
   detail?: string
+  existing_media_id?: number | null
 }
 
 /** One source's session numbers and lists: `local`, an installed site id, or `unsupported`. */

@@ -310,25 +310,10 @@ def iter_post_urls(
 
 
 def iter_gallery_posts(client, gallery_url: str, *, sort: str = "date_desc", should_stop: Callable[[], bool] | None = None):
-    """List post URLs for the selected site. Gelbooru uses the DAPI, then HTML."""
-    from backend.scraper.gelbooru import is_gelbooru_site, iter_posts
-    from backend.scraper.sites import get_selected_site
+    """List post URLs for the selected site (see ``scraper.listing``)."""
+    from backend.scraper.listing import iter_gallery_post_urls
 
-    site = get_selected_site() or {}
-    if is_gelbooru_site(site):
-        yield from iter_posts(client, site, gallery_url, sort=sort, should_stop=should_stop)
-        return
-    page = client.new_page()
-    try:
-        yield from iter_post_urls(
-            page,
-            gallery_url,
-            limit=0,
-            sort=sort,
-            should_stop=should_stop,
-        )
-    finally:
-        page.close()
+    yield from iter_gallery_post_urls(client, gallery_url, sort=sort, should_stop=should_stop)
 
 
 def collect_post_urls(

@@ -342,6 +342,48 @@ def _add_source_url(db: Session, media: MediaItem, url: str | None) -> None:
     db.add(MediaSourceUrl(media_id=media.id, url=text))
 
 
+def new_download_beats_library(row: MediaItem, stored: StoredFile, *, new_media_type: str) -> bool:
+    """True when the new bytes should replace the saved library row."""
+    if (new_media_type or "") == "video" and row.media_type == "video":
+        new_rank = video_suffix_rank(stored.path.name)
+        old_rank = video_suffix_rank(Path(row.local_path or "").name)
+        if new_rank != old_rank:
+            return new_rank > old_rank
+    return int(stored.file_size or 0) > int(row.file_size or 0)
+
+
+def replace_library_file_if_larger(
+    db: Session,
+    kept: MediaItem,
+    post: PostData,
+    stored: StoredFile,
+) -> bool:
+    """Swap the on-disk library file when the new download is heavier. Returns True if replaced."""
+    from backend.app.services.media_service import absolute_path_for_media
+
+    if not new_download_beats_library(kept, stored, new_media_type=post.media_type):
+        kept_path = absolute_path_for_media(kept)
+        if stored.path.exists() and stored.path.resolve() != kept_path.resolve():
+            stored.path.unlink(missing_ok=True)
+        return False
+
+    old_path = absolute_path_for_media(kept)
+    relative_path = _relative_path(stored.path)
+    kept.local_path = relative_path
+    kept.content_hash = stored.content_hash
+    kept.phash = stored.phash
+    kept.file_size = stored.file_size
+    if post.posted_at is not None:
+        kept.source_posted_at = post.posted_at
+    kept.media_type = post.media_type
+    _merge_scraped_tags(db, kept, post)
+    _add_source_url(db, kept, post.post_url)
+    if old_path.exists() and old_path.resolve() != stored.path.resolve():
+        old_path.unlink(missing_ok=True)
+    db.flush()
+    return True
+
+
 def _skip_identical_download(db: Session, post: PostData, stored: StoredFile) -> UpsertResult | None:
     from backend.app.services.app_settings import load_app_settings
 
@@ -351,6 +393,9 @@ def _skip_identical_download(db: Session, post: PostData, stored: StoredFile) ->
     if not match or match[1] != "identical":
         return None
     kept = match[0]
+    if replace_library_file_if_larger(db, kept, post, stored):
+        _apply_visual_match(db, kept, stored.phash)
+        return UpsertResult(media=kept, skipped_reason=None)
     _merge_scraped_tags(db, kept, post)
     _add_source_url(db, kept, post.post_url)
     from backend.app.services.media_service import absolute_path_for_media
