@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { fetchAppSettings, fetchScrapeStatus, restartApp, shutdownApp } from './api/client'
+import { fetchAppSettings, restartApp, shutdownApp } from './api/client'
+import ScrapeFinishNotifier from './components/ScrapeFinishNotifier'
 import { SaveFeedbackProvider, useSaveFeedback } from './context/SaveFeedbackContext'
 import { ConfirmProvider, useConfirm } from './context/ConfirmContext'
 import { ResolveDuplicatesProvider } from './context/ResolveDuplicatesContext'
@@ -161,20 +162,13 @@ export default function App() {
   })
   const hideScrapePage = (appSettings ?? DEFAULT_APP_SETTINGS).hide_scrape_page
 
-  // Prefetch so Scrape status is ready when opening the page (no late flash).
-  useQuery({
-    queryKey: ['scrape-status'],
-    queryFn: fetchScrapeStatus,
-    staleTime: 5_000,
-    enabled: !hideScrapePage,
-  })
-
   return (
     <SaveFeedbackProvider>
       <ConfirmProvider>
         <ResolveDuplicatesProvider>
           <div className="app-shell">
             <AppSettingsSync />
+            {!hideScrapePage ? <ScrapeFinishNotifier /> : null}
             <TopNav hideScrapePage={hideScrapePage} />
             <AppRoutes hideScrapePage={hideScrapePage} />
           </div>

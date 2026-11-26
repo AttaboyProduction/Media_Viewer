@@ -30,6 +30,7 @@ import ExcludeTagsPicker from './ExcludeTagsPicker'
 import ScrapeSelect, { scraperBusyDetail, sourceBusyDetail } from './ScrapeSelect'
 import MediaDetailModal from './MediaDetailModal'
 import ScrapeSourcePanel from './ScrapeSourcePanel'
+import { ensureScrapeNotificationPermission } from '../utils/scrapeNotification'
 import { scrapeSkipReasonLabel } from '../utils/scrapeSkipReasons'
 import { SearchableTagSingleSelect } from './TagChipSelect'
 
@@ -452,6 +453,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
 
   const start = async (panelKey: string) => {
     setError(null)
+    ensureScrapeNotificationPermission()
     if (panelKey === 'unsupported') {
       // Raw-file panel: no filters, only that panel's queued / skipped URLs.
       try {
@@ -509,6 +511,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
 
   const startEnqueue = async (panelKey: string) => {
     setError(null)
+    ensureScrapeNotificationPermission()
     if (panelKey !== formSourceKey) {
       setError('Choose this source in the Source field above to find URLs.')
       return
