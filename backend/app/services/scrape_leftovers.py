@@ -513,6 +513,92 @@ def persist_interrupted() -> None:
     sync_open([])
 
 
+def reconcile_queue_with_library() -> int:
+    """Move queued post URLs that already live in the library into Skipped."""
+    from backend.app.db.session import SessionLocal
+    from backend.app.services.library_urls import (
+        build_library_url_index,
+        library_media_id_from_index,
+    )
+
+    db = SessionLocal()
+    try:
+        index = build_library_url_index(db)
+    finally:
+        db.close()
+
+    to_skip: list[tuple[str, str, int]] = []
+    with _lock:
+        data = _load()
+        kept: list[str] = []
+        for url in data["queue"]:
+            mid = library_media_id_from_index(index, url)
+            if mid is not None:
+                to_skip.append((url, _source_of(data, url), mid))
+            else:
+                kept.append(url)
+        if not to_skip:
+            return 0
+        data["queue"] = kept
+        for url, _, _ in to_skip:
+            key = identity(url)
+            if key:
+                data["sources"].pop(key, None)
+                data["page_urls"].pop(key, None)
+        _save(data)
+
+    for url, source, mid in to_skip:
+        remember_unfinished(
+            url,
+            "already_have",
+            "",
+            source,
+            existing_media_id=mid,
+        )
+    return len(to_skip)
+
+
+def prune_stale_queue_urls() -> int:
+    """Drop queue URLs that are not from an installed site (e.g. unit-test hosts)."""
+    from urllib.parse import urlparse
+
+    from backend.scraper.sites import extension_scrape_target, list_known_sites
+
+    known_hosts: set[str] = set()
+    for site in list_known_sites():
+        host = (urlparse(str(site.get("base_url") or "")).hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if host:
+            known_hosts.add(host)
+
+    removed = 0
+    with _lock:
+        data = _load()
+        kept: list[str] = []
+        for url in data["queue"]:
+            if extension_scrape_target(url):
+                kept.append(url)
+                continue
+            host = (urlparse(url).hostname or "").lower()
+            if host.startswith("www."):
+                host = host[4:]
+            if host in known_hosts:
+                kept.append(url)
+                continue
+            if host.endswith(".test") or host.endswith(".example"):
+                removed += 1
+                continue
+            if derive_source(url) == SOURCE_UNSUPPORTED:
+                kept.append(url)
+                continue
+            kept.append(url)
+        if removed:
+            data["queue"] = kept
+            _save(data)
+    return removed
+
+
 def restore_into_status() -> None:
     """Show stored leftovers on the Scrape page after a restart, one panel per source.
 
@@ -523,6 +609,8 @@ def restore_into_status() -> None:
     from backend.app.services import scrape_panels
     from backend.scraper.pipeline import scrape_status
 
+    prune_stale_queue_urls()
+    reconcile_queue_with_library()
     adopt_open_as_unfinished()
     items = unfinished_items()
     scrape_panels.restore(scrape_status, items)

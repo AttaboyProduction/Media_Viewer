@@ -227,10 +227,17 @@ def _settle_existing_post(post_url: str, result) -> None:
         )
 
 
-def _record_enqueue_already_have(url: str, post_id: str, db) -> None:
-    row = db.query(MediaItem).filter(MediaItem.source_post_id == post_id).first()
-    existing_id = int(row.id) if row is not None else None
-    _complete_skip(url, "already_have", "", existing_media_id=existing_id)
+def _record_enqueue_already_have(
+    url: str,
+    db,
+    *,
+    existing_media_id: int | None = None,
+) -> None:
+    if existing_media_id is None:
+        from backend.app.services.library_urls import library_media_id_for_scrape_url
+
+        existing_media_id = library_media_id_for_scrape_url(db, url)
+    _complete_skip(url, "already_have", "", existing_media_id=existing_media_id)
     with scrape_lock:
         scrape_status.accepted_urls.add(url)
 
@@ -263,11 +270,15 @@ def begin_enqueue_queue(job: ScrapeJob, site_id: str | None) -> None:
     db = SessionLocal()
     try:
         seed_database(db)
-        existing_posts = _library_post_ids(db)
+        from backend.app.services.library_urls import (
+            build_library_url_index,
+            library_media_id_from_index,
+        )
+
+        library_index = build_library_url_index(db)
         for url in post_seeds:
-            post_id = extract_post_id(url)
-            if post_id and post_id in existing_posts:
-                _record_enqueue_already_have(url, post_id, db)
+            if library_media_id_from_index(library_index, url) is not None:
+                _record_enqueue_already_have(url, db)
     finally:
         db.close()
     _refresh_persisted_queue_urls()
@@ -372,6 +383,7 @@ def enqueue_discovered_urls(
     *,
     site_id: str | None,
     existing_posts: dict[str, object] | None = None,
+    library_index: dict[str, int] | None = None,
     db=None,
     client: PlaywrightClient | None = None,
     job: ScrapeJob | None = None,
@@ -388,10 +400,19 @@ def enqueue_discovered_urls(
         if not key or key in known:
             continue
         if enqueue_only and db is not None:
-            post_id = extract_post_id(url)
-            if existing_posts and post_id and post_id in existing_posts:
+            from backend.app.services.library_urls import (
+                library_media_id_for_scrape_url,
+                library_media_id_from_index,
+            )
+
+            mid = (
+                library_media_id_from_index(library_index, url)
+                if library_index is not None
+                else library_media_id_for_scrape_url(db, url)
+            )
+            if mid is not None:
                 known.add(key)
-                _record_enqueue_already_have(url, post_id, db)
+                _record_enqueue_already_have(url, db, existing_media_id=mid)
                 continue
         known.add(key)
         fresh.append(url)
@@ -968,6 +989,7 @@ def _process_post_url(
     job: ScrapeJob,
     post_url: str,
     existing_posts: dict[str, object],
+    library_index: dict[str, int] | None = None,
 ) -> str:
     """Process one post URL.
 
@@ -981,20 +1003,26 @@ def _process_post_url(
         return "stop_cancel"
 
     post_id = extract_post_id(post_url)
-    with _posts_lock:
-        already = bool(post_id and post_id in existing_posts)
-        posted_at = existing_posts.get(post_id) if already else None
-    if already:
-        existing = (
-            db.query(MediaItem).filter(MediaItem.source_post_id == post_id).first()
-            if post_id
-            else None
-        )
-        existing_id = int(existing.id) if existing is not None else None
-        if _maybe_upgrade_existing(db, post_url, post_id):
+    from backend.app.services.library_urls import (
+        library_media_id_for_scrape_url,
+        library_media_id_from_index,
+    )
+
+    existing_id = (
+        library_media_id_from_index(library_index, post_url)
+        if library_index is not None
+        else library_media_id_for_scrape_url(db, post_url)
+    )
+    if existing_id is None and post_id and post_id in existing_posts:
+        row = db.query(MediaItem).filter(MediaItem.source_post_id == post_id).first()
+        existing_id = int(row.id) if row is not None else None
+    if existing_id is not None:
+        existing = db.get(MediaItem, existing_id)
+        posted_at = existing.source_posted_at if existing is not None else None
+        if post_id and _maybe_upgrade_existing(db, post_url, post_id):
             return "ok"
         _complete_skip(post_url, "already_have", "", existing_media_id=existing_id)
-        if should_stop_for_date(posted_at, job):  # type: ignore[arg-type]
+        if should_stop_for_date(posted_at, job):
             scrape_status.message = "Reached date range boundary"
             scrape_status.current_url = None
             return "stop_date"
@@ -1116,10 +1144,17 @@ class _DownloadLanes:
     JSON API run on the pool, each with its own database session.
     """
 
-    def __init__(self, client, job: ScrapeJob, existing_posts: dict) -> None:
+    def __init__(
+        self,
+        client,
+        job: ScrapeJob,
+        existing_posts: dict,
+        library_index: dict[str, int] | None = None,
+    ) -> None:
         self.client = client
         self.job = job
         self.existing_posts = existing_posts
+        self.library_index = library_index
         self.n = _download_concurrency()
         self.listing_stop = False
         self._job_id = scrape_status.job_id
@@ -1161,7 +1196,14 @@ class _DownloadLanes:
         _browser_ok.ok = False
         db = SessionLocal()
         try:
-            return _process_post_url(self.client, db, self.job, url, self.existing_posts)
+            return _process_post_url(
+                self.client,
+                db,
+                self.job,
+                url,
+                self.existing_posts,
+                self.library_index,
+            )
         finally:
             db.close()
 
@@ -1169,7 +1211,14 @@ class _DownloadLanes:
         _browser_ok.ok = browser
         db = SessionLocal()
         try:
-            return _process_post_url(self.client, db, self.job, url, self.existing_posts)
+            return _process_post_url(
+                self.client,
+                db,
+                self.job,
+                url,
+                self.existing_posts,
+                self.library_index,
+            )
         finally:
             db.close()
 
@@ -1563,7 +1612,9 @@ def run_enqueue_job(job: ScrapeJob) -> ScrapeStatus:
     db = SessionLocal()
     try:
         seed_database(db)
-        existing_posts = _library_post_ids(db)
+        from backend.app.services.library_urls import build_library_url_index
+
+        library_index = build_library_url_index(db)
         with PlaywrightClient() as client:
             from backend.scraper.gelbooru import bind_client, is_gelbooru_site
 
@@ -1578,7 +1629,7 @@ def run_enqueue_job(job: ScrapeJob) -> ScrapeStatus:
                 enqueue_discovered_urls(
                     [url],
                     site_id=scrape_status.site_id,
-                    existing_posts=existing_posts,
+                    library_index=library_index,
                     db=db,
                     client=client,
                     job=job,
@@ -1597,7 +1648,7 @@ def run_enqueue_job(job: ScrapeJob) -> ScrapeStatus:
                     enqueue_discovered_urls(
                         [post_url],
                         site_id=scrape_status.site_id,
-                        existing_posts=existing_posts,
+                        library_index=library_index,
                         db=db,
                         client=client,
                         job=job,
@@ -1638,10 +1689,14 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
     db = SessionLocal()
     try:
         seed_database(db)
+        from backend.app.services.library_urls import build_library_url_index
+
         existing_posts = {
             row.source_post_id: row.source_posted_at
             for row in db.query(MediaItem.source_post_id, MediaItem.source_posted_at).all()
+            if row.source_post_id
         }
+        library_index = build_library_url_index(db)
 
         with PlaywrightClient() as client:
             from backend.scraper.gelbooru import bind_client, is_gelbooru_site
@@ -1655,7 +1710,7 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
             # errors). processed counts each of those once it settles. The
             # Settings limit still stops the listing and counts downloads only.
             scrape_status.message = "Collecting posts..."
-            lanes = _DownloadLanes(client, job, existing_posts)
+            lanes = _DownloadLanes(client, job, existing_posts, library_index)
             try:
                 outcome = lanes.drain()
                 stop = outcome == "stop_date"
@@ -1690,7 +1745,12 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
                             should_abort=_listing_should_abort,
                             site_id=scrape_status.site_id,
                             on_discovered=lambda post_url: enqueue_discovered_urls(
-                                [post_url], site_id=scrape_status.site_id
+                                [post_url],
+                                site_id=scrape_status.site_id,
+                                library_index=library_index,
+                                db=db,
+                                client=client,
+                                job=job,
                             ),
                             after_discovered=lanes.fill,
                         )

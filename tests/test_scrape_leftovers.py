@@ -420,17 +420,12 @@ class ScrapeLeftoverTests(unittest.TestCase):
             pipeline.scrape_status.total = 0
             pipeline.scrape_status.skipped_items = []
 
-        mock_db = MagicMock()
-        media_row = MagicMock()
-        media_row.id = 7
-        mock_db.query.return_value.filter.return_value.first.return_value = media_row
-
         with patch.object(pipeline, "extract_post_id", return_value="88"):
             added = pipeline.enqueue_discovered_urls(
                 [url],
                 site_id="gallery",
-                existing_posts={"88": None},
-                db=mock_db,
+                library_index={"post:88": 7},
+                db=MagicMock(),
             )
 
         self.assertEqual(added, [])
@@ -464,6 +459,60 @@ class ScrapeLeftoverTests(unittest.TestCase):
 
         self.assertEqual(added, [url])
         self.assertEqual(scrape_leftovers.queue_urls("gallery"), [url])
+
+    def test_prune_stale_test_hosts_from_queue(self) -> None:
+        scrape_leftovers.add_queue(
+            [
+                "https://gallery.test/post/55",
+                "https://site-a.test/post/q",
+            ],
+            source="rule34",
+        )
+        with (
+            patch("backend.scraper.sites.extension_scrape_target", return_value=None),
+            patch("backend.scraper.sites.list_known_sites", return_value=[]),
+        ):
+            removed = scrape_leftovers.prune_stale_queue_urls()
+        self.assertEqual(removed, 2)
+        self.assertEqual(scrape_leftovers.queue_urls(), [])
+
+    def test_reconcile_queue_moves_library_urls_to_skipped(self) -> None:
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from backend.app.db.models import Base, MediaItem, MediaSourceUrl
+        from backend.app.services import scrape_leftovers as sl
+
+        page = "https://rule34.xxx/index.php?page=post&s=view&id=55"
+        scrape_leftovers.add_queue([page], source="rule34_xxx")
+
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        Session = sessionmaker(bind=engine, autoflush=False)
+        db = Session()
+        media = MediaItem(
+            source_post_id="999",
+            source_url="https://rule34.xxx/index.php?page=post&s=view&id=999",
+            local_path="media/x.jpg",
+            media_type="image",
+        )
+        db.add(media)
+        db.flush()
+        db.add(MediaSourceUrl(media_id=media.id, url=page))
+        db.commit()
+        media_id = int(media.id)
+
+        with patch("backend.app.db.session.SessionLocal", return_value=db):
+            moved = sl.reconcile_queue_with_library()
+
+        self.assertEqual(moved, 1)
+        self.assertEqual(scrape_leftovers.queue_urls(), [])
+        rows = scrape_leftovers.unfinished_items("rule34_xxx")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["reason"], "already_have")
+        self.assertEqual(rows[0]["existing_media_id"], media_id)
+        db.close()
+        engine.dispose()
 
     def test_skip_reason_matches_library_updated_group(self) -> None:
         from backend.app.services.scrape_leftovers import skip_reason_matches
