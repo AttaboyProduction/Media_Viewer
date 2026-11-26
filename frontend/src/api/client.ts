@@ -277,6 +277,14 @@ export function runScrape(payload: ScrapeRunRequest) {
   })
 }
 
+/** Walk listings with the current filters and fill Queue to scrape (no downloads). */
+export function enqueueScrape(payload: ScrapeRunRequest) {
+  return request<ScrapeStatus>('/scrape/enqueue', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  })
+}
+
 export function cancelScrape() {
   return request<ScrapeStatus>('/scrape/cancel', { method: 'POST' })
 }

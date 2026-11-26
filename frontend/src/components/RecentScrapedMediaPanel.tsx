@@ -444,7 +444,7 @@ export default function RecentScrapedMediaPanel() {
   return (
     <div className="panel">
       <div className="panel-header-row">
-        <h2>Downloaded previously</h2>
+        <h2>Downloaded</h2>
         <div className="panel-header-actions">
           <label className="recent-scrape-scope">
             <input

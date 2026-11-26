@@ -140,6 +140,9 @@ interface Props {
   runTitle: string
   runLabel: string
   onRun: () => void
+  canEnqueue?: boolean
+  enqueueTitle?: string
+  onEnqueue?: () => void
   onStop: () => void
   onClear: () => void
   onClearList: (which: ScrapeListName, skipReason?: string) => void
@@ -159,6 +162,9 @@ export default function ScrapeSourcePanel({
   runTitle,
   runLabel,
   onRun,
+  canEnqueue = false,
+  enqueueTitle,
+  onEnqueue,
   onStop,
   onClear,
   onClearList,
@@ -240,6 +246,17 @@ export default function ScrapeSourcePanel({
         >
           Stop
         </button>
+        {onEnqueue ? (
+          <button
+            type="button"
+            className="btn"
+            onClick={onEnqueue}
+            disabled={!canEnqueue}
+            title={enqueueTitle ?? 'Find post URLs and add them to Queue to scrape'}
+          >
+            Find URLs
+          </button>
+        ) : null}
         <button
           type="button"
           className="btn"

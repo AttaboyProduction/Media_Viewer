@@ -31,8 +31,10 @@ from backend.scraper.pipeline import (
     abandon_running_job,
     append_leftover_urls,
     _mark_retry_already_in_total,
+    begin_enqueue_queue,
     begin_remote_retry,
     begin_scrape_queue,
+    run_enqueue_job,
     run_job,
     scrape_lock,
     scrape_status,
@@ -146,6 +148,13 @@ def _start_job(job, job_id: int, remote_leftovers: list[str] | None = None) -> N
         scrape_status.errors.append(str(exc))
         scrape_status.message = f"Failed: {exc}"
         _release_queue(job_id)
+
+
+def _start_enqueue_job(job, job_id: int) -> None:
+    try:
+        run_enqueue_job(job)
+    except Exception:
+        pass
 
 
 @router.get("/session", response_model=SessionSettingsOut)
@@ -392,6 +401,57 @@ def start_scrape_run(
 @router.post("/run", response_model=ScrapeStatusOut, dependencies=[Depends(require_scrape_page)])
 def post_scrape_run(payload: ScrapeRunRequest) -> ScrapeStatusOut:
     return start_scrape_run(payload, include_leftovers=True)
+
+
+def start_enqueue_run(payload: ScrapeRunRequest) -> ScrapeStatusOut:
+    """List matching posts into Queue to scrape without downloading."""
+    panel_key = (payload.source_key or "").strip() or None
+    with scrape_lock:
+        if scrape_status.running:
+            raise HTTPException(status_code=409, detail="Scrape already running")
+        if panel_key == scrape_panels.SOURCE_UNSUPPORTED:
+            raise HTTPException(
+                status_code=400,
+                detail="Find URLs is not available for Unsupported.",
+            )
+        if panel_key == scrape_panels.SOURCE_LOCAL:
+            raise HTTPException(status_code=400, detail="Find URLs is not available for Local.")
+        site = get_selected_site()
+        if site is None:
+            raise HTTPException(status_code=400, detail="Choose a site and scraper first.")
+        if panel_key is not None and site["id"] != panel_key:
+            raise HTTPException(
+                status_code=400,
+                detail="That panel's source is not the selected Source.",
+            )
+        if not _filters_have_work(payload):
+            raise HTTPException(
+                status_code=400,
+                detail="Add tags, a gallery URL, or other filters before finding URLs.",
+            )
+        try:
+            job = compile_scrape_job(payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        scrape_panels.activate(scrape_status, site["id"], site.get("name", ""))
+        scrape_status.job_id += 1
+        job_id = scrape_status.job_id
+        scrape_status.running = True
+        scrape_status.cancel = False
+        scrape_status.message = "Queued"
+        begin_enqueue_queue(job, site["id"])
+        thread = threading.Thread(
+            target=_start_enqueue_job,
+            args=(job, job_id),
+            daemon=True,
+        )
+        thread.start()
+    return _status_out()
+
+
+@router.post("/enqueue", response_model=ScrapeStatusOut, dependencies=[Depends(require_scrape_page)])
+def post_scrape_enqueue(payload: ScrapeRunRequest) -> ScrapeStatusOut:
+    return start_enqueue_run(payload)
 
 
 @router.post(

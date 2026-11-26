@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
@@ -344,6 +344,124 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertEqual(scrape_leftovers.queue_urls(), [url])
         self.assertEqual(pipeline.scrape_status.pending_urls, [url])
         self.assertEqual(pipeline.scrape_status.total, 1)
+
+    def test_enqueue_kind_queues_without_pending(self) -> None:
+        """Listing-only jobs persist finds without opening download pending URLs."""
+        url = "https://gallery.test/post/99"
+        with pipeline.scrape_lock:
+            pipeline.scrape_status.running = True
+            pipeline.scrape_status.kind = "enqueue"
+            pipeline.scrape_status.queue_open = True
+            pipeline.scrape_status.site_id = "gallery"
+            pipeline.scrape_status.source_key = "gallery"
+            pipeline.scrape_status.pending_urls = []
+            pipeline.scrape_status.accepted_urls = set()
+            pipeline.scrape_status.total = 0
+
+        added = pipeline.enqueue_discovered_urls([url], site_id="gallery")
+
+        self.assertEqual(added, [url])
+        self.assertEqual(scrape_leftovers.queue_urls("gallery"), [url])
+        self.assertEqual(pipeline.scrape_status.pending_urls, [])
+        self.assertEqual(pipeline.scrape_status.total, 1)
+
+    def test_enqueue_already_have_goes_to_skipped_not_queue(self) -> None:
+        url = "https://gallery.test/post/88"
+        with pipeline.scrape_lock:
+            pipeline.scrape_status.running = True
+            pipeline.scrape_status.kind = "enqueue"
+            pipeline.scrape_status.queue_open = True
+            pipeline.scrape_status.site_id = "gallery"
+            pipeline.scrape_status.source_key = "gallery"
+            pipeline.scrape_status.pending_urls = []
+            pipeline.scrape_status.accepted_urls = set()
+            pipeline.scrape_status.total = 0
+            pipeline.scrape_status.skipped_items = []
+
+        mock_db = MagicMock()
+        media_row = MagicMock()
+        media_row.id = 7
+        mock_db.query.return_value.filter.return_value.first.return_value = media_row
+
+        with patch.object(pipeline, "extract_post_id", return_value="88"):
+            added = pipeline.enqueue_discovered_urls(
+                [url],
+                site_id="gallery",
+                existing_posts={"88": None},
+                db=mock_db,
+            )
+
+        self.assertEqual(added, [])
+        self.assertEqual(scrape_leftovers.queue_urls("gallery"), [])
+        rows = scrape_leftovers.unfinished_items("gallery")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["reason"], "already_have")
+        self.assertEqual(rows[0]["existing_media_id"], 7)
+        self.assertEqual(pipeline.scrape_status.skipped, 1)
+        self.assertEqual(pipeline.scrape_status.skipped_items[0].reason, "already_have")
+
+    def test_enqueue_probe_duplicate_goes_to_identical_skipped(self) -> None:
+        url = "https://gallery.test/post/77"
+        with pipeline.scrape_lock:
+            pipeline.scrape_status.running = True
+            pipeline.scrape_status.kind = "enqueue"
+            pipeline.scrape_status.queue_open = True
+            pipeline.scrape_status.site_id = "gallery"
+            pipeline.scrape_status.source_key = "gallery"
+            pipeline.scrape_status.accepted_urls = set()
+            pipeline.scrape_status.skipped_items = []
+
+        job = _job([url])
+        with patch.object(
+            pipeline,
+            "_enqueue_probe_duplicate",
+            return_value=("identical", 12),
+        ):
+            added = pipeline.enqueue_discovered_urls(
+                [url],
+                site_id="gallery",
+                existing_posts={},
+                db=MagicMock(),
+                client=MagicMock(),
+                job=job,
+            )
+
+        self.assertEqual(added, [])
+        self.assertEqual(scrape_leftovers.queue_urls("gallery"), [])
+        self.assertEqual(pipeline.scrape_status.skipped_items[0].reason, "identical")
+        self.assertEqual(pipeline.scrape_status.skipped_items[0].existing_media_id, 12)
+
+    def test_start_enqueue_run_opens_enqueue_job(self) -> None:
+        job = _job(["https://gallery.test/post/1"])
+        site = {"id": "gallery", "name": "Gallery"}
+
+        class _Now:
+            def __init__(self, target=None, args=(), kwargs=None, daemon=None):
+                self._target = target
+                self._args = args
+
+            def start(self) -> None:
+                if self._target is not None:
+                    self._target(*self._args)
+
+        with (
+            patch.object(scrape_api, "get_selected_site", return_value=site),
+            patch.object(scrape_api, "compile_scrape_job", return_value=job) as compile_job,
+            patch.object(scrape_api, "run_enqueue_job") as run_enqueue,
+            patch.object(scrape_api.threading, "Thread", _Now),
+        ):
+            status = scrape_api.start_enqueue_run(
+                ScrapeRunRequest(
+                    filters=[{"type": "tag", "value": "test"}],
+                    limit=0,
+                    source_key="gallery",
+                )
+            )
+
+        compile_job.assert_called_once()
+        run_enqueue.assert_called_once_with(job)
+        self.assertTrue(status.running)
+        self.assertEqual(pipeline.scrape_status.kind, "enqueue")
 
     def test_discovered_post_already_accepted_is_not_queued_again(self) -> None:
         """A re-discovered post accepted this run must not remain in Queue."""

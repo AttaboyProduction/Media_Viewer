@@ -18,6 +18,7 @@ import {
   pickLocalImportFolder,
   runLocalImport,
   runScrape,
+  enqueueScrape,
   patchAppSettings,
 } from '../api/client'
 import { useConfirm } from '../context/ConfirmContext'
@@ -506,6 +507,34 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     }
   }
 
+  const startEnqueue = async (panelKey: string) => {
+    setError(null)
+    if (panelKey !== formSourceKey) {
+      setError('Choose this source in the Source field above to find URLs.')
+      return
+    }
+    if (!session?.selected_site_id || !session.selected_scraper_id) {
+      setError('Choose a site and scraper before finding URLs.')
+      return
+    }
+    try {
+      const next = await enqueueScrape({
+        filters: toFilters(rows),
+        sort,
+        limit: 0,
+        exclude_tags: excludeTags
+          .split(',')
+          .map((tag) => tag.trim())
+          .filter(Boolean),
+        tag_mode: tagMode,
+        source_key: panelKey,
+      })
+      queryClient.setQueryData(['scrape-status'], next)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to find URLs')
+    }
+  }
+
   const stop = async () => {
     const next = await cancelScrape()
     queryClient.setQueryData(['scrape-status'], next)
@@ -536,7 +565,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
         ? skipReason && which === 'skipped'
           ? `Remove only ${panel.label}'s Skipped files marked "${scrapeSkipReasonLabel(skipReason)}"? Other skip reasons and lists stay.`
           : `Remove everything from ${panel.label}'s ${listName}? The other lists, downloaded files, and other sources stay.`
-        : `Remove everything from ${panel.label}'s Queue to scrape, Skipped, Errors, and Cancelled? Downloaded files, the Downloaded previously list, and other sources stay.`,
+        : `Remove everything from ${panel.label}'s Queue to scrape, Skipped, Errors, and Cancelled? Downloaded files, the Downloaded list, and other sources stay.`,
       confirmLabel: listName ? 'Clear' : 'Clear queues',
       danger: true,
     })
@@ -608,6 +637,34 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     return session?.selected_site_id && session.selected_scraper_id
       ? { canRun: true, title: `Run ${panel.label} with the filters above` }
       : { canRun: false, title: 'Choose a site and scraper first' }
+  }
+
+  const panelEnqueueGate = (
+    panel: ScrapeSourcePanelData,
+    isFormSource: boolean,
+  ): { canEnqueue: boolean; title: string } => {
+    if (panel.key === 'unsupported' || panel.key === 'local') {
+      return { canEnqueue: false, title: '' }
+    }
+    if (status?.running) {
+      return {
+        canEnqueue: false,
+        title: `Wait for the running ${runningLabel} job, or press Stop`,
+      }
+    }
+    if (!isFormSource) {
+      return {
+        canEnqueue: false,
+        title: `Choose ${panel.label} as the Source above to find URLs`,
+      }
+    }
+    return session?.selected_site_id && session.selected_scraper_id
+      ? {
+          canEnqueue: true,
+          title:
+            'Walk the gallery with the filters above and fill Queue to scrape without downloading',
+        }
+      : { canEnqueue: false, title: 'Choose a site and scraper first' }
   }
 
   const visiblePanels = panels.filter((panel) => {
@@ -1085,6 +1142,8 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
           {visiblePanels.map((panel) => {
             const isFormSource = panel.key === formSourceKey
             const gate = panelRunGate(panel, isFormSource)
+            const enqueueGate = panelEnqueueGate(panel, isFormSource)
+            const showEnqueue = panel.key !== 'local' && panel.key !== 'unsupported'
             return (
               <ScrapeSourcePanel
                 key={panel.key}
@@ -1096,6 +1155,9 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                 runTitle={gate.title}
                 runLabel={panel.key === 'local' ? 'Run import' : 'Run scrape'}
                 onRun={() => void start(panel.key)}
+                canEnqueue={enqueueGate.canEnqueue}
+                enqueueTitle={enqueueGate.title}
+                onEnqueue={showEnqueue ? () => void startEnqueue(panel.key) : undefined}
                 onStop={stop}
                 onClear={() => void clearQueues(panel)}
                 onClearList={(which, skipReason) => void clearQueues(panel, which, skipReason)}

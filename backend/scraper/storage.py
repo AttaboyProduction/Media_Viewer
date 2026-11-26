@@ -407,6 +407,37 @@ def _skip_identical_download(db: Session, post: PostData, stored: StoredFile) ->
     return UpsertResult(media=kept, skipped_reason="identical")
 
 
+def classify_stored_against_library(
+    db: Session,
+    post: PostData,
+    stored: StoredFile,
+) -> UpsertResult | None:
+    """Return a skip outcome when the bytes match the library; do not insert a new row."""
+    from backend.app.services.media_service import absolute_path_for_media
+
+    exact = db.query(MediaItem).filter(MediaItem.content_hash == stored.content_hash).first()
+    by_post = db.query(MediaItem).filter(MediaItem.source_post_id == post.post_id).first()
+
+    if exact and (not by_post or exact.id != by_post.id):
+        _merge_scraped_tags(db, exact, post)
+        _add_source_url(db, exact, post.post_url)
+        kept = absolute_path_for_media(exact)
+        if stored.path.exists() and stored.path.resolve() != kept.resolve():
+            stored.path.unlink(missing_ok=True)
+        db.flush()
+        return UpsertResult(media=exact, skipped_reason="duplicate_hash")
+
+    if by_post is not None and by_post.content_hash == stored.content_hash:
+        _add_source_url(db, by_post, post.post_url)
+        db.flush()
+        return UpsertResult(media=by_post, skipped_reason="already_have")
+
+    skipped = _skip_identical_download(db, post, stored)
+    if skipped is not None and skipped.skipped_reason:
+        return skipped
+    return None
+
+
 def _apply_visual_match(db: Session, media: MediaItem, phash: str | None) -> None:
     match = find_earlier_phash_match(db, phash, exclude_id=media.id)
     if match and match[0].content_hash != media.content_hash:

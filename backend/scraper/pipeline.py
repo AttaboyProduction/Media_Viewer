@@ -16,6 +16,7 @@ from backend.scraper.gallery import extract_post_id
 from backend.scraper.job import ScrapeJob, compile_scrape_job, date_in_range, should_stop_for_date
 from backend.scraper.post import normalize_tag_name, scrape_post, scrape_post_from_api
 from backend.scraper.storage import (
+    classify_stored_against_library,
     download_media,
     save_remote_file,
     upsert_post,
@@ -56,7 +57,7 @@ class ScrapeStatus:
     ran_this_session: bool = False
     # Extension URLs join the running scrape through this queue.
     job_id: int = 0
-    kind: str = ""  # "scrape" | "import" | ""
+    kind: str = ""  # "scrape" | "enqueue" | "import" | "download" | ""
     site_id: str | None = None
     # Panel the live counters / lists belong to (see services/scrape_panels.py).
     source_key: str = ""
@@ -177,6 +178,137 @@ def begin_scrape_queue(
     _sync_open_urls()
 
 
+def _library_post_ids(db) -> dict[str, object]:
+    return {
+        row.source_post_id: row.source_posted_at
+        for row in db.query(MediaItem.source_post_id, MediaItem.source_posted_at).all()
+        if row.source_post_id
+    }
+
+
+def _record_enqueue_skip(
+    url: str,
+    reason: str,
+    *,
+    existing_media_id: int | None = None,
+) -> None:
+    """Find URLs: intentional skips go to Skipped, not Queue to scrape."""
+    with scrape_lock:
+        if url in scrape_status.accepted_urls:
+            return
+        scrape_status.accepted_urls.add(url)
+        for item in scrape_status.skipped_items:
+            if item.url == url and item.reason == reason:
+                return
+        _record_skip_locked(url, reason, "", existing_media_id=existing_media_id)
+
+
+def _record_enqueue_already_have(url: str, post_id: str, db) -> None:
+    row = db.query(MediaItem).filter(MediaItem.source_post_id == post_id).first()
+    existing_id = int(row.id) if row is not None else None
+    _record_enqueue_skip(url, "already_have", existing_media_id=existing_id)
+
+
+def _enqueue_probe_duplicate(
+    db,
+    client: PlaywrightClient,
+    job: ScrapeJob,
+    post_url: str,
+) -> tuple[str, int | None] | None:
+    """Download once and classify; return ``(skip_reason, media_id)`` or None to queue."""
+    if _cancelled():
+        return None
+    post_id = extract_post_id(post_url)
+    post = None
+    if post_id:
+        try:
+            post = scrape_post_from_api(post_url)
+        except Exception:  # noqa: BLE001
+            post = None
+    if post is None:
+        if not _browser_allowed():
+            return None
+        try:
+            from backend.scraper.gelbooru import is_gelbooru_site
+
+            page = client.shared_page() if is_gelbooru_site() else client.new_page()
+            try:
+                post = scrape_post(page, post_url)
+            finally:
+                if page is not None and not is_gelbooru_site():
+                    page.close()
+        except Exception:  # noqa: BLE001
+            return None
+    if post is None:
+        return None
+
+    tag_names = {tag.name for tag in post.tags}
+    if _excluded(tag_names, job.exclude_tags):
+        return None
+    if job.tags and not _post_matches_tags(tag_names, job.tags, job.tag_mode):
+        return None
+    if job.media_type and post.media_type != job.media_type:
+        return None
+    if not date_in_range(post.posted_at, job):
+        return None
+
+    try:
+        stored = download_media(post)
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        outcome = classify_stored_against_library(db, post, stored)
+        if outcome is None or not outcome.skipped_reason:
+            if stored.path.exists():
+                stored.path.unlink(missing_ok=True)
+            db.rollback()
+            return None
+        media_id = int(outcome.media.id) if outcome.media is not None else None
+        db.commit()
+        return outcome.skipped_reason, media_id
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        if stored.path.exists():
+            stored.path.unlink(missing_ok=True)
+        return None
+
+
+def begin_enqueue_queue(job: ScrapeJob, site_id: str | None) -> None:
+    """Open a listing-only job: finds go to Queue to scrape or Skipped after file checks."""
+
+    post_seeds = [url for url in job.seed_urls if extract_post_id(url)]
+    scrape_status.kind = "enqueue"
+    scrape_status.site_id = site_id
+    scrape_status.queue_open = True
+    scrape_status.accepted_urls = set()
+    scrape_status.pending_urls = []
+    scrape_status.continue_counts = False
+    scrape_status.processed = 0
+    scrape_status.downloaded = 0
+    scrape_status.skipped = 0
+    scrape_status.similar = 0
+    scrape_status.errors = []
+    scrape_status.skipped_items = []
+    scrape_status.error_items = []
+    scrape_status.counted_urls = set()
+    scrape_status.released_urls = set()
+    scrape_status.processed_urls = set()
+    scrape_status.finished_urls = set()
+    scrape_status.retry_urls = set()
+    scrape_status.total = 0
+    db = SessionLocal()
+    try:
+        seed_database(db)
+        existing_posts = _library_post_ids(db)
+        for url in post_seeds:
+            post_id = extract_post_id(url)
+            if post_id and post_id in existing_posts:
+                _record_enqueue_already_have(url, post_id, db)
+    finally:
+        db.close()
+    _refresh_persisted_queue_urls()
+
+
 def append_leftover_urls(urls: list[str], retry_urls: set[str]) -> None:
     """Add stored leftovers to the open job. Caller holds ``scrape_lock``.
 
@@ -239,24 +371,48 @@ def append_scrape_urls(urls: list[str], site_id: str) -> list[str] | None:
         return added
 
 
-def enqueue_discovered_urls(urls: list[str], *, site_id: str | None) -> list[str]:
+def enqueue_discovered_urls(
+    urls: list[str],
+    *,
+    site_id: str | None,
+    existing_posts: dict[str, object] | None = None,
+    db=None,
+    client: PlaywrightClient | None = None,
+    job: ScrapeJob | None = None,
+) -> list[str]:
     """Persist gallery finds into Queue to scrape before this job drains them."""
     from backend.app.services.scrape_leftovers import add_queue, identity
 
     with scrape_lock:
         known = {identity(url) for url in scrape_status.accepted_urls}
         known.update(identity(url) for url in scrape_status.pending_urls)
+        enqueue_only = scrape_status.running and scrape_status.kind == "enqueue"
     fresh: list[str] = []
     for url in urls:
         key = identity(url)
         if not key or key in known:
             continue
+        if enqueue_only and db is not None:
+            post_id = extract_post_id(url)
+            if existing_posts and post_id and post_id in existing_posts:
+                known.add(key)
+                _record_enqueue_already_have(url, post_id, db)
+                continue
+            if client is not None and job is not None:
+                scrape_status.message = f"Checking {url}"
+                scrape_status.current_url = url
+                hit = _enqueue_probe_duplicate(db, client, job, url)
+                if hit is not None:
+                    known.add(key)
+                    reason, media_id = hit
+                    _record_enqueue_skip(url, reason, existing_media_id=media_id)
+                    continue
         known.add(key)
         fresh.append(url)
     stored = add_queue(fresh, source=scrape_status.source_key or site_id or "")
     if not stored:
         return []
-    if site_id:
+    if site_id and scrape_status.kind == "scrape":
         added = append_scrape_urls(stored, site_id)
         if added is not None:
             return added
@@ -264,10 +420,24 @@ def enqueue_discovered_urls(urls: list[str], *, site_id: str | None) -> list[str
     with scrape_lock:
         if not (
             scrape_status.running
-            and scrape_status.kind == "scrape"
             and scrape_status.queue_open
             and (site_id is None or scrape_status.site_id == site_id)
         ):
+            return []
+        if scrape_status.kind == "enqueue":
+            added = []
+            known = {identity(url) for url in scrape_status.accepted_urls}
+            for url in stored:
+                key = identity(url)
+                if not key or key in known:
+                    continue
+                known.add(key)
+                scrape_status.accepted_urls.add(url)
+                scrape_status.total += 1
+                added.append(url)
+            _refresh_persisted_queue_urls()
+            return added
+        if scrape_status.kind != "scrape":
             return []
         added = []
         known = {identity(url) for url in scrape_status.accepted_urls}
@@ -401,6 +571,12 @@ def abandon_running_job() -> None:
             _settle_errors_into_error_items()
             scrape_status.message = "Cancelled"
             scrape_status.current_url = None
+
+
+def _refresh_persisted_queue_urls() -> None:
+    from backend.app.services.scrape_leftovers import queue_urls
+
+    scrape_status.queue_urls = queue_urls()
 
 
 def _sync_open_urls(extra: list[str] | None = None) -> None:
@@ -1303,6 +1479,99 @@ def _run_remote_downloads(job_id: int) -> None:
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=False)
         _release_queue(job_id)
+
+
+def _finish_enqueue_job(job_id: int) -> None:
+    with scrape_lock:
+        if scrape_status.job_id != job_id:
+            return
+        found = scrape_status.total
+        if scrape_status.cancel:
+            if scrape_status.message != "Failed":
+                scrape_status.message = "Cancelled"
+        elif scrape_status.message == "Failed":
+            pass
+        elif found:
+            scrape_status.message = f"Queued {found} URL{'s' if found != 1 else ''}"
+        else:
+            scrape_status.message = "No new posts to queue"
+        scrape_status.current_url = None
+        scrape_status.running = False
+        scrape_status.queue_open = False
+        scrape_status.kind = ""
+        scrape_status.total = 0
+        scrape_status.processed = 0
+        _refresh_persisted_queue_urls()
+
+
+def run_enqueue_job(job: ScrapeJob) -> ScrapeStatus:
+    """Walk gallery listings and fill Queue to scrape without downloading."""
+    my_id = scrape_status.job_id
+    _reset_status(job.gallery_url)
+    db = SessionLocal()
+    try:
+        seed_database(db)
+        existing_posts = _library_post_ids(db)
+        with PlaywrightClient() as client:
+            from backend.scraper.gelbooru import bind_client, is_gelbooru_site
+
+            gelbooru_job = is_gelbooru_site()
+            if gelbooru_job:
+                bind_client(client)
+            _browser_ok.ok = True
+            post_seeds = [url for url in job.seed_urls if extract_post_id(url)]
+            for url in post_seeds:
+                if _cancelled():
+                    break
+                enqueue_discovered_urls(
+                    [url],
+                    site_id=scrape_status.site_id,
+                    existing_posts=existing_posts,
+                    db=db,
+                    client=client,
+                    job=job,
+                )
+            gallery_seeds = [url for url in job.seed_urls if not extract_post_id(url)]
+            scrape_status.message = "Finding posts..."
+            for gallery_url in gallery_seeds:
+                if _cancelled():
+                    break
+                scrape_status.message = f"Finding posts from {gallery_url}"
+                scrape_status.last_gallery_url = gallery_url
+                scrape_status.current_url = gallery_url
+                from backend.scraper.listing import run_gallery_discovery
+
+                def _on_discovered(post_url: str) -> None:
+                    enqueue_discovered_urls(
+                        [post_url],
+                        site_id=scrape_status.site_id,
+                        existing_posts=existing_posts,
+                        db=db,
+                        client=client,
+                        job=job,
+                    )
+
+                run_gallery_discovery(
+                    client,
+                    gallery_url,
+                    sort=job.sort,
+                    should_stop=_cancelled,
+                    should_abort=_cancelled,
+                    site_id=scrape_status.site_id,
+                    on_discovered=_on_discovered,
+                    after_discovered=None,
+                )
+    except Exception as exc:  # noqa: BLE001
+        if scrape_status.job_id == my_id:
+            detail = str(exc)
+            scrape_status.errors.append(detail)
+            scrape_status.message = "Failed"
+            scrape_status.current_url = None
+        raise
+    finally:
+        _finish_enqueue_job(my_id)
+        db.close()
+    return scrape_status
 
 
 def run_job(job: ScrapeJob) -> ScrapeStatus:
