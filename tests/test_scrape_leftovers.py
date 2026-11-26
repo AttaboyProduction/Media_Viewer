@@ -528,6 +528,26 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertEqual(scrape_leftovers.unfinished_items(), [])
         self.assertEqual(scrape_leftovers.queue_urls(), [])
 
+    def test_clear_skipped_shrinks_total_when_nothing_settled(self) -> None:
+        from backend.scraper.pipeline import SkippedItem
+
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "rule34_xxx", "rule34.xxx")
+        urls = [f"https://rule34.xxx/index.php?page=post&s=view&id={i}" for i in range(1, 12)]
+        for url in urls:
+            scrape_leftovers.remember_unfinished(url, "unavailable", "", "rule34_xxx")
+        status.total = 11
+        status.processed = 0
+        status.skipped = 11
+        status.skipped_items = [
+            SkippedItem(url=url, reason="unavailable") for url in urls
+        ]
+        out = scrape_api.post_clear_queues("rule34_xxx", which="skipped")
+        panel = self._panel(out, "rule34_xxx")
+        self.assertEqual(panel.skipped_items, [])
+        self.assertEqual(panel.total, 0)
+        self.assertEqual(panel.processed, 0)
+
     def test_clear_cancelled_shrinks_progress_to_downloads(self) -> None:
         """After Stop, clearing Cancelled must not leave processed < total."""
         from backend.scraper.pipeline import SkippedItem

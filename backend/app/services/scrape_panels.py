@@ -157,19 +157,27 @@ def clear_panel(
     drop_errors = which in (None, "errors")
     drop_queue = which in (None, "queue")
 
-    def _cancelled_keys(skipped_items, cancelled_urls) -> set[str]:
+    def _removed_row_keys(before, after) -> set[str]:
         from backend.app.services.scrape_leftovers import identity
 
+        after_keys = {identity(getattr(row, "url", "") or "") for row in after}
+        after_keys.discard("")
         keys: set[str] = set()
-        for url in cancelled_urls:
+        for row in before:
+            url = getattr(row, "url", "") or ""
             key_id = identity(url)
-            if key_id:
+            if key_id and key_id not in after_keys:
                 keys.add(key_id)
-        for row in skipped_items:
-            if getattr(row, "reason", "") != "cancelled":
-                continue
-            key_id = identity(getattr(row, "url", "") or "")
-            if key_id:
+        return keys
+
+    def _removed_url_keys(before: list[str], after: list[str]) -> set[str]:
+        from backend.app.services.scrape_leftovers import identity
+
+        after_keys = {identity(url) for url in after if url}
+        keys: set[str] = set()
+        for url in before:
+            key_id = identity(url)
+            if key_id and key_id not in after_keys:
                 keys.add(key_id)
         return keys
 
@@ -178,7 +186,7 @@ def clear_panel(
             return
         from backend.app.services.scrape_leftovers import identity
 
-        removed = 0
+        removed_settled = 0
         is_status = not isinstance(target, dict)
         processed_urls = (
             target.processed_urls if is_status else (target.get("processed_urls") or set())
@@ -186,7 +194,7 @@ def clear_panel(
         kept: set[str] = set()
         for url in processed_urls:
             if identity(url) in keys:
-                removed += 1
+                removed_settled += 1
             else:
                 kept.add(url)
         if is_status:
@@ -197,16 +205,15 @@ def clear_panel(
             finished = target.get("finished_urls") or set()
             target["counted_urls"] = {url for url in counted if identity(url) not in keys}
             target["finished_urls"] = {url for url in finished if identity(url) not in keys}
-        if removed <= 0:
-            return
+        drop_total = len(keys)
         if is_status:
-            target.processed = max(0, int(target.processed) - removed)
-            target.total = max(int(target.processed), int(target.total) - removed)
+            next_processed = max(0, int(target.processed) - removed_settled)
+            target.processed = next_processed
+            target.total = max(next_processed, int(target.total) - drop_total)
         else:
-            target["processed"] = max(0, int(target.get("processed") or 0) - removed)
-            target["total"] = max(
-                int(target["processed"]), int(target.get("total") or 0) - removed
-            )
+            next_processed = max(0, int(target.get("processed") or 0) - removed_settled)
+            target["processed"] = next_processed
+            target["total"] = max(next_processed, int(target.get("total") or 0) - drop_total)
 
     reason_filter = (skip_reason or "").strip() or None if drop_other else None
 
@@ -233,11 +240,9 @@ def clear_panel(
         )
 
     if key is None or key == status.source_key:
-        cancel_keys = (
-            _cancelled_keys(status.skipped_items, status.cancelled_urls)
-            if drop_cancelled
-            else set()
-        )
+        prev_skipped = list(status.skipped_items)
+        prev_cancelled = list(status.cancelled_urls)
+        prev_error_items = list(getattr(status, "error_items", []) or [])
         (
             status.skipped_items,
             status.cancelled_urls,
@@ -251,8 +256,15 @@ def clear_panel(
             status.errors,
             getattr(status, "error_items", []) or [],
         )
+        progress_keys: set[str] = set()
+        if drop_other:
+            progress_keys |= _removed_row_keys(prev_skipped, status.skipped_items)
         if drop_cancelled:
-            _drop_progress(status, cancel_keys)
+            progress_keys |= _removed_url_keys(prev_cancelled, status.cancelled_urls)
+        if drop_errors:
+            progress_keys |= _removed_row_keys(prev_error_items, status.error_items)
+        if progress_keys:
+            _drop_progress(status, progress_keys)
         if drop_queue:
             status.queue_urls = []
             status.pending_urls = []
@@ -264,11 +276,9 @@ def clear_panel(
     targets = list(_archive) if key is None else ([key] if key in _archive else [])
     for name in targets:
         snap = _archive[name]
-        cancel_keys = (
-            _cancelled_keys(snap["skipped_items"], snap["cancelled_urls"])
-            if drop_cancelled
-            else set()
-        )
+        prev_skipped = list(snap.get("skipped_items") or [])
+        prev_cancelled = list(snap.get("cancelled_urls") or [])
+        prev_error_items = list(snap.get("error_items") or [])
         (
             snap["skipped_items"],
             snap["cancelled_urls"],
@@ -282,8 +292,15 @@ def clear_panel(
             snap.get("errors") or [],
             snap.get("error_items") or [],
         )
+        progress_keys: set[str] = set()
+        if drop_other:
+            progress_keys |= _removed_row_keys(prev_skipped, snap["skipped_items"])
         if drop_cancelled:
-            _drop_progress(snap, cancel_keys)
+            progress_keys |= _removed_url_keys(prev_cancelled, snap["cancelled_urls"])
+        if drop_errors:
+            progress_keys |= _removed_row_keys(prev_error_items, snap["error_items"])
+        if progress_keys:
+            _drop_progress(snap, progress_keys)
         if which is None:
             snap["retry_urls"] = set()
         if int(snap.get("total") or 0) < int(snap.get("processed") or 0):
