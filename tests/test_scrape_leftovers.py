@@ -12,7 +12,7 @@ from fastapi import HTTPException
 from backend.app.api.scrape import _with_leftovers
 from backend.app.api import scrape as scrape_api
 from backend.app.config import settings
-from backend.app.schemas import ScrapeRunRequest
+from backend.app.schemas import ScrapeFilterIn, ScrapeRunRequest
 from backend.app.services import scrape_leftovers, scrape_panels
 from backend.scraper import pipeline
 from backend.scraper.job import ScrapeJob
@@ -442,7 +442,7 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertEqual(pipeline.scrape_status.skipped, 1)
         self.assertEqual(pipeline.scrape_status.skipped_items[0].reason, "already_have")
 
-    def test_enqueue_probe_duplicate_goes_to_identical_skipped(self) -> None:
+    def test_enqueue_unknown_post_urls_still_queue_without_file_probe(self) -> None:
         url = "https://gallery.test/post/77"
         with pipeline.scrape_lock:
             pipeline.scrape_status.running = True
@@ -451,32 +451,19 @@ class ScrapeLeftoverTests(unittest.TestCase):
             pipeline.scrape_status.site_id = "gallery"
             pipeline.scrape_status.source_key = "gallery"
             pipeline.scrape_status.accepted_urls = set()
-            pipeline.scrape_status.skipped_items = []
+            pipeline.scrape_status.total = 0
 
-        job = _job([url])
-        from backend.scraper.storage import UpsertResult
-
-        media = MagicMock()
-        media.id = 12
-        unchanged = UpsertResult(
-            media=media,
-            settle_as="unchanged",
-            match_kind="identical",
+        added = pipeline.enqueue_discovered_urls(
+            [url],
+            site_id="gallery",
+            existing_posts={},
+            db=MagicMock(),
+            client=MagicMock(),
+            job=_job([url]),
         )
-        with patch.object(pipeline, "_enqueue_probe_duplicate", return_value=unchanged):
-            added = pipeline.enqueue_discovered_urls(
-                [url],
-                site_id="gallery",
-                existing_posts={},
-                db=MagicMock(),
-                client=MagicMock(),
-                job=job,
-            )
 
-        self.assertEqual(added, [])
-        self.assertEqual(scrape_leftovers.queue_urls("gallery"), [])
-        self.assertEqual(pipeline.scrape_status.skipped_items[0].reason, "identical")
-        self.assertEqual(pipeline.scrape_status.skipped_items[0].existing_media_id, 12)
+        self.assertEqual(added, [url])
+        self.assertEqual(scrape_leftovers.queue_urls("gallery"), [url])
 
     def test_skip_reason_matches_library_updated_group(self) -> None:
         from backend.app.services.scrape_leftovers import skip_reason_matches
@@ -605,8 +592,23 @@ class ScrapeLeftoverTests(unittest.TestCase):
             patch.object(scrape_api, "get_selected_site", return_value=None),
             patch.object(scrape_api.threading, "Thread", _Now),
         ):
-            scrape_api.start_scrape_run(ScrapeRunRequest(filters=[], limit=0))
+            scrape_api.start_scrape_run(
+                ScrapeRunRequest(
+                    filters=[ScrapeFilterIn(type="tag_or", value="solo")],
+                    limit=0,
+                )
+            )
         compile_job.assert_called_once()
+
+    def test_run_rejects_empty_filters_without_leftovers(self) -> None:
+        with patch.object(scrape_api, "get_selected_site", return_value={"id": "site_a", "name": "A"}):
+            with self.assertRaises(HTTPException) as ctx:
+                scrape_api.start_scrape_run(
+                    ScrapeRunRequest(filters=[], limit=0, source_key="site_a"),
+                    include_leftovers=True,
+                )
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("filters", (ctx.exception.detail or "").lower())
 
     def test_discovered_spelling_of_an_accepted_post_is_not_queued(self) -> None:
         url = "https://gallery.test/post/43"

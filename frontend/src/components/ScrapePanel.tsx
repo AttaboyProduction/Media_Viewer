@@ -102,6 +102,32 @@ function toFilters(rows: FilterRow[]): ScrapeFilter[] {
   return out
 }
 
+const SCRAPE_NEED_FILTERS_MSG =
+  'Add tags, a gallery URL, or other filters before running.'
+const SCRAPE_FIND_FILTERS_MSG =
+  'Add tags, a gallery URL, or other filters before finding URLs.'
+
+function filtersHaveWork(rows: FilterRow[], excludeTags: string): boolean {
+  if (toFilters(rows).length > 0) return true
+  return excludeTags
+    .split(',')
+    .map((tag) => tag.trim())
+    .some(Boolean)
+}
+
+function panelHasRetryableWork(panel: ScrapeSourcePanelData | undefined): boolean {
+  if (!panel) return false
+  const skipped = panel.skipped_items.filter(
+    (item) => item.reason !== 'cancelled' && item.reason !== 'error',
+  )
+  return (
+    panel.queue_urls.length > 0 ||
+    skipped.length > 0 ||
+    (panel.error_items?.length ?? 0) > 0 ||
+    panel.cancelled_urls.length > 0
+  )
+}
+
 function joinerLabel(prev: FilterRow, curr: FilterRow, tagMode: 'and' | 'or'): string {
   if (isTagFilterType(prev.type) && isTagFilterType(curr.type)) {
     return tagMode === 'or' ? 'OR' : 'AND'
@@ -510,6 +536,11 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
       setError('Choose a site and scraper before running.')
       return
     }
+    const panel = panelsByKey.get(panelKey)
+    if (!filtersHaveWork(rows, excludeTags) && !panelHasRetryableWork(panel)) {
+      setError(SCRAPE_NEED_FILTERS_MSG)
+      return
+    }
     try {
       const next = await runScrape({
         filters: toFilters(rows),
@@ -538,6 +569,10 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
     }
     if (!session?.selected_site_id || !session.selected_scraper_id) {
       setError('Choose a site and scraper before finding URLs.')
+      return
+    }
+    if (!filtersHaveWork(rows, excludeTags)) {
+      setError(SCRAPE_FIND_FILTERS_MSG)
       return
     }
     try {

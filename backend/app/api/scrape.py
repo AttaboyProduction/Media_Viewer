@@ -379,6 +379,11 @@ def start_scrape_run(
             scrape_status.cancel = False
             _begin_remote_leftovers(remote_leftovers, locked=True)
         else:
+            if not _filters_have_work(payload):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Add tags, a gallery URL, or other filters before running.",
+                )
             try:
                 job = compile_scrape_job(payload)
             except ValueError as exc:

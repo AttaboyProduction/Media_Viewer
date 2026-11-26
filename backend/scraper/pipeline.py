@@ -227,24 +227,6 @@ def _settle_existing_post(post_url: str, result) -> None:
         )
 
 
-def _record_enqueue_skip(
-    url: str,
-    reason: str,
-    *,
-    existing_media_id: int | None = None,
-    file_updated: bool = False,
-) -> None:
-    """Find URLs: intentional skips go to Skipped, not Queue to scrape."""
-    with scrape_lock:
-        if url in scrape_status.accepted_urls:
-            return
-        scrape_status.accepted_urls.add(url)
-        for item in scrape_status.skipped_items:
-            if item.url == url and item.reason == reason:
-                return
-        _record_skip_locked(url, reason, "", existing_media_id=existing_media_id)
-
-
 def _record_enqueue_already_have(url: str, post_id: str, db) -> None:
     row = db.query(MediaItem).filter(MediaItem.source_post_id == post_id).first()
     existing_id = int(row.id) if row is not None else None
@@ -253,71 +235,8 @@ def _record_enqueue_already_have(url: str, post_id: str, db) -> None:
         scrape_status.accepted_urls.add(url)
 
 
-def _enqueue_probe_duplicate(
-    db,
-    client: PlaywrightClient,
-    job: ScrapeJob,
-    post_url: str,
-):
-    """Download once and classify; return a library match or None to queue."""
-    if _cancelled():
-        return None
-    post_id = extract_post_id(post_url)
-    post = None
-    if post_id:
-        try:
-            post = scrape_post_from_api(post_url)
-        except Exception:  # noqa: BLE001
-            post = None
-    if post is None:
-        if not _browser_allowed():
-            return None
-        try:
-            from backend.scraper.gelbooru import is_gelbooru_site
-
-            page = client.shared_page() if is_gelbooru_site() else client.new_page()
-            try:
-                post = scrape_post(page, post_url)
-            finally:
-                if page is not None and not is_gelbooru_site():
-                    page.close()
-        except Exception:  # noqa: BLE001
-            return None
-    if post is None:
-        return None
-
-    tag_names = {tag.name for tag in post.tags}
-    if _excluded(tag_names, job.exclude_tags):
-        return None
-    if not _post_matches_job_tags(tag_names, job):
-        return None
-    if job.media_type and post.media_type != job.media_type:
-        return None
-    if not date_in_range(post.posted_at, job):
-        return None
-
-    try:
-        stored = download_media(post)
-    except Exception:  # noqa: BLE001
-        return None
-    try:
-        outcome = classify_stored_against_library(db, post, stored)
-        if outcome is None or outcome.settle_as == "download":
-            if stored.path.exists():
-                stored.path.unlink(missing_ok=True)
-            db.rollback()
-            return None
-        db.commit()
-        return outcome
-    except Exception:  # noqa: BLE001
-        db.rollback()
-        if stored.path.exists():
-            stored.path.unlink(missing_ok=True)
-        return None
-
-
 def begin_enqueue_queue(job: ScrapeJob, site_id: str | None) -> None:
-    """Open a listing-only job: finds go to Queue to scrape or Skipped after file checks."""
+    """Open a listing-only job: finds go to Queue to scrape or Skipped by post URL/id only."""
 
     post_seeds = [url for url in job.seed_urls if extract_post_id(url)]
     scrape_status.kind = "enqueue"
@@ -474,14 +393,6 @@ def enqueue_discovered_urls(
                 known.add(key)
                 _record_enqueue_already_have(url, post_id, db)
                 continue
-            if client is not None and job is not None:
-                scrape_status.message = f"Checking {url}"
-                scrape_status.current_url = url
-                hit = _enqueue_probe_duplicate(db, client, job, url)
-                if hit is not None:
-                    known.add(key)
-                    _settle_existing_post(url, hit)
-                    continue
         known.add(key)
         fresh.append(url)
     stored = add_queue(fresh, source=scrape_status.source_key or site_id or "")
