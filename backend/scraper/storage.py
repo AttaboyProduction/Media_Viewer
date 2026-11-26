@@ -27,6 +27,10 @@ class UpsertResult:
     media: MediaItem | None
     skipped_reason: str | None = None
     media_id: int | None = None
+    # download | updated_file | updated_info | unchanged
+    settle_as: str = "download"
+    # When settle_as is unchanged: already_have | identical | duplicate_hash
+    match_kind: str = ""
 
 
 def get_or_create_tag_group(db: Session, key: str) -> TagGroup:
@@ -302,8 +306,9 @@ def _relative_path(path: Path) -> str:
     return path.relative_to(settings.media_dir.parent).as_posix()
 
 
-def apply_scraped_tags(db: Session, media: MediaItem, tags: list[PostTag]) -> None:
+def apply_scraped_tags(db: Session, media: MediaItem, tags: list[PostTag]) -> bool:
     """Upsert scraped tags; keep manual links; drop non-manual tags absent from scrape."""
+    changed = False
     existing_links = {
         link.tag_id: link
         for link in db.query(MediaTag).filter(MediaTag.media_id == media.id).all()
@@ -315,31 +320,64 @@ def apply_scraped_tags(db: Session, media: MediaItem, tags: list[PostTag]) -> No
         scraped_tag_ids.add(tag.id)
         if tag.id in existing_links:
             continue
+        changed = True
         db.add(MediaTag(media_id=media.id, tag_id=tag.id, is_manual=False))
         adjust_usage_count(db, tag.id, 1)
 
     for tag_id, link in existing_links.items():
         if not link.is_manual and tag_id not in scraped_tag_ids:
+            changed = True
             adjust_usage_count(db, tag_id, -1)
             db.delete(link)
+    return changed
 
 
-def _merge_scraped_tags(db: Session, media: MediaItem, post: PostData) -> None:
-    apply_scraped_tags(db, media, post.tags)
+def _merge_scraped_tags(db: Session, media: MediaItem, post: PostData) -> bool:
+    return apply_scraped_tags(db, media, post.tags)
 
 
-def _add_source_url(db: Session, media: MediaItem, url: str | None) -> None:
+def _add_source_url(db: Session, media: MediaItem, url: str | None) -> bool:
     text = (url or "").strip()
     if not text or text == media.source_url:
-        return
+        return False
     exists = (
         db.query(MediaSourceUrl.id)
         .filter(MediaSourceUrl.media_id == media.id, MediaSourceUrl.url == text)
         .first()
     )
     if exists:
-        return
+        return False
     db.add(MediaSourceUrl(media_id=media.id, url=text))
+    return True
+
+
+def _merge_post_metadata(db: Session, media: MediaItem, post: PostData) -> bool:
+    changed = _add_source_url(db, media, post.post_url)
+    return _merge_scraped_tags(db, media, post) or changed
+
+
+def _library_touch_result(
+    db: Session,
+    media: MediaItem,
+    post: PostData,
+    stored: StoredFile,
+    *,
+    match_kind: str,
+) -> UpsertResult:
+    """Apply scrape metadata and classify whether anything on the row changed."""
+    from backend.app.services.media_service import absolute_path_for_media
+
+    changed = _merge_post_metadata(db, media, post)
+    kept = absolute_path_for_media(media)
+    if stored.path.exists() and stored.path.resolve() != kept.resolve():
+        stored.path.unlink(missing_ok=True)
+    if changed:
+        return UpsertResult(
+            media=media,
+            settle_as="updated_info",
+            match_kind=match_kind,
+        )
+    return UpsertResult(media=media, settle_as="unchanged", match_kind=match_kind)
 
 
 def new_download_beats_library(row: MediaItem, stored: StoredFile, *, new_media_type: str) -> bool:
@@ -395,16 +433,9 @@ def _skip_identical_download(db: Session, post: PostData, stored: StoredFile) ->
     kept = match[0]
     if replace_library_file_if_larger(db, kept, post, stored):
         _apply_visual_match(db, kept, stored.phash)
-        return UpsertResult(media=kept, skipped_reason=None)
-    _merge_scraped_tags(db, kept, post)
-    _add_source_url(db, kept, post.post_url)
-    from backend.app.services.media_service import absolute_path_for_media
-
-    kept_path = absolute_path_for_media(kept)
-    if stored.path.exists() and stored.path.resolve() != kept_path.resolve():
-        stored.path.unlink(missing_ok=True)
+        return UpsertResult(media=kept, settle_as="updated_file", match_kind="identical")
     db.flush()
-    return UpsertResult(media=kept, skipped_reason="identical")
+    return _library_touch_result(db, kept, post, stored, match_kind="identical")
 
 
 def classify_stored_against_library(
@@ -419,21 +450,15 @@ def classify_stored_against_library(
     by_post = db.query(MediaItem).filter(MediaItem.source_post_id == post.post_id).first()
 
     if exact and (not by_post or exact.id != by_post.id):
-        _merge_scraped_tags(db, exact, post)
-        _add_source_url(db, exact, post.post_url)
-        kept = absolute_path_for_media(exact)
-        if stored.path.exists() and stored.path.resolve() != kept.resolve():
-            stored.path.unlink(missing_ok=True)
         db.flush()
-        return UpsertResult(media=exact, skipped_reason="duplicate_hash")
+        return _library_touch_result(db, exact, post, stored, match_kind="duplicate_hash")
 
     if by_post is not None and by_post.content_hash == stored.content_hash:
-        _add_source_url(db, by_post, post.post_url)
         db.flush()
-        return UpsertResult(media=by_post, skipped_reason="already_have")
+        return _library_touch_result(db, by_post, post, stored, match_kind="already_have")
 
     skipped = _skip_identical_download(db, post, stored)
-    if skipped is not None and skipped.skipped_reason:
+    if skipped is not None and skipped.settle_as != "download":
         return skipped
     return None
 
@@ -459,14 +484,8 @@ def upsert_post(db: Session, post: PostData, stored: StoredFile) -> UpsertResult
     by_post = db.query(MediaItem).filter(MediaItem.source_post_id == post.post_id).first()
 
     if exact and (not by_post or exact.id != by_post.id):
-        from backend.app.services.media_service import absolute_path_for_media
-
-        _merge_scraped_tags(db, exact, post)
-        _add_source_url(db, exact, post.post_url)
-        if stored.path.exists() and stored.path.resolve() != absolute_path_for_media(exact).resolve():
-            stored.path.unlink(missing_ok=True)
         db.flush()
-        return UpsertResult(media=exact, skipped_reason="duplicate_hash")
+        return _library_touch_result(db, exact, post, stored, match_kind="duplicate_hash")
 
     if by_post is None:
         skipped = _skip_identical_download(db, post, stored)
@@ -627,13 +646,17 @@ def _upsert_remote_file(
         if stored.path.exists() and stored.path.resolve() != kept.resolve():
             stored.path.unlink(missing_ok=True)
         db.flush()
-        return UpsertResult(media=exact, skipped_reason="duplicate_hash")
+        return UpsertResult(
+            media=exact, skipped_reason="duplicate_hash", settle_as="updated_info"
+        )
 
     if by_post is not None and by_post.content_hash == stored.content_hash:
         _add_source_url(db, by_post, url)
         if extra_url:
             _add_source_url(db, by_post, extra_url)
-        return UpsertResult(media=by_post, skipped_reason="already_have")
+        return UpsertResult(
+            media=by_post, skipped_reason="already_have", settle_as="updated_info"
+        )
 
     media = by_post
     if media is None:

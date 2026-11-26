@@ -5,16 +5,26 @@ export const SCRAPE_SKIP_REASON_ORDER = [
   'already_have',
   'identical',
   'duplicate_hash',
+  'library_updated',
   'excluded_tag',
   'tag_mismatch',
   'media_type',
   'date_range',
 ] as const
 
+/** Skipped rows that point at an existing library file (Open in library). */
+export const LIBRARY_SKIP_REASONS = new Set([
+  'library_updated',
+  'already_have',
+  'identical',
+  'duplicate_hash',
+])
+
 const LABELS: Record<string, string> = {
   already_have: 'Already in library',
   identical: 'Identical file',
   duplicate_hash: 'Duplicate file',
+  library_updated: 'Updated info/file',
   unavailable: 'Unavailable',
   excluded_tag: 'Excluded tag',
   tag_mismatch: 'Tag filter',
@@ -23,9 +33,28 @@ const LABELS: Record<string, string> = {
   interrupted: 'Interrupted',
 }
 
+export function scrapeLibraryUpdatedDetail(detail: string | undefined): string | null {
+  if (detail === 'file') return 'Updated file'
+  if (detail === 'info') return 'Updated info'
+  return null
+}
+
+/** Short line for rows in the Updated info/file group only. */
+export function scrapeLibraryUpdatedLine(item: {
+  reason: string
+  detail?: string
+}): string {
+  const fromDetail = scrapeLibraryUpdatedDetail(item.detail)
+  if (fromDetail) return fromDetail
+  return 'Updated info'
+}
+
+export function scrapeSkipReasonGroupKey(reason: string): string {
+  return reason.trim() || 'other'
+}
+
 export function scrapeSkipReasonLabel(reason: string): string {
-  const key = reason.trim()
-  if (!key) return 'Other'
+  const key = scrapeSkipReasonGroupKey(reason)
   return LABELS[key] ?? key.replace(/_/g, ' ')
 }
 

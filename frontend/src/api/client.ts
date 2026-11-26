@@ -316,6 +316,12 @@ export function clearScrapeQueues(
   return request<ScrapeStatus>(`/scrape/clear-queues${query ? `?${query}` : ''}`, { method: 'POST' })
 }
 
+/** Download only this panel's Queue to scrape. Skipped and Cancelled stay. */
+export function runScrapeQueue(source: string) {
+  const params = new URLSearchParams({ source })
+  return request<ScrapeStatus>(`/scrape/run-queue?${params}`, { method: 'POST' })
+}
+
 /** Run this panel's Skipped and/or Errors files. Queue and Cancelled stay. */
 export function retryScrapeSkipped(
   source: string,

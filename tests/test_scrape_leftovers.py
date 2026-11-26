@@ -325,6 +325,48 @@ class ScrapeLeftoverTests(unittest.TestCase):
         begin.assert_called_once_with(url)
         self.assertEqual(status.queue_urls, [url])
 
+    def test_begin_enqueue_queue_keeps_persisted_queue_and_skipped(self) -> None:
+        queued = "https://gallery.test/post/1"
+        skipped_url = "https://gallery.test/post/2"
+        scrape_leftovers.add_queue([queued], source="gallery")
+        with pipeline.scrape_lock:
+            pipeline.scrape_status.source_key = "gallery"
+            pipeline.scrape_status.skipped_items = [
+                pipeline.SkippedItem(
+                    url=skipped_url,
+                    reason="identical",
+                    existing_media_id=5,
+                )
+            ]
+            pipeline.scrape_status.skipped = 1
+        pipeline.begin_enqueue_queue(_job([]), "gallery")
+        self.assertEqual(scrape_leftovers.queue_urls("gallery"), [queued])
+        self.assertIn(queued, pipeline.scrape_status.accepted_urls)
+        self.assertEqual(len(pipeline.scrape_status.skipped_items), 1)
+        self.assertEqual(pipeline.scrape_status.skipped_items[0].reason, "identical")
+
+    def test_discovered_url_already_queued_is_not_duplicated(self) -> None:
+        """Gallery listing must not re-queue a URL that is already in Queue to scrape."""
+        queued = "https://gallery.test/post/1"
+        spelling = "https://www.gallery.test/post/1?ref=1"
+        scrape_leftovers.add_queue([queued], source="gallery")
+        with pipeline.scrape_lock:
+            pipeline.scrape_status.running = True
+            pipeline.scrape_status.kind = "enqueue"
+            pipeline.scrape_status.queue_open = True
+            pipeline.scrape_status.site_id = "gallery"
+            pipeline.scrape_status.source_key = "gallery"
+            pipeline.scrape_status.pending_urls = []
+            pipeline.scrape_status.accepted_urls = set()
+            pipeline.scrape_status.total = 0
+            pipeline.scrape_status.queue_urls = scrape_leftovers.queue_urls("gallery")
+
+        added = pipeline.enqueue_discovered_urls([spelling], site_id="gallery")
+
+        self.assertEqual(added, [])
+        self.assertEqual(scrape_leftovers.queue_urls("gallery"), [queued])
+        self.assertEqual(pipeline.scrape_status.total, 0)
+
     def test_discovered_post_is_stored_in_queue_before_download(self) -> None:
         """Listing a post must hit Queue to scrape before the pending job drains."""
         url = "https://gallery.test/post/42"
@@ -412,11 +454,16 @@ class ScrapeLeftoverTests(unittest.TestCase):
             pipeline.scrape_status.skipped_items = []
 
         job = _job([url])
-        with patch.object(
-            pipeline,
-            "_enqueue_probe_duplicate",
-            return_value=("identical", 12),
-        ):
+        from backend.scraper.storage import UpsertResult
+
+        media = MagicMock()
+        media.id = 12
+        unchanged = UpsertResult(
+            media=media,
+            settle_as="unchanged",
+            match_kind="identical",
+        )
+        with patch.object(pipeline, "_enqueue_probe_duplicate", return_value=unchanged):
             added = pipeline.enqueue_discovered_urls(
                 [url],
                 site_id="gallery",
@@ -430,6 +477,15 @@ class ScrapeLeftoverTests(unittest.TestCase):
         self.assertEqual(scrape_leftovers.queue_urls("gallery"), [])
         self.assertEqual(pipeline.scrape_status.skipped_items[0].reason, "identical")
         self.assertEqual(pipeline.scrape_status.skipped_items[0].existing_media_id, 12)
+
+    def test_skip_reason_matches_library_updated_group(self) -> None:
+        from backend.app.services.scrape_leftovers import skip_reason_matches
+
+        self.assertFalse(skip_reason_matches("identical", "library_updated"))
+        self.assertTrue(skip_reason_matches("identical", "identical"))
+        self.assertTrue(
+            skip_reason_matches("identical", "duplicate_hash") is False
+        )
 
     def test_start_enqueue_run_opens_enqueue_job(self) -> None:
         job = _job(["https://gallery.test/post/1"])
@@ -1135,6 +1191,95 @@ class ScrapeLeftoverTests(unittest.TestCase):
             scrape_api.post_retry_skipped("site_a", which="errors")
         self.assertEqual(status.pending_urls, [failed])
         self.assertNotIn(skipped, status.pending_urls)
+
+    def test_run_queue_prepare_clears_prior_skip_so_already_have_counts_again(self) -> None:
+        url = "https://site-a.test/post/7"
+        scrape_leftovers.add_queue([url], source="site_a")
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "site_a", "Site A")
+        status.running = False
+        status.skipped_items = [SkippedItem(url=url, reason="identical", existing_media_id=3)]
+        status.skipped = 1
+
+        def _compiled(payload: ScrapeRunRequest) -> ScrapeJob:
+            urls = [
+                part
+                for item in payload.filters
+                for part in item.value.split("\n")
+                if part
+            ]
+            return _job(urls)
+
+        with (
+            patch.object(
+                scrape_api, "get_selected_site", return_value={"id": "site_a", "name": "Site A"}
+            ),
+            patch.object(scrape_api, "compile_scrape_job", side_effect=_compiled),
+            patch.object(scrape_api.threading, "Thread"),
+        ):
+            scrape_api.post_run_queue("site_a")
+
+        self.assertEqual(len(status.skipped_items), 0)
+        self.assertEqual(status.skipped, 0)
+
+        with pipeline.scrape_lock:
+            pipeline._complete_skip(url, "already_have", "", existing_media_id=3)
+
+        self.assertEqual(len(status.skipped_items), 1)
+        self.assertEqual(status.skipped, 1)
+        self.assertEqual(status.skipped_items[0].reason, "already_have")
+
+    def test_run_queue_only_queued_urls(self) -> None:
+        queued = "https://site-a.test/post/9"
+        skipped = "https://site-a.test/post/8"
+        scrape_leftovers.add_queue([queued], source="site_a")
+        scrape_leftovers.remember_unfinished(skipped, "already_have", "", "site_a")
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "site_a", "Site A")
+        status.running = False
+        status.ran_this_session = True
+        status.total = 4
+        status.processed = 4
+        status.skipped = 1
+        status.skipped_items = [SkippedItem(url=skipped, reason="already_have")]
+
+        def _compiled(payload: ScrapeRunRequest) -> ScrapeJob:
+            urls: list[str] = []
+            for item in payload.filters:
+                urls.extend(part for part in item.value.split("\n") if part)
+            return _job(urls)
+
+        with (
+            patch.object(
+                scrape_api, "get_selected_site", return_value={"id": "site_a", "name": "Site A"}
+            ),
+            patch.object(scrape_api, "compile_scrape_job", side_effect=_compiled),
+            patch.object(scrape_api.threading, "Thread"),
+        ):
+            scrape_api.post_run_queue("site_a")
+        self.assertEqual(status.pending_urls, [queued])
+        self.assertNotIn(skipped, status.pending_urls)
+        self.assertEqual(status.total, 1)
+        self.assertEqual(status.processed, 0)
+        self.assertEqual(len(status.skipped_items), 1)
+        self.assertEqual(scrape_leftovers.unfinished_items("site_a")[0]["url"], skipped)
+
+    def test_run_queue_unsupported_only_queue(self) -> None:
+        raw_q = "https://cdn.example/q.jpg"
+        raw_skip = "https://cdn.example/s.jpg"
+        scrape_leftovers.add_queue([raw_q], source="unsupported")
+        scrape_leftovers.remember_unfinished(raw_skip, "already_have", "", "unsupported")
+        status = pipeline.scrape_status
+        scrape_panels.activate(status, "unsupported", "Unsupported")
+        status.ran_this_session = True
+        status.total = 3
+        status.processed = 3
+        with patch.object(pipeline.threading, "Thread"):
+            scrape_api.post_run_queue("unsupported")
+        self.assertEqual(status.pending_urls, [raw_q])
+        self.assertEqual(status.total, 1)
+        self.assertEqual(status.processed, 0)
+        self.assertEqual(scrape_leftovers.queue_urls("unsupported"), [raw_q])
 
     def test_retry_unsupported_skips_the_queue_and_cancelled(self) -> None:
         raw_q = "https://cdn.example/q.jpg"

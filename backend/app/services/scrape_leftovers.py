@@ -17,6 +17,7 @@ from backend.app.config import settings
 # written to scrape_leftovers.json so Skipped survives Reload / restart.
 RETRY_REASONS = {"error", "cancelled", "unavailable", "interrupted"}
 PERSIST_UNFINISHED_REASONS = RETRY_REASONS | {
+    "library_updated",
     "already_have",
     "identical",
     "duplicate_hash",
@@ -70,6 +71,23 @@ def _copy(data: dict) -> dict:
 
 
 SOURCE_UNSUPPORTED = "unsupported"
+
+# Rows that matched the library without a new download (for clear/retry grouping).
+LIBRARY_MATCH_REASONS = frozenset(
+    {"library_updated", "already_have", "identical", "duplicate_hash"}
+)
+
+
+def skip_reason_matches(item_reason: str, filter_reason: str | None) -> bool:
+    """True when an unfinished/skip row belongs to the requested filter group."""
+    if not filter_reason:
+        return True
+    reason = (item_reason or "").strip()
+    if filter_reason == "library_updated":
+        return reason == "library_updated"
+    if filter_reason in LIBRARY_MATCH_REASONS:
+        return reason == filter_reason
+    return reason == filter_reason
 
 
 def derive_source(url: str) -> str:
@@ -449,7 +467,10 @@ def clear_queues(
                     or (
                         which == "skipped"
                         and reason not in {"cancelled", "error"}
-                        and (reason_filter is None or reason == reason_filter)
+                        and (
+                            reason_filter is None
+                            or skip_reason_matches(reason, reason_filter)
+                        )
                     )
                 )
                 if drop:

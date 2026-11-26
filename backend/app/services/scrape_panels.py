@@ -120,6 +120,8 @@ def _without_skipped(
     drop_other: bool,
     skip_reason: str | None = None,
 ):
+    from backend.app.services.scrape_leftovers import skip_reason_matches
+
     kept = []
     reason_filter = (skip_reason or "").strip() or None
     for row in items:
@@ -131,7 +133,7 @@ def _without_skipped(
             kept.append(row)
             continue
         if drop_other:
-            if reason_filter is None or row_reason == reason_filter:
+            if reason_filter is None or skip_reason_matches(row_reason, reason_filter):
                 continue
         kept.append(row)
     return kept, len(items) - len(kept)
@@ -346,11 +348,13 @@ def retry_targets(
         seen.add(url)
         out.append(url)
 
+    from backend.app.services.scrape_leftovers import skip_reason_matches
+
     for row in items:
         reason = getattr(row, "reason", "")
         if reason in {"cancelled", "error"}:
             continue
-        if reason_filter and reason != reason_filter:
+        if reason_filter and not skip_reason_matches(reason, reason_filter):
             continue
         add(getattr(row, "url", ""))
     for row in error_items:

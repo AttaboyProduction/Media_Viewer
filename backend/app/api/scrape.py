@@ -291,6 +291,7 @@ def start_scrape_run(
     continue_counts: bool = False,
     include_leftovers: bool = False,
     only_urls: list[str] | None = None,
+    queue_only: bool = False,
 ) -> ScrapeStatusOut:
     """Start a scrape job in the background (409 if one is running).
 
@@ -312,7 +313,12 @@ def start_scrape_run(
             ordered = list(dict.fromkeys(url.strip() for url in only_urls if url and url.strip()))
             if not ordered:
                 raise HTTPException(status_code=400, detail="Nothing to retry.")
-            begin_remote_retry(ordered)
+            if queue_only:
+                from backend.scraper.pipeline import begin_remote_queue
+
+                begin_remote_queue(ordered)
+            else:
+                begin_remote_retry(ordered)
             return _status_out()
         if panel_key == scrape_panels.SOURCE_UNSUPPORTED:
             # Raw-file panel: no gallery, only that panel's stored URLs.
@@ -342,11 +348,20 @@ def start_scrape_run(
                 exclude_tags=[],
                 source_key=panel_key,
             )
-            _mark_retry_already_in_total(ordered)
-            scrape_status.ran_this_session = True
-            continue_counts = True
-            retries = list(ordered)
-            include_leftovers = False
+            if queue_only:
+                from backend.scraper.pipeline import prepare_queue_run
+
+                prepare_queue_run(ordered)
+                scrape_status.ran_this_session = True
+                continue_counts = False
+                retries = []
+                include_leftovers = False
+            else:
+                _mark_retry_already_in_total(ordered)
+                scrape_status.ran_this_session = True
+                continue_counts = True
+                retries = list(ordered)
+                include_leftovers = False
         elif panel_key is not None and (site is None or site["id"] != panel_key):
             raise HTTPException(
                 status_code=400,
@@ -376,6 +391,14 @@ def start_scrape_run(
             scrape_status.running = True
             scrape_status.cancel = False
             scrape_status.message = "Queued"
+            if queue_only:
+                scrape_status.processed = 0
+                scrape_status.downloaded = 0
+                scrape_status.counted_urls = set()
+                scrape_status.processed_urls = set()
+                scrape_status.finished_urls = set()
+                scrape_status.released_urls = set()
+                scrape_status.retry_urls = set()
             begin_scrape_queue(
                 job,
                 site["id"] if site else None,
@@ -580,6 +603,33 @@ def post_clear_queues(
         scrape_leftovers.clear_queues(key, which=kind, skip_reason=reason)
         scrape_panels.clear_panel(scrape_status, key, which=kind, skip_reason=reason)
     return _status_out()
+
+
+@router.post("/run-queue", response_model=ScrapeStatusOut, dependencies=[Depends(require_scrape_page)])
+def post_run_queue(source: str) -> ScrapeStatusOut:
+    """Download only this panel's Queue to scrape. Skipped and Cancelled stay."""
+    key = (source or "").strip()
+    if not key:
+        raise HTTPException(status_code=400, detail="source is required.")
+    if key == scrape_panels.SOURCE_LOCAL:
+        raise HTTPException(
+            status_code=400,
+            detail="Local does not use Queue to scrape.",
+        )
+    with scrape_lock:
+        if scrape_status.running:
+            raise HTTPException(
+                status_code=409,
+                detail="A scrape or import is running. Stop it before running the queue.",
+            )
+        urls = list(scrape_leftovers.queue_urls(key))
+        if not urls:
+            raise HTTPException(status_code=400, detail="Nothing in Queue to scrape.")
+    return start_scrape_run(
+        ScrapeRunRequest(filters=[], limit=0, source_key=key),
+        only_urls=urls,
+        queue_only=True,
+    )
 
 
 @router.post("/retry", response_model=ScrapeStatusOut, dependencies=[Depends(require_scrape_page)])

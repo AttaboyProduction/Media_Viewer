@@ -1,7 +1,13 @@
 import { useMemo, useState, type ReactNode } from 'react'
 import type { ScrapeListName, ScrapeRetryWhich } from '../api/client'
 import type { ScrapeSkippedItem, ScrapeSourcePanel as ScrapeSourcePanelData } from '../types'
-import { scrapeSkipReasonLabel, sortScrapeSkipReasons } from '../utils/scrapeSkipReasons'
+import {
+  LIBRARY_SKIP_REASONS,
+  scrapeLibraryUpdatedLine,
+  scrapeSkipReasonGroupKey,
+  scrapeSkipReasonLabel,
+  sortScrapeSkipReasons,
+} from '../utils/scrapeSkipReasons'
 
 function statusMessageParts(
   message: string,
@@ -34,8 +40,6 @@ function UrlLine({ url }: { url: string }) {
 
 const QUEUE_LIST_SCROLL_AFTER = 15
 
-const LIBRARY_SKIP_REASONS = new Set(['already_have', 'identical', 'duplicate_hash'])
-
 function SkippedLibraryLink({
   item,
   onOpen,
@@ -44,7 +48,7 @@ function SkippedLibraryLink({
   onOpen?: (mediaId: number) => void
 }) {
   const id = item.existing_media_id
-  if (!onOpen || id == null || id <= 0 || !LIBRARY_SKIP_REASONS.has(item.reason)) {
+  if (!onOpen || id == null || id <= 0 || !LIBRARY_SKIP_REASONS.has(item.reason.trim())) {
     return null
   }
   return (
@@ -75,6 +79,9 @@ function QueueSection({
   retryDisabled,
   retryTitle,
   onRetry,
+  runDisabled,
+  runTitle,
+  onRun,
   nested = false,
   children,
 }: {
@@ -88,6 +95,9 @@ function QueueSection({
   retryDisabled?: boolean
   retryTitle?: string
   onRetry?: () => void
+  runDisabled?: boolean
+  runTitle?: string
+  onRun?: () => void
   nested?: boolean
   children?: ReactNode
 }) {
@@ -102,6 +112,17 @@ function QueueSection({
         >
           {title} ({count})
         </button>
+        {onRun ? (
+          <button
+            type="button"
+            className="btn btn-small btn-primary"
+            onClick={onRun}
+            disabled={runDisabled}
+            title={runTitle}
+          >
+            Run
+          </button>
+        ) : null}
         {onRetry ? (
           <button
             type="button"
@@ -147,6 +168,7 @@ interface Props {
   onClear: () => void
   onClearList: (which: ScrapeListName, skipReason?: string) => void
   onRetry: (which?: ScrapeRetryWhich, skipReason?: string) => void
+  onRunQueue: () => void
   neverAutoRun: boolean
   onNeverAutoRunChange: (value: boolean) => void
   onOpenLibraryMedia?: (mediaId: number) => void
@@ -169,6 +191,7 @@ export default function ScrapeSourcePanel({
   onClear,
   onClearList,
   onRetry,
+  onRunQueue,
   neverAutoRun,
   onNeverAutoRunChange,
   onOpenLibraryMedia,
@@ -187,7 +210,7 @@ export default function ScrapeSourcePanel({
   const skippedByReason = useMemo(() => {
     const map = new Map<string, typeof skippedItems>()
     for (const item of skippedItems) {
-      const key = item.reason.trim() || 'other'
+      const key = scrapeSkipReasonGroupKey(item.reason)
       const bucket = map.get(key) ?? []
       bucket.push(item)
       map.set(key, bucket)
@@ -400,6 +423,8 @@ export default function ScrapeSourcePanel({
                 {skipReasonKeys.map((reason) => {
                   const group = skippedByReason.get(reason) ?? []
                   const label = scrapeSkipReasonLabel(reason)
+                  const showLibraryDetail = reason === 'library_updated'
+                  const showIdenticalHint = reason === 'identical'
                   const open = skippedReasonOpen[reason] ?? false
                   return (
                     <QueueSection
@@ -434,7 +459,15 @@ export default function ScrapeSourcePanel({
                           <li key={`${item.url}:${item.reason}:${item.detail || ''}`}>
                             <UrlLine url={item.url} />
                             <SkippedLibraryLink item={item} onOpen={onOpenLibraryMedia} />
-                            {item.detail ? (
+                            {showLibraryDetail ? (
+                              <span className="scrape-skipped-reason">
+                                {scrapeLibraryUpdatedLine(item)}
+                              </span>
+                            ) : showIdenticalHint ? (
+                              <span className="scrape-skipped-reason">No changes</span>
+                            ) : item.detail &&
+                              item.reason !== 'unavailable' &&
+                              item.reason !== 'interrupted' ? (
                               <details className="scrape-skipped-error">
                                 <summary>Detail</summary>
                                 <pre>{item.detail}</pre>
@@ -455,6 +488,15 @@ export default function ScrapeSourcePanel({
               count={queueUrls.length}
               open={queueOpen}
               onToggle={() => setQueueOpen((open) => !open)}
+              runDisabled={anyRunning || (panel.key !== 'unsupported' && !isFormSource)}
+              runTitle={
+                anyRunning
+                  ? `Wait for the running ${runningLabel} job, or press Stop`
+                  : panel.key !== 'unsupported' && !isFormSource
+                    ? `Choose ${panel.label} as the Source above to run the queue`
+                    : 'Download only the URLs in this queue (not a gallery listing)'
+              }
+              onRun={onRunQueue}
               clearDisabled={panel.running}
               clearTitle={
                 panel.running

@@ -97,7 +97,7 @@ _posts_lock = threading.Lock()
 _browser_ok = threading.local()
 
 
-def _reset_status(gallery_url: str) -> None:
+def _reset_status(gallery_url: str, *, preserve_session_lists: bool = False) -> None:
     scrape_status.running = True
     # Leave cancel alone. The starter clears it, and a Stop click that lands
     # before this runs must still stop the job.
@@ -107,11 +107,17 @@ def _reset_status(gallery_url: str) -> None:
     if not keep:
         scrape_status.processed = 0
         scrape_status.downloaded = 0
-        scrape_status.skipped = 0
+        if not preserve_session_lists:
+            scrape_status.skipped = 0
         scrape_status.similar = 0
-        scrape_status.errors = []
-        scrape_status.skipped_items = []
-        scrape_status.error_items = []
+        if not preserve_session_lists:
+            scrape_status.errors = []
+            scrape_status.skipped_items = []
+            scrape_status.error_items = []
+        elif preserve_session_lists:
+            scrape_status.skipped = sum(
+                1 for row in scrape_status.skipped_items if row.reason != "error"
+            )
         scrape_status.counted_urls = set()
         scrape_status.released_urls = set()
         scrape_status.processed_urls = set()
@@ -171,7 +177,11 @@ def begin_scrape_queue(
         scrape_status.continue_counts = True
         _sync_open_urls()
         return
+    from backend.app.services.scrape_leftovers import queue_urls as persisted_queue_urls
+
     scrape_status.accepted_urls = set(post_seeds)
+    for url in persisted_queue_urls(site_id or scrape_status.source_key or ""):
+        scrape_status.accepted_urls.add(url)
     scrape_status.pending_urls = list(post_seeds)
     scrape_status.total = len(post_seeds)
     scrape_status.continue_counts = False
@@ -186,11 +196,43 @@ def _library_post_ids(db) -> dict[str, object]:
     }
 
 
+def _complete_library_match(
+    url: str,
+    *,
+    existing_media_id: int | None = None,
+    file_updated: bool = False,
+) -> None:
+    """Existing library row: merge tags/URLs or replace the file — not a new download."""
+    detail = "file" if file_updated else "info"
+    _complete_skip(url, "library_updated", detail, existing_media_id=existing_media_id)
+
+
+def _settle_existing_post(post_url: str, result) -> None:
+    """Finish a post that matched an existing library row (no new insert)."""
+    from backend.scraper.storage import UpsertResult
+
+    if not isinstance(result, UpsertResult):
+        return
+    media_id = int(result.media.id) if result.media is not None else None
+    if result.settle_as == "unchanged":
+        kind = result.match_kind or "identical"
+        _complete_skip(post_url, kind, "", existing_media_id=media_id)
+    elif result.settle_as == "updated_file":
+        _complete_library_match(
+            post_url, existing_media_id=media_id, file_updated=True
+        )
+    elif result.settle_as == "updated_info":
+        _complete_library_match(
+            post_url, existing_media_id=media_id, file_updated=False
+        )
+
+
 def _record_enqueue_skip(
     url: str,
     reason: str,
     *,
     existing_media_id: int | None = None,
+    file_updated: bool = False,
 ) -> None:
     """Find URLs: intentional skips go to Skipped, not Queue to scrape."""
     with scrape_lock:
@@ -206,7 +248,9 @@ def _record_enqueue_skip(
 def _record_enqueue_already_have(url: str, post_id: str, db) -> None:
     row = db.query(MediaItem).filter(MediaItem.source_post_id == post_id).first()
     existing_id = int(row.id) if row is not None else None
-    _record_enqueue_skip(url, "already_have", existing_media_id=existing_id)
+    _complete_skip(url, "already_have", "", existing_media_id=existing_id)
+    with scrape_lock:
+        scrape_status.accepted_urls.add(url)
 
 
 def _enqueue_probe_duplicate(
@@ -214,8 +258,8 @@ def _enqueue_probe_duplicate(
     client: PlaywrightClient,
     job: ScrapeJob,
     post_url: str,
-) -> tuple[str, int | None] | None:
-    """Download once and classify; return ``(skip_reason, media_id)`` or None to queue."""
+):
+    """Download once and classify; return a library match or None to queue."""
     if _cancelled():
         return None
     post_id = extract_post_id(post_url)
@@ -258,14 +302,13 @@ def _enqueue_probe_duplicate(
         return None
     try:
         outcome = classify_stored_against_library(db, post, stored)
-        if outcome is None or not outcome.skipped_reason:
+        if outcome is None or outcome.settle_as == "download":
             if stored.path.exists():
                 stored.path.unlink(missing_ok=True)
             db.rollback()
             return None
-        media_id = int(outcome.media.id) if outcome.media is not None else None
         db.commit()
-        return outcome.skipped_reason, media_id
+        return outcome
     except Exception:  # noqa: BLE001
         db.rollback()
         if stored.path.exists():
@@ -285,17 +328,19 @@ def begin_enqueue_queue(job: ScrapeJob, site_id: str | None) -> None:
     scrape_status.continue_counts = False
     scrape_status.processed = 0
     scrape_status.downloaded = 0
-    scrape_status.skipped = 0
     scrape_status.similar = 0
-    scrape_status.errors = []
-    scrape_status.skipped_items = []
-    scrape_status.error_items = []
     scrape_status.counted_urls = set()
     scrape_status.released_urls = set()
     scrape_status.processed_urls = set()
     scrape_status.finished_urls = set()
     scrape_status.retry_urls = set()
-    scrape_status.total = 0
+    scrape_status.processed = 0
+    scrape_status.downloaded = 0
+    from backend.app.services.scrape_leftovers import queue_urls
+
+    source = scrape_status.source_key or site_id or ""
+    for url in queue_urls(source):
+        scrape_status.accepted_urls.add(url)
     db = SessionLocal()
     try:
         seed_database(db)
@@ -371,6 +416,38 @@ def append_scrape_urls(urls: list[str], site_id: str) -> list[str] | None:
         return added
 
 
+def _known_enqueue_identities() -> set[str]:
+    """Post identities already queued, pending, skipped, errored, or cancelled this session."""
+    from backend.app.services.scrape_leftovers import identity
+
+    known: set[str] = set()
+    for url in scrape_status.accepted_urls:
+        key = identity(url)
+        if key:
+            known.add(key)
+    for url in scrape_status.pending_urls:
+        key = identity(url)
+        if key:
+            known.add(key)
+    for url in scrape_status.queue_urls:
+        key = identity(url)
+        if key:
+            known.add(key)
+    for url in scrape_status.cancelled_urls:
+        key = identity(url)
+        if key:
+            known.add(key)
+    for item in scrape_status.skipped_items:
+        key = identity(item.url)
+        if key:
+            known.add(key)
+    for item in scrape_status.error_items or []:
+        key = identity(item.url)
+        if key:
+            known.add(key)
+    return known
+
+
 def enqueue_discovered_urls(
     urls: list[str],
     *,
@@ -384,8 +461,7 @@ def enqueue_discovered_urls(
     from backend.app.services.scrape_leftovers import add_queue, identity
 
     with scrape_lock:
-        known = {identity(url) for url in scrape_status.accepted_urls}
-        known.update(identity(url) for url in scrape_status.pending_urls)
+        known = _known_enqueue_identities()
         enqueue_only = scrape_status.running and scrape_status.kind == "enqueue"
     fresh: list[str] = []
     for url in urls:
@@ -404,8 +480,7 @@ def enqueue_discovered_urls(
                 hit = _enqueue_probe_duplicate(db, client, job, url)
                 if hit is not None:
                     known.add(key)
-                    reason, media_id = hit
-                    _record_enqueue_skip(url, reason, existing_media_id=media_id)
+                    _settle_existing_post(url, hit)
                     continue
         known.add(key)
         fresh.append(url)
@@ -952,7 +1027,9 @@ def _maybe_upgrade_existing(db, post_url: str, post_id: str | None) -> bool:
     if not replace_library_file_if_larger(db, row, post, stored):
         return False
     db.commit()
-    scrape_status.recent_media_ids.append(row.id)
+    _complete_library_match(
+        post_url, existing_media_id=int(row.id), file_updated=True
+    )
     return True
 
 
@@ -986,9 +1063,8 @@ def _process_post_url(
         )
         existing_id = int(existing.id) if existing is not None else None
         if _maybe_upgrade_existing(db, post_url, post_id):
-            _complete_download(post_url)
             return "ok"
-        _complete_skip(post_url, "already_have", existing_media_id=existing_id)
+        _complete_skip(post_url, "already_have", "", existing_media_id=existing_id)
         if should_stop_for_date(posted_at, job):  # type: ignore[arg-type]
             scrape_status.message = "Reached date range boundary"
             scrape_status.current_url = None
@@ -1054,13 +1130,8 @@ def _process_post_url(
                 return "stop_cancel"
             result = upsert_post(db, post, stored)
             db.commit()
-            if result.skipped_reason in {"duplicate_hash", "identical"}:
-                media_id = int(result.media.id) if result.media is not None else None
-                _complete_skip(
-                    post_url,
-                    result.skipped_reason,
-                    existing_media_id=media_id,
-                )
+            if result.settle_as != "download":
+                _settle_existing_post(post_url, result)
             else:
                 _complete_download(post_url)
                 if result.media is not None:
@@ -1271,6 +1342,53 @@ def _mark_retry_already_in_total(urls: list[str]) -> None:
             scrape_status.counted_urls.add(url)
 
 
+def prepare_queue_run(urls: list[str]) -> None:
+    """Clear prior skip/error marks so queued URLs can settle again this run."""
+    from backend.app.services import scrape_panels
+
+    for url in urls:
+        text = (url or "").strip()
+        if text:
+            scrape_panels.drop_url(scrape_status, text)
+    scrape_status.skipped = sum(
+        1 for row in scrape_status.skipped_items if getattr(row, "reason", "") != "error"
+    )
+
+
+def begin_remote_queue(urls: list[str]) -> None:
+    """Download only these queued raw files. Progress counts just this run."""
+    from backend.app.services.scrape_panels import SOURCE_UNSUPPORTED, activate
+
+    ordered = list(dict.fromkeys(url for url in urls if url))
+    prepare_queue_run(ordered)
+    activate(scrape_status, SOURCE_UNSUPPORTED)
+    scrape_status.job_id += 1
+    job_id = scrape_status.job_id
+    scrape_status.running = True
+    scrape_status.cancel = False
+    scrape_status.kind = "download"
+    scrape_status.site_id = None
+    scrape_status.queue_open = True
+    scrape_status.accepted_urls = set(ordered)
+    scrape_status.pending_urls = list(ordered)
+    scrape_status.total = len(ordered)
+    scrape_status.processed = 0
+    scrape_status.downloaded = 0
+    scrape_status.counted_urls = set()
+    scrape_status.released_urls = set()
+    scrape_status.processed_urls = set()
+    scrape_status.finished_urls = set()
+    scrape_status.retry_urls = set()
+    scrape_status.continue_counts = False
+    scrape_status.message = "Queued"
+    scrape_status.current_url = ordered[0] if ordered else None
+    scrape_status.ran_this_session = True
+    for url in ordered:
+        _hold_download_slot(url)
+    _sync_open_urls()
+    threading.Thread(target=_run_remote_downloads, args=(job_id,), daemon=True).start()
+
+
 def begin_remote_retry(urls: list[str]) -> None:
     """Download exactly these raw files again. Caller holds ``scrape_lock``.
 
@@ -1390,12 +1508,17 @@ def _claim_remote_download(url: str) -> str:
 def _finish_remote_download(url: str, result) -> None:
     """Record a finished raw download without touching the closed DB session."""
     media_id = getattr(result, "media_id", None)
-    if isinstance(media_id, int) and media_id not in scrape_status.recent_media_ids:
-        scrape_status.recent_media_ids.append(media_id)
-    if result.skipped_reason:
+    if media_id is not None:
+        media_id = int(media_id)
+    settle_as = getattr(result, "settle_as", "download")
+    if settle_as != "download":
+        _settle_existing_post(url, result)
+    elif result.skipped_reason:
         _complete_skip(url, result.skipped_reason)
     else:
         _complete_download(url)
+        if isinstance(media_id, int) and media_id not in scrape_status.recent_media_ids:
+            scrape_status.recent_media_ids.append(media_id)
 
 
 def _run_remote_downloads(job_id: int) -> None:
@@ -1507,7 +1630,7 @@ def _finish_enqueue_job(job_id: int) -> None:
 def run_enqueue_job(job: ScrapeJob) -> ScrapeStatus:
     """Walk gallery listings and fill Queue to scrape without downloading."""
     my_id = scrape_status.job_id
-    _reset_status(job.gallery_url)
+    _reset_status(job.gallery_url, preserve_session_lists=True)
     db = SessionLocal()
     try:
         seed_database(db)
@@ -1582,7 +1705,7 @@ def run_job(job: ScrapeJob) -> ScrapeStatus:
                 scrape_status.running = True
                 begin_scrape_queue(job, None)
     my_id = scrape_status.job_id
-    _reset_status(job.gallery_url)
+    _reset_status(job.gallery_url, preserve_session_lists=True)
     db = SessionLocal()
     try:
         seed_database(db)

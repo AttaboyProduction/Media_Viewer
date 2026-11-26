@@ -6,6 +6,7 @@ import {
   bulkMediaAction,
   clearScrapeQueues,
   retryScrapeSkipped,
+  runScrapeQueue,
   fetchAdapters,
   fetchAppSettings,
   fetchScrapeSession,
@@ -579,6 +580,27 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
       queryClient.setQueryData(['scrape-status'], next)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to clear queues')
+    }
+  }
+
+  const runQueue = async (panel: ScrapeSourcePanelData) => {
+    setError(null)
+    ensureScrapeNotificationPermission()
+    if (panel.key !== 'unsupported' && panel.key !== formSourceKey) {
+      setError('Choose this source in the Source field above to run the queue.')
+      return
+    }
+    if (panel.key !== 'unsupported' && panel.key !== 'local') {
+      if (!session?.selected_site_id || !session.selected_scraper_id) {
+        setError('Choose a site and scraper before running.')
+        return
+      }
+    }
+    try {
+      const next = await runScrapeQueue(panel.key)
+      queryClient.setQueryData(['scrape-status'], next)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to run the queue')
     }
   }
 
@@ -1165,6 +1187,7 @@ export default function ScrapePanel({ onFinished }: { onFinished: () => void }) 
                 onClear={() => void clearQueues(panel)}
                 onClearList={(which, skipReason) => void clearQueues(panel, which, skipReason)}
                 onRetry={(which, skipReason) => void retryList(panel, which, skipReason)}
+                onRunQueue={() => void runQueue(panel)}
                 neverAutoRun={appSettings?.never_auto_run_scrape ?? false}
                 onNeverAutoRunChange={(value) => {
                   queryClient.setQueryData(['app-settings'], (prev: typeof appSettings) =>
